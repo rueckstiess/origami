@@ -1,2 +1,5 @@
 .venv
 __pycache__
+results
+checkpoint_final
+*.json
