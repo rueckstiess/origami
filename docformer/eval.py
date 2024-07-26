@@ -21,7 +21,7 @@ def predict_label(text, model, tokenizer):
 def evaluate_gpt2_classification(model_path: str, dataset: Dataset):
     # Load model and tokenizer
     model = GPT2LMHeadModel.from_pretrained(model_path)
-    tokenizer = GPT2Tokenizer.from_pretrained(model_path)
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     model.eval()
 
     # Load metric
@@ -33,7 +33,13 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset):
     ]
 
     # Convert string predictions to integers
-    label_to_id = dataset.features["target"].str2int
+    def label_to_id(label):
+        try:
+            return dataset.features["target"].str2int(label)
+        except ValueError:
+            print("Invalid label:", label)
+            return -1
+
     predictions_int = [label_to_id(pred) for pred in predictions]
 
     # Compute metrics
