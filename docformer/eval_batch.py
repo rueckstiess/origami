@@ -41,6 +41,7 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset, batch_size=3
     # Load model and tokenizer
     model = GPT2LMHeadModel.from_pretrained(model_path)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     print(tokenizer.padding_side)
     model.eval()
