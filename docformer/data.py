@@ -10,6 +10,7 @@ def load_from_mongodb(
     coll_name: str,
     target_field: str,
     test_size: float = 0.2,
+    as_dict: bool = False,
     **kwargs,
 ) -> Dataset:
     # create MongoDB client and collection
@@ -38,7 +39,7 @@ def load_from_mongodb(
     # create dataset
     dataset = Dataset.from_dict(
         {
-            "doc": [json.dumps(d) for d in docs],
+            "doc": [d if as_dict else json.dumps(d) for d in docs],
             "target": [d[target_field] for d in docs],
         },
         features=features,
