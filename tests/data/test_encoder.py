@@ -1,0 +1,207 @@
+import unittest
+
+import numpy as np
+import pandas as pd
+import torch
+
+from docformer.data.encoder import StreamEncoder
+
+
+class TestEncoder(unittest.TestCase):
+    def test_encode_single_val(self):
+        encoder = StreamEncoder()
+        result = encoder.encode_val("foo")
+        self.assertEqual(result, 0)
+        decoded = encoder.decode_val(result)
+        self.assertEqual(decoded, "foo")
+
+    def test_encode_multiple_vals(self):
+        encoder = StreamEncoder()
+        for i in range(4):
+            val = f"_{i}_"
+            r = encoder.encode_val(val)
+            self.assertEqual(r, i)
+            d = encoder.decode_val(r)
+            self.assertEqual(d, val)
+
+    def test_encode_single_val_predefined(self):
+        encoder = StreamEncoder(predefined={"SPECIAL": 0})
+        result = encoder.encode_val("foo")
+        self.assertEqual(result, 1)
+        decoded = encoder.decode_val(result)
+        self.assertEqual(decoded, "foo")
+        self.assertEqual(encoder.decode_val(0), "SPECIAL")
+
+    def test_encode_iter(self):
+        encoder = StreamEncoder()
+        values = [f"_{i}_" for i in range(10)]
+        result = encoder.encode_iter(values)
+        self.assertEqual(list(result), list(range(10)))
+        decoded = list(encoder.decode_iter(encoder.encode_iter(values)))
+        self.assertEqual(list(decoded), values)
+
+    def test_encode_list(self):
+        encoder = StreamEncoder()
+        values = [f"_{i}_" for i in range(10)]
+        result = encoder.encode_list(values)
+        self.assertEqual(result, list(range(10)))
+        decoded = encoder.decode_list(result)
+        self.assertEqual(decoded, values)
+
+    def test_encode_dict_values(self):
+        encoder = StreamEncoder()
+        values = [f"_{i}_" for i in range(10)]
+        d = dict(zip(values, values))
+
+        result = encoder.encode_dict(d)
+        self.assertEqual(list(result.keys()), values)
+        self.assertEqual(list(result.values()), list(range(10)))
+
+        decoded = encoder.decode_dict(result)
+        self.assertEqual(decoded, d)
+
+    def test_encode_dict_values_and_keys(self):
+        encoder = StreamEncoder()
+        values = [f"_{i}_" for i in range(10)]
+        d = dict(zip(values, values))
+
+        result = encoder.encode_dict(d, include_keys=True)
+        self.assertEqual(list(result.keys()), list(range(10)))
+        self.assertEqual(list(result.values()), list(range(10)))
+
+        decoded = encoder.decode_dict(result, include_keys=True)
+        self.assertEqual(decoded, d)
+
+    def test_encode_recursive(self):
+        encoder = StreamEncoder()
+
+        item = {"key1": [{"key2": "val1", "key3": "val2"}, "val3", "val4"]}
+        result = encoder.encode(item)
+        self.assertEqual(result, {"key1": [{"key2": 0, "key3": 1}, 2, 3]})
+
+        decoded = encoder.decode(result)
+        self.assertEqual(decoded, item)
+
+    def test_encode_types(self):
+        # test encoding list -> list
+        encoder = StreamEncoder()
+        item = ["foo", "bar", "baz"]
+        result = encoder.encode(item)
+        self.assertEqual(result, [0, 1, 2])
+        self.assertIsInstance(result, list)
+
+        # test encoding set -> set
+        encoder = StreamEncoder()
+        item = {"foo", "bar", "baz"}
+        result = encoder.encode(item)
+        self.assertEqual(result, {0, 1, 2})
+        self.assertIsInstance(result, set)
+
+        # test encoding tuple -> tuple
+        encoder = StreamEncoder()
+        item = ("foo", "bar", "baz")
+        result = encoder.encode(item)
+        self.assertEqual(result, (0, 1, 2))
+        self.assertIsInstance(result, tuple)
+
+        # test encoding pd.Series -> list
+        encoder = StreamEncoder()
+        item = pd.Series(["foo", "bar", "baz"])
+        result = encoder.encode(item)
+        self.assertEqual(result, [0, 1, 2])
+        self.assertIsInstance(result, list)
+
+        # test encoding torch.Tensor -> list
+        encoder = StreamEncoder()
+        item = torch.tensor([16.2, 21.5, 13.9])
+        result = encoder.encode(item)
+        self.assertEqual(result, [0, 1, 2])
+        self.assertIsInstance(result, list)
+
+        # test encoding np.ndarray -> list
+        encoder = StreamEncoder()
+        item = np.array(["foo", "bar", "baz"])
+        result = encoder.encode(item)
+        self.assertEqual(result, [0, 1, 2])
+        self.assertIsInstance(result, list)
+
+    def test_decode_types(self):
+        # test decoding list -> list
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = [0, 1, 2]
+        result = encoder.decode(item)
+        self.assertEqual(result, ["foo", "bar", "baz"])
+        self.assertIsInstance(result, list)
+
+        # test decoding set -> set
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = {0, 1, 2}
+        result = encoder.decode(item)
+        self.assertEqual(result, {"foo", "bar", "baz"})
+        self.assertIsInstance(result, set)
+
+        # test decoding tuple -> tuple
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = (0, 1, 2)
+        result = encoder.decode(item)
+        self.assertEqual(result, ("foo", "bar", "baz"))
+        self.assertIsInstance(result, tuple)
+
+        # test decoding Series -> list
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = pd.Series([0, 1, 2])
+        result = encoder.decode(item)
+        self.assertEqual(result, ["foo", "bar", "baz"])
+        self.assertIsInstance(result, list)
+
+        # test decoding Tensor -> list
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = torch.tensor([0, 1, 2])
+        result = encoder.decode(item)
+        self.assertEqual(result, ["foo", "bar", "baz"])
+        self.assertIsInstance(result, list)
+
+        # test decoding array -> list
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        item = np.array([0, 1, 2])
+        result = encoder.decode(item)
+        self.assertEqual(result, ["foo", "bar", "baz"])
+        self.assertIsInstance(result, list)
+
+    def test_encode_recursive_with_keys(self):
+        encoder = StreamEncoder()
+
+        item = {"key1": [{"key2": "val1", "key3": "val2"}, "val3", "val4"]}
+        result = encoder.encode(item, include_dict_keys=True)
+        self.assertEqual(result, {0: [{1: 2, 3: 4}, 5, 6]})
+
+        decoded = encoder.decode(result, include_dict_keys=True)
+        self.assertEqual(decoded, item)
+
+    def test_encode_list_of_tuples(self):
+        encoder = StreamEncoder()
+        seq = [("A", "1"), ("B", "2"), ("A", "3"), ("B", "4")]
+        result = encoder.encode(seq)
+
+        self.assertEqual(result, [(0, 1), (2, 3), (0, 4), (2, 5)])
+
+    def test_freeze(self):
+        encoder = StreamEncoder()
+        result = encoder.encode_val("foo")
+        self.assertEqual(result, 0)
+
+        encoder.freeze()
+
+        self.assertEqual(encoder.encode_val("foo"), 0)
+        self.assertRaises(KeyError, lambda: encoder.encode_val("bar"))
+
+        encoder.unfreeze()
+
+        self.assertEqual(encoder.encode_val("foo"), 0)
+        self.assertEqual(encoder.encode_val("bar"), 1)

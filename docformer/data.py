@@ -1,7 +1,8 @@
-from datasets import Dataset, Features, Value, ClassLabel
-from transformers import PreTrainedTokenizerBase
-from pymongo import MongoClient
 import json
+
+from datasets import ClassLabel, Dataset, Features, Value
+from pymongo import MongoClient
+from transformers import PreTrainedTokenizerBase
 
 
 def load_from_mongodb(

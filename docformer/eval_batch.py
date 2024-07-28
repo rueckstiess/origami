@@ -1,9 +1,10 @@
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
-from datasets import Dataset
+import re
+
 import evaluate
 import torch
-import re
+from datasets import Dataset
 from tqdm.auto import tqdm
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 
 def predict_labels_batch(texts, model, tokenizer, batch_size):
@@ -14,17 +15,13 @@ def predict_labels_batch(texts, model, tokenizer, batch_size):
 
         # Truncate and prepare input
         trunc_texts = [re.sub(r'("target":).*', r"\1", text) for text in batch_texts]
-        inputs = tokenizer(
-            trunc_texts, return_tensors="pt", padding=True, truncation=True
-        )
+        inputs = tokenizer(trunc_texts, return_tensors="pt", padding=True, truncation=True)
 
         with torch.no_grad():
             outputs = model.generate(**inputs, max_new_tokens=5, num_return_sequences=1)
 
         # Decode predictions
-        decoded_outputs = tokenizer.batch_decode(
-            outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True
-        )
+        decoded_outputs = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
 
         # Extract labels from predictions
         batch_predictions = []
@@ -62,8 +59,6 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset, batch_size=3
     predictions_int = [label_to_id(pred) for pred in predictions]
 
     # Compute metrics
-    results = accuracy_metric.compute(
-        predictions=predictions_int, references=dataset["target"]
-    )
+    results = accuracy_metric.compute(predictions=predictions_int, references=dataset["target"])
 
     return results

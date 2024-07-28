@@ -1,9 +1,10 @@
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
-from datasets import Dataset
+import re
+
 import evaluate
 import torch
-import re
+from datasets import Dataset
 from tqdm.auto import tqdm
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 
 def predict_label(text, model, tokenizer):
@@ -28,9 +29,7 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset):
     accuracy_metric = evaluate.load("accuracy")
 
     # Make predictions
-    predictions = [
-        predict_label(text, model, tokenizer) for text in tqdm(dataset["doc"])
-    ]
+    predictions = [predict_label(text, model, tokenizer) for text in tqdm(dataset["doc"])]
 
     # Convert string predictions to integers
     def label_to_id(label):
@@ -43,8 +42,6 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset):
     predictions_int = [label_to_id(pred) for pred in predictions]
 
     # Compute metrics
-    results = accuracy_metric.compute(
-        predictions=predictions_int, references=dataset["target"]
-    )
+    results = accuracy_metric.compute(predictions=predictions_int, references=dataset["target"])
 
     return results
