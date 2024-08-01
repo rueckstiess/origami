@@ -1,10 +1,12 @@
 import unittest
+from random import shuffle
 
 import numpy as np
 import pandas as pd
 import torch
 
 from docformer.data.encoder import StreamEncoder
+from docformer.utils import ArrayStart, Symbol
 
 
 class TestEncoder(unittest.TestCase):
@@ -205,3 +207,84 @@ class TestEncoder(unittest.TestCase):
 
         self.assertEqual(encoder.encode_val("foo"), 0)
         self.assertEqual(encoder.encode_val("bar"), 1)
+
+    def test_token_freq(self):
+        values = ["foo"] * 7 + ["bar"] * 3 + ["baz"]
+        shuffle(values)
+
+        encoder = StreamEncoder()
+        encoder.encode(values)
+
+        self.assertEqual(encoder.token_freq["foo"], 7)
+        self.assertEqual(encoder.token_freq["bar"], 3)
+        self.assertEqual(encoder.token_freq["baz"], 1)
+
+    def test_truncate_noop(self):
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "baz"])
+        encoder.truncate(3)
+        self.assertEqual(encoder.get_values(), ["foo", "bar", "baz"])
+        self.assertEqual(list(encoder.ids_to_tokens.keys()), list(range(3)))
+
+    def test_truncate_above_limit(self):
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "bar", "foo", "baz", "foo", "baz"])
+        encoder.truncate(2)
+        self.assertEqual(encoder.get_values(), ["foo", "baz"])
+        self.assertEqual(encoder.token_freq["foo"], 3)
+        self.assertEqual(encoder.token_freq["baz"], 2)
+        self.assertEqual(len(encoder.token_freq), 2)
+        self.assertEqual(list(encoder.ids_to_tokens.keys()), list(range(2)))
+
+    def test_truncate_with_symbols(self):
+        encoder = StreamEncoder(predefined=Symbol)
+        encoder.encode(["foo", "foo", "baz", "foo", "bar", "baz"])
+
+        self.assertEqual(len(encoder), 13)
+
+        encoder.truncate(11)
+        self.assertEqual(len(encoder), 11)
+
+        values = encoder.get_values()
+        self.assertListEqual(values, list(Symbol) + ["foo"])
+        self.assertEqual(list(encoder.ids_to_tokens.keys()), list(range(11)))
+        self.assertEqual(encoder.encode(Symbol.PAD), 0)
+
+    def test_truncate_with_array_starts(self):
+        encoder = StreamEncoder()
+        encoder.encode(["foo", "foo", ArrayStart(2), "baz", "foo", "baz"])
+        encoder.truncate(2)
+        self.assertEqual(encoder.get_values(), [ArrayStart(2), "foo"])
+        self.assertEqual(list(encoder.ids_to_tokens.keys()), list(range(2)))
+
+    def test_truncate_raise_value_error(self):
+        encoder = StreamEncoder(predefined=Symbol)
+        encoder.encode(["foo", "foo", "baz", "foo", "bar", "baz"])
+        self.assertEqual(len(encoder), 13)
+        with self.assertRaises(ValueError):
+            encoder.truncate(5)
+
+    def test_truncate_encode_with_unknown_symbol(self):
+        encoder = StreamEncoder(predefined=Symbol)
+        encoder.encode(["foo", "foo", "baz", "foo", "bar", "baz"])
+
+        # before truncating
+        foo_enc = encoder.encode("foo")
+        bar_enc = encoder.encode("bar")
+
+        self.assertEqual(encoder.decode(foo_enc), "foo")
+        self.assertEqual(encoder.decode(bar_enc), "bar")
+
+        encoder.truncate(11)
+        encoder.freeze()
+
+        # after truncating
+        foo_enc = encoder.encode("foo")
+        bar_enc = encoder.encode("bar")
+
+        self.assertEqual(encoder.decode(foo_enc), "foo")
+        self.assertEqual(encoder.decode(bar_enc), Symbol.UNKNOWN)
+        self.assertEqual(len(encoder.token_freq), 11)
+
+        self.assertEqual(list(encoder.ids_to_tokens.keys()), list(range(11)))
+        self.assertEqual(encoder.encode(Symbol.PAD), 0)

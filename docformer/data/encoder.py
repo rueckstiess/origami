@@ -1,3 +1,4 @@
+from collections import Counter
 from enum import Enum, EnumMeta
 from typing import Generator, Iterable
 
@@ -5,7 +6,7 @@ import numpy as np
 import pandas as pd
 from torch import Tensor
 
-from docformer.utils import Symbol
+from docformer.utils import ArrayStart, FieldToken, Symbol
 
 
 class StreamEncoder:
@@ -24,9 +25,13 @@ class StreamEncoder:
         self.frozen = False
         self.tokens_to_ids = {k: v for k, v in predefined.items()}
         self.ids_to_tokens = {v: k for k, v in predefined.items()}
+        self.token_freq = Counter(predefined.keys())
 
     @property
     def vocab_size(self):
+        return len(self.tokens_to_ids)
+
+    def __len__(self):
         return len(self.tokens_to_ids)
 
     def freeze(self):
@@ -45,9 +50,39 @@ class StreamEncoder:
             self._next_id += 1
         return self._next_id
 
+    def truncate(self, max_tokens: int) -> None:
+        """truncates the encoder to the given number of tokens. Symbol and ArrayStart tokens are always included,
+        and the remaining tokens are sorted by frequency."""
+
+        if len(self.token_freq) <= max_tokens:
+            # already at or below limit, do nothing
+            return
+
+        # ArrayStart and Symbol tokens always need to be included, then pick the remaining ones by frequency
+        most_common_tokens = [t for t in self.tokens_to_ids.keys() if isinstance(t, (ArrayStart, Symbol, FieldToken))]
+        if len(most_common_tokens) > max_tokens:
+            raise ValueError(
+                f"Cannot truncate encoder to {max_tokens} tokens. Symbols, ArrayStarts and FieldTokens already "
+                f"require at least {len(most_common_tokens)} tokens."
+            )
+
+        remaining_space = max_tokens - len(most_common_tokens)
+        # get a copy of the Counter excluding Symbol and ArrayStart tokens
+        non_special_freq = Counter(
+            {k: v for k, v in self.token_freq.items() if not isinstance(k, (Symbol, ArrayStart, FieldToken))}
+        )
+        most_common_tokens.extend([tok[0] for tok in non_special_freq.most_common(remaining_space)])
+
+        # update dictionaries with new IDs and counter
+        self.tokens_to_ids = {tok: i for i, tok in enumerate(most_common_tokens)}
+        self.ids_to_tokens = {v: k for k, v in self.tokens_to_ids.items()}
+        self.token_freq = Counter({k: v for k, v in self.token_freq.items() if k in most_common_tokens})
+
     def encode_val(self, token: any) -> int:
         """encodes a single value and returns its ID. The value must be hashable."""
+
         if token in self.tokens_to_ids:
+            self.token_freq.update([token])
             return self.tokens_to_ids[token]
 
         if self.frozen:
@@ -60,6 +95,8 @@ class StreamEncoder:
         id = self.next_id()
         self.tokens_to_ids[token] = id
         self.ids_to_tokens[id] = token
+        self.token_freq.update([token])
+
         return id
 
     # -- Encoding --

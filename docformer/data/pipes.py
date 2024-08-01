@@ -2,6 +2,7 @@ import pickle
 import random
 from collections import OrderedDict, defaultdict
 from copy import copy
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -142,16 +143,20 @@ class TargetFieldPipe(BasePipe):
 class DocTokenizerPipe(BasePipe):
     """A Pipe that tokenizes the documents in a DataFrame."""
 
+    def __init__(self, path_in_field_tokens: bool = True):
+        self.path_in_field_tokens = path_in_field_tokens
+
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
         X = X.copy()
-        X["tokens"] = X["docs"].apply(tokenize)
+        X["tokens"] = X["docs"].apply(lambda doc: tokenize(doc, path_in_field_tokens=self.path_in_field_tokens))
         return X
 
 
 class TokenEncoderPipe(BasePipe):
     """A Pipe that encodes the tokens to integer IDs"""
 
-    def __init__(self):
+    def __init__(self, max_tokens: Optional[int] = None):
+        self.max_tokens = max_tokens
         self.encoder = StreamEncoder(predefined=Symbol)
         self.encoder.freeze()
         self._is_fitted = False
@@ -173,11 +178,21 @@ class TokenEncoderPipe(BasePipe):
         for seq in X["tokens"]:
             self.encoder.encode(seq)
         self._encode_missing_array_starts()
+
+        if self.max_tokens:
+            self.encoder.truncate(self.max_tokens)
+
         self.encoder.freeze()
         return self
 
     def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
         """explicitly implemented here for performance reasons, so we only need to encode once."""
+
+        # if max_tokens is specified, we need to truncate before encoding and can't
+        # fit_transform, because we don't know how many tokens we'll end up with
+        if self.max_tokens:
+            return self.fit(X).transform(X)
+
         if "tokens" not in X.columns:
             raise ColumnMissingException("TokenEncoderPipe requires column 'tokens' in the DataFrame.")
 
@@ -185,6 +200,10 @@ class TokenEncoderPipe(BasePipe):
         self.encoder.unfreeze()
         tokens = [self.encoder.encode(seq) for seq in X["tokens"]]
         self._encode_missing_array_starts()
+
+        if self.max_tokens:
+            self.encoder.truncate(self.max_tokens)
+
         self.encoder.freeze()
 
         X["tokens"] = tokens

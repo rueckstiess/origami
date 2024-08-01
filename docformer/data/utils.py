@@ -23,7 +23,7 @@ def load_df_from_mongodb(uri, db, coll, **kwargs):
     """loads the documents from a MongoDB collection into a DataFrame with column named `docs`."""
     client = MongoClient(uri)
     collection = client[db][coll]
-    docs = list(collection.find({}, **kwargs))
+    docs = list(collection.find(**kwargs))
     return docs_to_df(docs)
 
 
@@ -31,7 +31,7 @@ def deepcopy_df(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(columns=df.columns, data=deepcopy(df.values))
 
 
-def tokenize(doc: dict) -> dict:
+def tokenize(doc: dict, path_in_field_tokens: bool = True) -> dict:
     """parses a document into sequence of tokens."""
 
     def parse_rec(thing: Any, prefix: str = ""):
@@ -40,7 +40,12 @@ def tokenize(doc: dict) -> dict:
         if isinstance(thing, (dict, OrderedDict)):
             yield Symbol.START if prefix == "" else Symbol.SUBDOC_START
             for key, val in thing.items():
-                yield FieldToken(prefix + key)
+                if path_in_field_tokens:
+                    # the full field path is encoded in the FieldToken
+                    yield FieldToken(prefix + key)
+                else:
+                    # only the field name is encoded in the FieldToken
+                    yield FieldToken(key)
                 for tok in parse_rec(val, prefix=f"{prefix + key}."):
                     yield tok
             yield Symbol.END if prefix == "" else Symbol.SUBDOC_END
@@ -68,6 +73,8 @@ def detokenize(tokens: list) -> dict:
             value = consume_list(gen, value.size)
         elif value == Symbol.SUBDOC_START:
             value = consume_doc(gen)
+        elif isinstance(value, Symbol):
+            value = value.name
         return value
 
     def consume_list(gen, size: int):

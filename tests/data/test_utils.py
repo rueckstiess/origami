@@ -42,6 +42,29 @@ class TestDataUtils(unittest.TestCase):
             ],
         )
 
+    def test_tokenize_without_path(self):
+        t = tokenize({"foo": 1, "bar": [1, 2, 3], "baz": {"baz_inner": True}}, path_in_field_tokens=False)
+
+        self.assertEqual(
+            t,
+            [
+                Symbol.START,
+                FieldToken("foo"),
+                1,
+                FieldToken("bar"),
+                ArrayStart(3),
+                1,
+                2,
+                3,
+                FieldToken("baz"),
+                Symbol.SUBDOC_START,
+                FieldToken("baz_inner"),
+                True,
+                Symbol.SUBDOC_END,
+                Symbol.END,
+            ],
+        )
+
     def test_detokenize(self):
         t = detokenize(
             [
@@ -56,6 +79,27 @@ class TestDataUtils(unittest.TestCase):
                 FieldToken("baz"),
                 Symbol.SUBDOC_START,
                 FieldToken("baz.baz_inner"),
+                True,
+                Symbol.SUBDOC_END,
+                Symbol.END,
+            ],
+        )
+        self.assertEqual(t, {"foo": 1, "bar": [1, 2, 3], "baz": {"baz_inner": True}})
+
+    def test_detokenize_without_path(self):
+        t = detokenize(
+            [
+                Symbol.START,
+                FieldToken("foo"),
+                1,
+                FieldToken("bar"),
+                ArrayStart(3),
+                1,
+                2,
+                3,
+                FieldToken("baz"),
+                Symbol.SUBDOC_START,
+                FieldToken("baz_inner"),
                 True,
                 Symbol.SUBDOC_END,
                 Symbol.END,
