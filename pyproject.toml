@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+indent-width = 4
+line-length = 120
+extend-exclude = [
+    "__init__.py",
+]
+
+[tool.ruff.lint]
+extend-select = ["I"]
+ignore = [
+    "E402",  # TODO(Thomas) to check; allow module level import not at top of file
+    "F841",  # TODO(Thomas) to check; allow unused variables
+    "E712",  # allow "== True" and "== False"
+    "E741",  # allow usage 'l', 'O', or 'I' as variable names, though they can be indistinguishable from numbers
+    "F402",  # allow variable name shadowing; does not seem to work too well
+]
