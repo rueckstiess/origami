@@ -1,5 +1,7 @@
 datasets==3.0.1
 evaluate==0.4.3
+accelerate==0.33.0
+matplotlib==3.9.1
 mdbrtools==0.1.0
 numpy==2.1.2
 omegaconf==2.3.0

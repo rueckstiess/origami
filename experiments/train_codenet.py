@@ -1,5 +1,4 @@
 import evaluate
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from datasets import Dataset
@@ -56,9 +55,7 @@ pipes = {
     "encoder": TokenEncoderPipe(max_tokens=4000),
 }
 
-train_pipeline = Pipeline(
-    [(name, pipes[name]) for name in ("target", "permuter", "tokenizer", "padding", "encoder")], verbose=True
-)
+train_pipeline = Pipeline([(name, pipes[name]) for name in ("target", "tokenizer", "padding", "encoder")], verbose=True)
 test_pipeline = Pipeline([(name, pipes[name]) for name in ("target", "tokenizer", "padding", "encoder")], verbose=True)
 
 # process train, eval and test data
@@ -106,12 +103,16 @@ model.resize_token_embeddings(encoder.vocab_size)
 train_df["input_ids"] = train_df["tokens"]
 test_df["input_ids"] = test_df["tokens"]
 
-train_df.drop(columns=["tokens", "ordered_docs", "id"], inplace=True)
-test_df.drop(columns=["tokens", "id"], inplace=True)
+train_df.drop(columns=["tokens", "ordered_docs", "id"], inplace=True, errors="ignore")
+test_df.drop(columns=["tokens", "id"], inplace=True, errors="ignore")
 
 # create HuggingFace datasets from Pandas DataFrames
 train_tokenized = Dataset.from_pandas(train_df)
 test_tokenized = Dataset.from_pandas(test_df)
+
+# save datasets
+train_tokenized.save_to_disk("train_dataset.hf")
+test_tokenized.save_to_disk("test_dataset.hf")
 
 # # set format to Torch
 train_tokenized.set_format("torch", columns=["input_ids"])
@@ -124,38 +125,38 @@ dummy_tokenizer.pad_token_id = encoder.encode(Symbol.PAD)
 dummy_tokenizer.padding_side = "right"
 
 
-class LossCallback(TrainerCallback):
-    def __init__(self):
-        self.training_loss = []
-        self.step = []
+# class LossCallback(TrainerCallback):
+#     def __init__(self):
+#         self.training_loss = []
+#         self.step = []
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.is_local_process_zero and "loss" in logs:
-            self.training_loss.append(logs["loss"])
-            self.step.append(state.global_step)
-            self.plot_loss()
+#     def on_log(self, args, state, control, logs=None, **kwargs):
+#         if state.is_local_process_zero and "loss" in logs:
+#             self.training_loss.append(logs["loss"])
+#             self.step.append(state.global_step)
+#             self.plot_loss()
 
-    def plot_loss(self):
-        clear_output(wait=True)
-        plt.figure(figsize=(12, 6))
-        plt.plot(self.step, self.training_loss)
-        plt.title("Training Loss Curve")
-        plt.xlabel("Step")
-        plt.ylabel("Loss")
-        plt.show()
+#     def plot_loss(self):
+#         clear_output(wait=True)
+#         plt.figure(figsize=(12, 6))
+#         plt.plot(self.step, self.training_loss)
+#         plt.title("Training Loss Curve")
+#         plt.xlabel("Step")
+#         plt.ylabel("Loss")
+#         plt.show()
 
-    # Implement other required methods as no-ops
-    def on_init_end(self, args, state, control, **kwargs):
-        pass
+#     # Implement other required methods as no-ops
+#     def on_init_end(self, args, state, control, **kwargs):
+#         pass
 
-    def on_train_begin(self, args, state, control, **kwargs):
-        pass
+#     def on_train_begin(self, args, state, control, **kwargs):
+#         pass
 
-    def on_train_end(self, args, state, control, **kwargs):
-        pass
+#     def on_train_end(self, args, state, control, **kwargs):
+#         pass
 
 
-loss_callback = LossCallback()
+# loss_callback = LossCallback()
 
 # Set up training arguments
 training_args = TrainingArguments(
@@ -178,14 +179,13 @@ trainer = Trainer(
     train_dataset=train_tokenized,
     eval_dataset=test_tokenized,
     data_collator=data_collator,
-    callbacks=[loss_callback],
+    callbacks=[],
 )
 
 # Train model
 print("Starting training...")
-trainer.train()
+trainer.train(resume_from_checkpoint=False)
 print("Training completed!")
-loss_callback.plot_loss()
 
 # Save the model
 model.save_pretrained("./checkpoints/checkpoint-final")

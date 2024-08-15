@@ -4,5 +4,6 @@ results
 checkpoints
 *.json
 *.egg-info
+*.hf
 .DS_Store
 .pytest_cache
