@@ -1,4 +1,6 @@
-# DocFormer Implementation Plan
+# STORM Implementation Plan
+
+STORM - **S**emi-s**T**ructured **O**bject **R**epresentation **M**odel (formerly known as "DocFormer").
 
 ## Goals
 
@@ -15,7 +17,7 @@
 
 ## Roadmap
 
-Incrementally go from Vanilla → DocFormer, always end-to-end training possible
+Incrementally go from Vanilla → STORM, always end-to-end training possible
 
 #### Phase 1 – Vanilla Transformer + Structured Decoding for Classification
 
