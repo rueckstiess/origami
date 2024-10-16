@@ -114,6 +114,8 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset):
 
     # Make predictions
     predictions = [predict_label(text, model, tokenizer) for text in tqdm(dataset["doc"])]
+    print(predictions)
+    print(dataset["target"])
 
     # Convert string predictions to integers
     def label_to_id(label):

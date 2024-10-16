@@ -49,6 +49,9 @@ def evaluate_gpt2_classification(model_path: str, dataset: Dataset, batch_size=3
     # Make predictions in batches
     predictions = predict_labels_batch(dataset["doc"], model, tokenizer, batch_size)
 
+    print(predictions)
+    print(dataset["target"])
+
     # Convert string predictions to integers
     def label_to_id(label):
         try:
