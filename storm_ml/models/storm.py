@@ -88,8 +88,12 @@ class STORM(GPT2Model):
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
+
+        # REMOVING POSITION ENCODING (tr)
         position_embeds = self.wpe(position_ids)
         hidden_states = inputs_embeds + position_embeds
+
+        # hidden_states = inputs_embeds
 
         # Attention mask.
         _use_sdpa = self._attn_implementation == "sdpa" and output_attentions is False and head_mask is None
