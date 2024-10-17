@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from docformer.data.encoder import StreamEncoder
-from docformer.utils import ArrayStart, Symbol
+from storm_ml.data.encoder import StreamEncoder
+from storm_ml.utils import ArrayStart, Symbol
 
 
 class TestEncoder(unittest.TestCase):

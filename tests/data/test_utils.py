@@ -3,8 +3,8 @@ import unittest
 import torch
 from pandas import DataFrame
 
-from docformer.data.utils import detokenize, docs_to_df, target_collate_fn, tokenize
-from docformer.utils import ArrayStart, FieldToken, Symbol
+from storm_ml.data.utils import detokenize, docs_to_df, target_collate_fn, tokenize
+from storm_ml.utils import ArrayStart, FieldToken, Symbol
 
 
 class TestDataUtils(unittest.TestCase):

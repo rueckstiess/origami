@@ -7,7 +7,7 @@ import torch
 from pymongo import MongoClient
 from torch.utils.data import default_collate
 
-from docformer.utils import ArrayStart, FieldToken, Symbol
+from storm_ml.utils import ArrayStart, FieldToken, Symbol
 
 CAT_THRESHOLD = 1000
 

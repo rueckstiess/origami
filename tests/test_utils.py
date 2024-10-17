@@ -1,7 +1,7 @@
 import unittest
 from collections import OrderedDict
 
-from docformer.utils import flatten_docs, permute_document, walk_all_leaf_kvs
+from storm_ml.utils import flatten_docs, permute_document, walk_all_leaf_kvs
 
 
 class TestUtils(unittest.TestCase):

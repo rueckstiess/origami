@@ -1,6 +1,6 @@
 from sklearn.pipeline import Pipeline
 
-from docformer.utils import SequenceOrderMethod
+from storm_ml.utils import SequenceOrderMethod
 
 from .pipes import (
     DocPermuterPipe,
