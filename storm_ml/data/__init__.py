@@ -6,3 +6,4 @@ from .pipes import (
 from .pipelines import build_estimation_pipeline, build_prediction_pipelines
 from .utils import load_df_from_mongodb, tokenize, detokenize, docs_to_df, target_collate_fn
 from .df_dataset import DFDataset
+from .encoder import StreamEncoder
