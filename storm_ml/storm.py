@@ -95,7 +95,7 @@ class STORM(GPT2Model):
             inputs_embeds = self.wte(input_ids)
 
         # New key/value position encoding
-        self.vpda.get_sequence_mask(input_ids)
+        valid_next_tokens = torch.tensor(self.vpda.get_sequence_mask(input_ids))[:, 1:].to(self.device)
         stacks = torch.tensor(self.vpda.stacks).to(self.device)
         hidden_states = self.pos_encoding(inputs_embeds, stacks)
 
@@ -243,7 +243,7 @@ class STORM(GPT2Model):
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
-        )
+        ), valid_next_tokens
 
 
 class STORMHeadModel(GPT2LMHeadModel):
@@ -287,7 +287,7 @@ class STORMHeadModel(GPT2LMHeadModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        transformer_outputs = self.transformer(
+        transformer_outputs, valid_next_tokens = self.transformer(
             input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
@@ -312,8 +312,8 @@ class STORMHeadModel(GPT2LMHeadModel):
         lm_logits = self.lm_head(hidden_states)
 
         # apply guard rails
-        valid_next_logits = torch.tensor(self.vpda.get_sequence_mask(input_ids))[:, 1:].to(self.device)
-        # lm_logits[:, 1:].masked_fill_(~valid_next_logits.bool(), -100.0)
+        # valid_next_tokens = torch.tensor(self.vpda.get_sequence_mask(input_ids))[:, 1:].to(self.device)
+        # lm_logits[:, :-1].masked_fill_(~valid_next_tokens, -100.0)
 
         loss = None
         if labels is not None:
@@ -321,7 +321,7 @@ class STORMHeadModel(GPT2LMHeadModel):
             labels = labels.to(lm_logits.device)
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_logits.masked_fill_(~valid_next_logits, -torch.inf)
+            # shift_logits.masked_fill_(~valid_next_tokens, -torch.inf)
             shift_labels = labels[..., 1:].contiguous()
 
             # Flatten the tokens
