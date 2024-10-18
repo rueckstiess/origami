@@ -13,8 +13,8 @@ from transformers.models.gpt2.modeling_gpt2 import (
 )
 from transformers.utils import logging
 
-from storm_ml.vpda import DocumentVPDA
 from storm_ml.positions import SharedDocumentPositionEncoding
+from storm_ml.vpda import DocumentVPDA
 
 logger = logging.get_logger(__name__)
 
@@ -29,10 +29,7 @@ class STORM(GPT2Model):
         self.vpda = vpda
 
         # key/value position encoding
-        self.pos_encoding = SharedDocumentPositionEncoding(
-            self.wte,
-            fuse_with_mlp=False
-        )
+        self.pos_encoding = SharedDocumentPositionEncoding(self.wte, fuse_with_mlp=False)
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
@@ -250,6 +247,8 @@ class STORM(GPT2Model):
 
 
 class STORMHeadModel(GPT2LMHeadModel):
+    _tied_weights_keys = None
+
     def __init__(self, config, vpda: DocumentVPDA = None):
         super().__init__(config)
         self.transformer = STORM(config, vpda)
@@ -312,13 +311,19 @@ class STORMHeadModel(GPT2LMHeadModel):
 
         lm_logits = self.lm_head(hidden_states)
 
+        # apply guard rails
+        valid_next_logits = torch.tensor(self.vpda.get_sequence_mask(input_ids))[:, 1:].to(self.device)
+        # lm_logits[:, 1:].masked_fill_(~valid_next_logits.bool(), -100.0)
+
         loss = None
         if labels is not None:
             # move labels to correct device to enable model parallelism
             labels = labels.to(lm_logits.device)
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_logits.masked_fill_(~valid_next_logits, -torch.inf)
             shift_labels = labels[..., 1:].contiguous()
+
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
