@@ -31,8 +31,8 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm, LlamaRotaryEmbedding
 
-from storm_ml.positions import SharedDocumentPositionEncoding
-from storm_ml.vpda import DocumentVPDA
+from storm_ml.model.positions import SharedDocumentPositionEncoding
+from storm_ml.model.vpda import DocumentVPDA
 
 logger = logging.get_logger(__name__)
 

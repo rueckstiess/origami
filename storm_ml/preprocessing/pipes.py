@@ -11,7 +11,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.utils.validation import check_is_fitted
 
-from storm_ml.utils import ArrayStart, Symbol, pad_trunc, walk_all_leaf_kvs
+from storm_ml.utils.common import ArrayStart, Symbol, pad_trunc, walk_all_leaf_kvs
 
 from .encoder import StreamEncoder
 from .utils import CAT_THRESHOLD, deepcopy_df, tokenize

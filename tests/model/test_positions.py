@@ -4,20 +4,20 @@ import pandas as pd
 import torch
 from sklearn.pipeline import Pipeline
 
-from storm_ml.data import (
+from storm_ml.preprocessing import (
     DocTokenizerPipe,
     PadTruncTokensPipe,
     SchemaParserPipe,
     TokenEncoderPipe,
 )
-from storm_ml.positions import (
+from storm_ml.model.positions import (
     BasePositionEncoding,
     DocumentPositionEncoding,
     IntegerPositionEncoding,
     NoPositionEncoding,
 )
-from storm_ml.utils import ArrayStart, FieldToken, Symbol
-from storm_ml.vpda import DocumentVPDA
+from storm_ml.utils.common import ArrayStart, FieldToken, Symbol
+from storm_ml.model.vpda import DocumentVPDA
 
 
 class TestNoPositionEncoding(unittest.TestCase):

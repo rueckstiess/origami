@@ -13,8 +13,8 @@ from transformers.models.gpt2.modeling_gpt2 import (
 )
 from transformers.utils import logging
 
-from storm_ml.positions import SharedDocumentPositionEncoding
-from storm_ml.vpda import DocumentVPDA
+from storm_ml.model.positions import SharedDocumentPositionEncoding
+from storm_ml.model.vpda import DocumentVPDA
 
 logger = logging.get_logger(__name__)
 

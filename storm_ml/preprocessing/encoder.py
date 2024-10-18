@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from torch import Tensor
 
-from storm_ml.utils import ArrayStart, FieldToken, Symbol
+from storm_ml.utils.common import ArrayStart, FieldToken, Symbol
 
 
 class StreamEncoder:

@@ -1,7 +1,7 @@
 import unittest
 
-from storm_ml.data.pipelines import build_estimation_pipeline, build_prediction_pipelines
-from storm_ml.utils import SequenceOrderMethod
+from storm_ml.preprocessing.pipelines import build_estimation_pipeline, build_prediction_pipelines
+from storm_ml.utils.common import SequenceOrderMethod
 
 
 class TestBuildPipeline(unittest.TestCase):

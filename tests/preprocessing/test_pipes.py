@@ -5,7 +5,7 @@ import pandas as pd
 from mdbrtools.schema import Schema
 from sklearn.exceptions import NotFittedError
 
-from storm_ml.data import (
+from storm_ml.preprocessing import (
     DocPermuterPipe,
     DocTokenizerPipe,
     ExistsTrackerPipe,
@@ -18,8 +18,8 @@ from storm_ml.data import (
     TokenEncoderPipe,
     UpscalerPipe,
 )
-from storm_ml.data.pipes import ColumnMissingException
-from storm_ml.utils import ArrayStart, FieldToken, Symbol
+from storm_ml.preprocessing.pipes import ColumnMissingException
+from storm_ml.utils.common import ArrayStart, FieldToken, Symbol
 
 
 class TestShuffleRowsPipe(unittest.TestCase):

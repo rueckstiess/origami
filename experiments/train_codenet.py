@@ -16,7 +16,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from storm_ml.data import (
+from storm_ml.preprocessing import (
     DocPermuterPipe,
     DocTokenizerPipe,
     PadTruncTokensPipe,
@@ -25,7 +25,7 @@ from storm_ml.data import (
     TokenEncoderPipe,
     load_df_from_mongodb,
 )
-from storm_ml.utils import FieldToken, Symbol
+from storm_ml.utils.common import FieldToken, Symbol
 
 # Check if MPS is available
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
