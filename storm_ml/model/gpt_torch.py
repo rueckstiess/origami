@@ -4,10 +4,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from axon.gpt.config import PositionEncodingMethod
-from axon.gpt.utils import torch_isin
-from axon.gpt.vpda import DocumentVPDA
-from axon.utils.common import count_parameters
+from storm_ml.model.vpda import DocumentVPDA
+from storm_ml.utils import PositionEncodingMethod, count_parameters, torch_isin
 
 from .gpt_base import GPTBase
 from .positions import (

@@ -1,8 +1,5 @@
 import itertools
-import json
-import os
 import random
-import sys
 from collections import OrderedDict
 from enum import Enum
 from typing import Any, Generator, Iterable, Optional, Tuple, Union
@@ -341,3 +338,28 @@ def flatten_docs(docs: list[dict]) -> list[dict]:
     flat = [{item["path"]: item["value"] for item in walk_all_leaf_kvs(doc, include_pos_in_path=True)} for doc in docs]
 
     return flat
+
+
+def auto_device(device: str = "auto"):
+    """utility function to determine automatically which device to run on."""
+    if device == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+
+    return device
+
+
+def count_parameters(m: torch.nn.Module, only_trainable: bool = False):
+    """
+    Returns the total number of parameters used by `m` (only counting
+    shared parameters once); if `only_trainable` is True, then only
+    includes parameters with `requires_grad = True`
+    """
+    parameters = list(m.parameters())
+    if only_trainable:
+        parameters = [p for p in parameters if p.requires_grad]
+    unique = {p.data_ptr(): p for p in parameters}.values()
+    return sum(p.numel() for p in unique)

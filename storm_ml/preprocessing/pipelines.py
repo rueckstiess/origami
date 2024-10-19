@@ -5,8 +5,6 @@ from storm_ml.utils.common import SequenceOrderMethod
 from .pipes import (
     DocPermuterPipe,
     DocTokenizerPipe,
-    ExistsTrackerPipe,
-    IdSetterPipe,
     KBinsDiscretizerPipe,
     PadTruncTokensPipe,
     SchemaParserPipe,
@@ -45,34 +43,3 @@ def build_prediction_pipelines(
     test_pipeline = Pipeline([(name, pipes[name]) for name in test_pipes])
 
     return train_pipeline, test_pipeline
-
-
-def build_estimation_pipeline(n_bins: int, sequence_order: SequenceOrderMethod, keep_id: bool = False) -> Pipeline:
-    """build common pipeline for estimation tasks."""
-
-    match sequence_order:
-        case SequenceOrderMethod.SHUFFLED:
-            permuter = [("permuter", DocPermuterPipe())]
-        case _:
-            permuter = []
-
-    if keep_id:
-        id_setter = [("id_setter", IdSetterPipe())]
-    else:
-        id_setter = []
-
-    pipeline = Pipeline(
-        [
-            ("binning", KBinsDiscretizerPipe(bins=n_bins)),
-            # only include IdSetterPipe if keep_id is True
-            *id_setter,
-            ("schema", SchemaParserPipe()),
-            ("exists", ExistsTrackerPipe()),
-            *permuter,
-            ("tokenizer", DocTokenizerPipe()),
-            ("padding", PadTruncTokensPipe(length="max")),
-            ("encoder", TokenEncoderPipe()),
-        ]
-    )
-
-    return pipeline

@@ -1,8 +1,3 @@
-"""
-Full definition of a GPT Language Model, all of it in this file and gpt_custom.py
-Source: https://github.com/karpathy/minGPT.      (License: MIT)
-"""
-
 import time
 from collections import defaultdict
 from typing import Optional
@@ -12,9 +7,10 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data.dataloader import DataLoader, default_collate
 
-from axon.gpt.data import DFDataset
-from axon.gpt.vpda import DocumentVPDA
-from axon.utils.common import auto_device
+from storm_ml.preprocessing import DFDataset
+from storm_ml.utils import auto_device
+
+from .vpda import DocumentVPDA
 
 
 class GPTBase(nn.Module):
