@@ -63,11 +63,6 @@ class GPT(GPTBase):
             self.head.weight = self.token_embed.weight
 
         self.to(self.device)
-        print("running on device", self.device)
-
-        # report number of parameters (note we don't count the decoder parameters in lm_head)
-        n_params = count_parameters(self)
-        print("number of parameters: %.2fM" % (n_params / 1e6,))
 
     def hidden(self, idx: torch.Tensor) -> torch.Tensor:
         """A forward pass through the model up to the last hidden layer. Call this to get

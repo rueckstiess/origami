@@ -92,6 +92,7 @@ def load_data(source: str, data_config: DataConfig) -> pd.DataFrame:
             data_config.db,
             data_config.coll,
             limit=data_config.limit,
+            skip=data_config.skip,
             projection=projection,
         )
 

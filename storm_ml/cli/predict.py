@@ -1,3 +1,4 @@
+import json
 import pathlib
 
 import click
@@ -7,9 +8,9 @@ from storm_ml.inference import Predictor
 from storm_ml.model import STORM
 from storm_ml.model.vpda import DocumentVPDA
 from storm_ml.preprocessing import DFDataset, TargetFieldPipe
-from storm_ml.utils import load_storm_model
+from storm_ml.utils import Symbol, load_storm_model
 
-from .utils import create_projection, load_data, make_progress_callback
+from .utils import create_projection, load_data
 
 
 @click.command()
@@ -28,7 +29,10 @@ from .utils import create_projection, load_data, make_progress_callback
 @optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
 @optgroup.option("--include-fields", "-i", type=str, help="comma-separated list of field names to include")
 @optgroup.option("--exclude-fields", "-e", type=str, help="comma-separated list of field names to exclude")
+@optgroup.option("--skip", "-s", type=int, default=0, help="number of documents to skip")
 @optgroup.option("--limit", "-l", type=int, default=0, help="limit the number of documents to load")
+@optgroup.group("Output Options")
+@optgroup.option("--json", "-j", is_flag=True, default=False, help="output full JSON objects including target field")
 @click.option("--verbose", "-v", is_flag=True, default=True)
 def predict(source, **kwargs):
     """Predict target fields with a trained STORM model."""
@@ -73,13 +77,24 @@ def predict(source, **kwargs):
     predictor = Predictor(model, encoder, config.data.target_field)
 
     predictions = predictor.predict(test_dataset)
-    if kwargs["verbose"]:
-        for i, (pred, target) in enumerate(zip(predictions, test_dataset.df["target"])):
-            # print correct matches in green, incorrect matches in red
-            if pred == target:
-                click.echo(f"{i:4} predicted:\033[32m {pred} \033[0m target: {target}")
-            else:
-                click.echo(f"{i:4} predicted:\033[31m {pred} \033[0m target: {target}")
 
-    acc = predictor.accuracy(test_dataset, show_progress=False)
-    click.echo(f"Test accuracy: {acc:.4f}")
+    for i, (pred, doc, target) in enumerate(zip(predictions, test_dataset.df["docs"], test_dataset.df["target"])):
+        if kwargs["json"]:
+            doc[config.data.target_field] = pred
+            line_str = json.dumps(doc)
+        else:
+            line_str = pred
+        if target == Symbol.UNKNOWN:
+            click.echo(line_str)
+        else:
+            if pred == target:
+                # replace with green version
+                click.echo(f"\033[32m{line_str}\033[0m")
+            else:
+                # replace with red version
+                click.echo(f"\033[31m{line_str}\033[0m")
+
+    # if any target field is not None, print accuracy
+    if any(test_dataset.df["target"] != Symbol.UNKNOWN):
+        acc = predictor.accuracy(test_dataset, show_progress=False)
+        click.echo(f"\nTest accuracy: {acc:.4f}", err=True)

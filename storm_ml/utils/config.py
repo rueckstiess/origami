@@ -137,6 +137,7 @@ class DataConfig(BaseConfig):
     db: Optional[str] = MISSING
     coll: Optional[str] = MISSING
     projection: dict = field(default_factory=lambda: {"_id": 0})
+    skip: int = 0
     limit: int = 0
 
     # prediction options

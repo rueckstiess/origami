@@ -13,7 +13,7 @@ from storm_ml.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
 )
-from storm_ml.utils import TopLevelConfig, save_storm_model
+from storm_ml.utils import TopLevelConfig, count_parameters, save_storm_model
 
 from .utils import create_projection, load_data, make_progress_callback
 
@@ -41,6 +41,7 @@ warnings.filterwarnings(
 @optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
 @optgroup.option("--include-fields", "-i", type=str, help="comma-separated list of field names to include")
 @optgroup.option("--exclude-fields", "-e", type=str, help="comma-separated list of field names to exclude")
+@optgroup.option("--skip", "-s", type=int, default=0, help="number of documents to skip")
 @optgroup.option("--limit", "-l", type=int, default=0, help="limit the number of documents to load")
 @optgroup.group("Config Options")
 @optgroup.option("--config-file", "-C", type=click.File("r"), help="path to config file")
@@ -126,6 +127,7 @@ def train(source: str, **kwargs):
     config.data.db = kwargs["source_db"]
     config.data.coll = kwargs["source_coll"]
     config.data.projection = create_projection(kwargs["include_fields"], kwargs["exclude_fields"])
+    config.data.skip = kwargs["skip"]
     config.data.limit = kwargs["limit"]
     config.data.target_field = kwargs["target_field"]
 
@@ -182,7 +184,11 @@ def train(source: str, **kwargs):
     model = STORM(config.model, config.train, vpda=vpda)
 
     if kwargs["verbose"]:
-        print(OmegaConf.to_yaml(config))
+        # report number of parameters (note we don't count the decoder parameters in lm_head)
+        n_params = count_parameters(model)
+        click.option(f"running on device: {model.device}")
+        click.option(f"number of parameters: {n_params/1e6:.2f}M")
+        click.option(f"config:\n {OmegaConf.to_yaml(config)}")
 
     # model callback during training, prints training and test metrics
     if config.data.target_field:
