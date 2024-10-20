@@ -1,21 +1,14 @@
 import click
-from click_option_group import optgroup
-from typing import Optional 
 
+from .generate import generate
+from .predict import predict
 from .train import train
 
 CONTEXT_SETTINGS = dict(max_content_width=120)
 
+
 @click.group(context_settings=CONTEXT_SETTINGS)
 def main():
-    pass
-
-@click.command()
-def generate():
-    pass
-
-@click.command()
-def predict():
     pass
 
 

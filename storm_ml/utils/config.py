@@ -16,6 +16,7 @@ class SequenceOrderMethod(Enum):
 
 
 class NumericMethod(Enum):
+    NONE = 0
     BINNING = 1
 
 
@@ -103,7 +104,8 @@ class TrainConfig(BaseConfig):
     lr_end_factor: float = 0.01
 
     # print and eval options
-    eval_every: int = 100
+    print_every: int = 100
+    eval_every: int = 1000
     sample_eval: int = 100
     sample_test: int = 100
 
@@ -118,6 +120,7 @@ class PipelineConfig(BaseConfig):
 
     # pipeline options
     max_vocab_size: int = 0
+    numeric_method: NumericMethod = NumericMethod.BINNING
     n_bins: int = 100
     sequence_order: SequenceOrderMethod = MISSING
     upscale: int = 1

@@ -1,11 +1,15 @@
 import itertools
+import pickle
 import random
 from collections import OrderedDict
 from enum import Enum
 from typing import Any, Generator, Iterable, Optional, Tuple, Union
-from omegaconf import OmegaConf
+
 import numpy as np
 import torch
+from omegaconf import OmegaConf
+
+from storm_ml.utils.config import TopLevelConfig
 
 
 class Symbol(Enum):
@@ -218,13 +222,21 @@ def count_parameters(m: torch.nn.Module, only_trainable: bool = False):
     return sum(p.numel() for p in unique)
 
 
-def save_model(model: torch.nn.Module, config: OmegaConf, path: str):
-    model_dict = {"state_dict": model.state_dict()} | {"config": OmegaConf.to_container(config, enum_to_str=True)}
-    torch.save(model_dict, path)
+def save_storm_model(model: torch.nn.Module, pipelines: dict, config: OmegaConf, path: str):
+    model_dict = {
+        "state_dict": model.state_dict(),
+        "config": OmegaConf.to_container(config, enum_to_str=True),
+        "pipelines": pipelines,
+    }
+
+    pickle.dump(model_dict, open(path, "wb"))
 
 
-def load_model(path: str):
-    model_dict = torch.load(path)
-    config = OmegaConf.create(model_dict.pop("config"))
+def load_storm_model(path: str):
+    model_dict = pickle.load(open(path, "rb"))
 
-    return model_dict, config
+    # re-validate config
+    tlc = OmegaConf.create(TopLevelConfig)
+    model_dict["config"] = OmegaConf.merge(tlc, model_dict["config"])
+
+    return model_dict

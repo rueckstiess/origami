@@ -1,6 +1,8 @@
+from typing import Optional
+
 from sklearn.pipeline import Pipeline
 
-from storm_ml.utils.config import SequenceOrderMethod
+from storm_ml.utils.config import NumericMethod, PipelineConfig, SequenceOrderMethod
 
 from .pipes import (
     DocPermuterPipe,
@@ -15,31 +17,45 @@ from .pipes import (
 
 
 def build_prediction_pipelines(
-    target_field: str, n_bins: int, sequence_order: SequenceOrderMethod, upscale: int
+    pipeline_config: PipelineConfig, target_field: Optional[str] = None
 ) -> tuple[Pipeline, Pipeline]:
     """build common train/test pipelines for prediction tasks."""
 
     pipes = {
-        "binning": KBinsDiscretizerPipe(bins=n_bins, threshold=n_bins, strategy="kmeans"),
+        "binning": KBinsDiscretizerPipe(
+            bins=pipeline_config.n_bins, threshold=pipeline_config.n_bins, strategy="kmeans"
+        ),
         "schema": SchemaParserPipe(),
-        "target": TargetFieldPipe(target_field),
         "tokenizer": DocTokenizerPipe(),
         "padding": PadTruncTokensPipe(length="max"),
-        "encoder": TokenEncoderPipe(),
+        "encoder": TokenEncoderPipe(max_tokens=pipeline_config.max_vocab_size),
     }
-    match sequence_order:
+
+    # add upscaling and permuting if needed
+    match pipeline_config.sequence_order:
         case SequenceOrderMethod.SHUFFLED:
             pipes |= {
-                "upscaler": UpscalerPipe(n=upscale),
+                "upscaler": UpscalerPipe(n=pipeline_config.upscale),
                 "permuter": DocPermuterPipe(),
             }
-            train_pipes = ("binning", "schema", "upscaler", "permuter", "tokenizer", "padding", "encoder")
+            train_pipes = ("schema", "upscaler", "permuter", "tokenizer", "padding", "encoder")
         case _:
-            train_pipes = ("binning", "schema", "tokenizer", "padding", "encoder")
+            train_pipes = ("schema", "tokenizer", "padding", "encoder")
 
-    test_pipes = ("binning", "target", "tokenizer", "padding", "encoder")
+    test_pipes = ("tokenizer", "padding", "encoder")
 
-    train_pipeline = Pipeline([(name, pipes[name]) for name in train_pipes])
-    test_pipeline = Pipeline([(name, pipes[name]) for name in test_pipes])
+    # add binning if needed
+    if pipeline_config.numeric_method == NumericMethod.BINNING:
+        test_pipes = ("binning",) + test_pipes
+        train_pipes = ("binning",) + train_pipes
 
-    return train_pipeline, test_pipeline
+    # add target if needed
+    if target_field is not None:
+        pipes["target"] = TargetFieldPipe(target_field)
+        test_pipes = ("target",) + test_pipes
+        train_pipes = ("target",) + train_pipes
+
+    train_pipeline = Pipeline([(name, pipes[name]) for name in train_pipes], verbose=True)
+    test_pipeline = Pipeline([(name, pipes[name]) for name in test_pipes], verbose=True)
+
+    return {"train": train_pipeline, "test": test_pipeline}

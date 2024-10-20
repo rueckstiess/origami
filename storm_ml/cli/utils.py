@@ -1,11 +1,15 @@
 import json
 import pathlib
-from typing import Optional
+from typing import Callable, Optional
 
 import click
 import pandas as pd
+from omegaconf import OmegaConf
 
-from storm_ml.preprocessing import docs_to_df, load_df_from_mongodb
+from storm_ml.inference import Predictor
+from storm_ml.preprocessing import DFDataset, docs_to_df, load_df_from_mongodb
+from storm_ml.utils import DataConfig, TrainConfig
+from storm_ml.utils.guild import print_guild_scalars
 
 
 def create_projection(include_fields: Optional[str] = None, exclude_fields: Optional[str] = None) -> dict:
@@ -69,7 +73,7 @@ def filter_data(data: list[dict], projection: dict) -> list[dict]:
     return filtered_data
 
 
-def load_data(source: str, **kwargs):
+def load_data(source: str, data_config: DataConfig) -> pd.DataFrame:
     """
     Load data from various sources such as MongoDB, JSON, CSV, or a directory containing supported files.
 
@@ -82,12 +86,12 @@ def load_data(source: str, **kwargs):
     """
     if source.startswith("mongodb://"):
         # load data from MongoDB, project out _id field by default
-        projection = {"_id": 0} | create_projection(kwargs.get("include_fields"), kwargs.get("exclude_fields"))
+        projection = {"_id": 0} | OmegaConf.to_object(data_config.projection)
         df = load_df_from_mongodb(
             source,
-            kwargs["source_db"],
-            kwargs["source_coll"],
-            limit=kwargs["limit"],
+            data_config.db,
+            data_config.coll,
+            limit=data_config.limit,
             projection=projection,
         )
 
@@ -101,8 +105,7 @@ def load_data(source: str, **kwargs):
                 data = [json.loads(line) for line in f]
 
         # filter data based on projection
-        projection = create_projection(kwargs.get("include_fields"), kwargs.get("exclude_fields"))
-        data = filter_data(data, projection)
+        data = filter_data(data, data_config.projection)
         df = docs_to_df(data)
 
     elif source.endswith(".csv"):
@@ -110,8 +113,7 @@ def load_data(source: str, **kwargs):
         data = df.to_dict(orient="records")
 
         # filter data based on projection
-        projection = create_projection(kwargs.get("include_fields"), kwargs.get("exclude_fields"))
-        data = filter_data(data, projection)
+        data = filter_data(data, data_config.projection)
 
         df = docs_to_df(data)
 
@@ -121,8 +123,47 @@ def load_data(source: str, **kwargs):
         for path in pathlib.Path(source).glob("*.*"):
             if path.is_file() and path.suffix in [".json", ".jsonl", ".csv"]:
                 click.echo(f"reading {path}")
-                dfs.append(load_data(str(path), **kwargs))
+                dfs.append(load_data(str(path), data_config))
         df = pd.concat(dfs)
     else:
         raise ValueError(f"unsupported source type for source {source}")
+
+    # apply limit
+    if data_config.limit > 0:
+        df = df.head(data_config.limit)
+
     return df
+
+
+def make_progress_callback(
+    train_config: TrainConfig,
+    train_dataset: Optional[DFDataset] = None,
+    test_dataset: Optional[DFDataset] = None,
+    predictor: Optional[Predictor] = None,
+) -> Callable:
+    def progress_callback(model):
+        if model.batch_num % train_config.print_every == 0:
+            scalars = dict(
+                step=f"{int(model.batch_num / train_config.print_every)}",
+                epoch=model.epoch_num,
+                batch_num=model.batch_num,
+                batch_dt=f"{model.batch_dt*1000:.2f}",
+                batch_loss=f"{model.loss:.4f}",
+                lr=f"{model.learning_rate:.2e}",
+            )
+            if predictor and model.batch_num % train_config.eval_every == 0:
+                if train_config.sample_eval > 0 and train_dataset:
+                    # evaluate on a sample of the training data
+                    scalars.update(
+                        train_loss=f"{predictor.ce_loss(train_dataset.sample(n=train_config.sample_eval)):.4f}",
+                        train_acc=f"{predictor.accuracy(train_dataset.sample(n=train_config.sample_eval)):.4f}",
+                    )
+                if train_config.sample_test > 0 and test_dataset:
+                    # evaluate on a sample of the test data
+                    scalars.update(
+                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_test)):.4f}",
+                        test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_test)):.4f}",
+                    )
+            print_guild_scalars(**scalars)
+
+    return progress_callback

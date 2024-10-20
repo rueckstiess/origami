@@ -4,22 +4,17 @@ import warnings
 import click
 from click_option_group import optgroup
 from omegaconf import OmegaConf
-from sklearn.pipeline import Pipeline
 
 from storm_ml.inference import Predictor
 from storm_ml.model import STORM
 from storm_ml.model.vpda import DocumentVPDA
 from storm_ml.preprocessing import (
     DFDataset,
-    DocTokenizerPipe,
-    PadTruncTokensPipe,
-    SchemaParserPipe,
-    TokenEncoderPipe,
+    build_prediction_pipelines,
 )
-from storm_ml.utils import TopLevelConfig, save_model
-from storm_ml.utils.guild import print_guild_scalars
+from storm_ml.utils import TopLevelConfig, save_storm_model
 
-from .utils import create_projection, load_data
+from .utils import create_projection, load_data, make_progress_callback
 
 # suppress deprecation warning for setting epoch in LR scheduler, likely bug in pytorch
 warnings.filterwarnings(
@@ -36,7 +31,7 @@ warnings.filterwarnings(
     "--model-path",
     "-m",
     type=click.Path(dir_okay=False, path_type=pathlib.Path, resolve_path=True),
-    default="./storm.pt",
+    default="./model.storm",
     show_default=True,
     help="path to write trained model",
 )
@@ -52,7 +47,7 @@ warnings.filterwarnings(
     "--max-vocab-size",
     "-V",
     type=int,
-    default=512,
+    default=0,
     show_default=True,
     help="maximum number of tokens in the vocabulary",
 )
@@ -83,6 +78,7 @@ warnings.filterwarnings(
 @optgroup.option(
     "--num-batches", "-N", type=int, default=10000, show_default=True, help="number of batches to train on"
 )
+@optgroup.option("--batch-size", "-B", type=int, default=100, show_default=True, help="batch size")
 @optgroup.option(
     "--pos-encoding",
     "-P",
@@ -119,8 +115,11 @@ warnings.filterwarnings(
 @optgroup.option("--k-fold", type=int, default=5, show_default=True, help="number of folds for cross-validation")
 @optgroup.option("--eval-source", type=click.Path(exists=True), help="path to evaluation source")
 @optgroup.option("--target-field", "-t", type=str, help="target field name to predict")
-@click.option("--verbose", "-v", is_flag=True)
+@click.option("--verbose", "-v", is_flag=True, default=True)
 def train(source: str, **kwargs):
+    """
+    Train a STORM model.
+    """
     config = TopLevelConfig()
 
     # data configs
@@ -139,8 +138,11 @@ def train(source: str, **kwargs):
 
     # train configs
     config.train.n_batches = kwargs["num_batches"]
+    config.train.batch_size = kwargs["batch_size"]
     config.train.learning_rate = 1e-3
     config.train.n_warmup_batches = 1000
+    config.train.print_every = 10
+    config.train.eval_every = 100
 
     # pipeline configs
     config.pipeline.max_vocab_size = kwargs["max_vocab_size"]
@@ -149,25 +151,19 @@ def train(source: str, **kwargs):
     config.pipeline.upscale = kwargs["upscaling"]
 
     # load data
-    df = load_data(source, **kwargs)
+    df = load_data(source, config.data)
 
     # build pipelines
-    pipes = {
-        "schema": SchemaParserPipe(),
-        "tokenizer": DocTokenizerPipe(path_in_field_tokens=True),
-        "padding": PadTruncTokensPipe(length="max"),
-        "encoder": TokenEncoderPipe(max_tokens=config.pipeline.max_vocab_size),
-    }
-    train_pipeline = Pipeline([(name, pipes[name]) for name in ("schema", "tokenizer", "padding", "encoder")])
+    pipelines = build_prediction_pipelines(config.pipeline, config.data.target_field)
 
     # process train, eval and test data
-    train_df = train_pipeline.fit_transform(df)
+    train_df = pipelines["train"].fit_transform(df)
     # test_df = pipeline.transform(test_docs_df)
 
     # get stateful objects and set model parameters
-    schema = pipes["schema"].schema
-    encoder = pipes["encoder"].encoder
-    config.model.block_size = pipes["padding"].length
+    schema = pipelines["train"]["schema"].schema
+    encoder = pipelines["train"]["encoder"].encoder
+    config.model.block_size = pipelines["train"]["padding"].length
     config.model.vocab_size = encoder.vocab_size
 
     # datasets
@@ -180,22 +176,15 @@ def train(source: str, **kwargs):
         print(OmegaConf.to_yaml(config))
 
     # model callback during training, prints training and test metrics
-    def progress_callback(model):
-        if model.batch_num % config.train.eval_every == 0:
-            print_guild_scalars(
-                step=f"{int(model.batch_num / config.train.eval_every)}",
-                epoch=model.epoch_num,
-                batch_num=model.batch_num,
-                batch_dt=f"{model.batch_dt*1000:.2f}",
-                batch_loss=f"{model.loss:.4f}",
-                # test_loss=f"{predictor.ce_loss(test_dataset.sample(n=100)):.4f}",
-                # test_acc=f"{predictor.accuracy(test_dataset.sample(n=100)):.4f}",
-                lr=f"{model.learning_rate:.2e}",
-            )
+    if config.data.target_field:
+        predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.train.batch_size)
+    else:
+        predictor = None
+    progress_callback = make_progress_callback(config.train, train_dataset, predictor=predictor)
 
     # train model
     model.set_callback("on_batch_end", progress_callback)
     model.train_model(train_dataset, batches=config.train.n_batches)
 
     # save model with config
-    save_model(model, config, kwargs.get("model_path"))
+    save_storm_model(model, pipelines=pipelines, config=config, path=kwargs.get("model_path"))
