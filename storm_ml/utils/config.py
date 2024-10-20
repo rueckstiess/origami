@@ -16,8 +16,8 @@ class SequenceOrderMethod(Enum):
 
 
 class NumericMethod(Enum):
-    NONE = 0
-    BINNING = 1
+    NONE = 1
+    BINNING = 2
 
 
 class PositionEncodingMethod(Enum):
@@ -103,20 +103,20 @@ class TrainConfig(BaseConfig):
     grad_norm_clip: float = 1.0
     lr_end_factor: float = 0.01
 
+    # validation options
+    test_split: float = 0.0
+    shuffle_split: bool = True
+
     # print and eval options
     print_every: int = 100
     eval_every: int = 1000
-    sample_eval: int = 100
-    sample_test: int = 100
+    sample_train: int = 100
+    sample_val: int = 100
 
 
 @dataclass(repr=True, kw_only=True)
 class PipelineConfig(BaseConfig):
     """Config needed to build and execute pipelines."""
-
-    # split options
-    test_split: float = MISSING
-    shuffle_split: bool = True
 
     # pipeline options
     max_vocab_size: int = 0

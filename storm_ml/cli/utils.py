@@ -141,6 +141,8 @@ def make_progress_callback(
     test_dataset: Optional[DFDataset] = None,
     predictor: Optional[Predictor] = None,
 ) -> Callable:
+    predict_accuracy = hasattr(predictor, "accuracy")
+
     def progress_callback(model):
         if model.batch_num % train_config.print_every == 0:
             scalars = dict(
@@ -151,19 +153,22 @@ def make_progress_callback(
                 batch_loss=f"{model.loss:.4f}",
                 lr=f"{model.learning_rate:.2e}",
             )
-            if predictor and model.batch_num % train_config.eval_every == 0:
-                if train_config.sample_eval > 0 and train_dataset:
+            if model.batch_num % train_config.eval_every == 0:
+                if train_dataset and train_config.sample_train > 0 and predict_accuracy:
                     # evaluate on a sample of the training data
                     scalars.update(
-                        train_loss=f"{predictor.ce_loss(train_dataset.sample(n=train_config.sample_eval)):.4f}",
-                        train_acc=f"{predictor.accuracy(train_dataset.sample(n=train_config.sample_eval)):.4f}",
+                        train_acc=f"{predictor.accuracy(train_dataset.sample(n=train_config.sample_train)):.4f}",
                     )
-                if train_config.sample_test > 0 and test_dataset:
+                if test_dataset and train_config.sample_val > 0:
                     # evaluate on a sample of the test data
                     scalars.update(
-                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_test)):.4f}",
-                        test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_test)):.4f}",
+                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_val)):.4f}",
                     )
+                    if predict_accuracy:
+                        scalars.update(
+                            test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_val)):.4f}",
+                        )
+
             print_guild_scalars(**scalars)
 
     return progress_callback

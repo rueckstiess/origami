@@ -4,8 +4,9 @@ import warnings
 import click
 from click_option_group import optgroup
 from omegaconf import OmegaConf
+from sklearn.model_selection import train_test_split
 
-from storm_ml.inference import Predictor
+from storm_ml.inference import Metrics, Predictor
 from storm_ml.model import STORM
 from storm_ml.model.vpda import DocumentVPDA
 from storm_ml.preprocessing import (
@@ -105,15 +106,13 @@ warnings.filterwarnings(
 )
 @optgroup.group("Evaluation Options")
 @optgroup.option(
-    "--eval-mode",
-    type=click.Choice(["none", "test-split", "cross-val", "eval-source"]),
-    help="evaluation mode",
-    default="none",
+    "--val-split-ratio",
+    "-r",
+    type=float,
+    default=0.0,
     show_default=True,
+    help="ratio for validation dataset, a value of 0.0 disables validation",
 )
-@optgroup.option("--split-ratio", type=float, default=0.2, show_default=True, help="test split ratio")
-@optgroup.option("--k-fold", type=int, default=5, show_default=True, help="number of folds for cross-validation")
-@optgroup.option("--eval-source", type=click.Path(exists=True), help="path to evaluation source")
 @optgroup.option("--target-field", "-t", type=str, help="target field name to predict")
 @click.option("--verbose", "-v", is_flag=True, default=True)
 def train(source: str, **kwargs):
@@ -143,22 +142,34 @@ def train(source: str, **kwargs):
     config.train.n_warmup_batches = 1000
     config.train.print_every = 10
     config.train.eval_every = 100
+    config.train.test_split = kwargs["val_split_ratio"]
 
     # pipeline configs
     config.pipeline.max_vocab_size = kwargs["max_vocab_size"]
-    config.pipeline.test_split = kwargs["split_ratio"]
     config.pipeline.sequence_order = "SHUFFLED" if kwargs["shuffled"] else "ORDERED"
     config.pipeline.upscale = kwargs["upscaling"]
 
     # load data
     df = load_data(source, config.data)
 
+    if config.train.test_split > 0:
+        train_df, test_df = train_test_split(df, test_size=config.train.test_split, shuffle=config.train.shuffle_split)
+    else:
+        train_df = df
+        test_df = None
+
     # build pipelines
     pipelines = build_prediction_pipelines(config.pipeline, config.data.target_field)
 
-    # process train, eval and test data
-    train_df = pipelines["train"].fit_transform(df)
-    # test_df = pipeline.transform(test_docs_df)
+    # process train and test data
+    train_proc_df = pipelines["train"].fit_transform(train_df)
+    train_dataset = DFDataset(train_proc_df)
+
+    if config.train.test_split > 0:
+        test_proc_df = pipelines["test"].transform(test_df)
+        test_dataset = DFDataset(test_proc_df)
+    else:
+        test_dataset = None
 
     # get stateful objects and set model parameters
     schema = pipelines["train"]["schema"].schema
@@ -166,9 +177,7 @@ def train(source: str, **kwargs):
     config.model.block_size = pipelines["train"]["padding"].length
     config.model.vocab_size = encoder.vocab_size
 
-    # datasets
-    train_dataset = DFDataset(train_df)
-
+    # create model with PDA
     vpda = DocumentVPDA(encoder, schema)
     model = STORM(config.model, config.train, vpda=vpda)
 
@@ -179,8 +188,10 @@ def train(source: str, **kwargs):
     if config.data.target_field:
         predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.train.batch_size)
     else:
-        predictor = None
-    progress_callback = make_progress_callback(config.train, train_dataset, predictor=predictor)
+        predictor = Metrics(model, batch_size=config.train.batch_size)
+    progress_callback = make_progress_callback(
+        config.train, train_dataset=train_dataset, test_dataset=test_dataset, predictor=predictor
+    )
 
     # train model
     model.set_callback("on_batch_end", progress_callback)
