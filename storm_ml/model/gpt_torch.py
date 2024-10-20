@@ -35,7 +35,7 @@ class GPT(GPTBase):
                     self.model_config.n_embd,
                     fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
                 )
-            case PositionEncodingMethod.DOCUMENT:
+            case PositionEncodingMethod.KEY_VALUE:
                 self.pos_encoding = SharedDocumentPositionEncoding(
                     self.token_embed,
                     fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
@@ -85,7 +85,7 @@ class GPT(GPTBase):
         match self.model_config.position_encoding:
             case PositionEncodingMethod.INTEGER:
                 x = self.pos_encoding(tok_emb)
-            case PositionEncodingMethod.DOCUMENT:
+            case PositionEncodingMethod.KEY_VALUE:
                 # use the VPDA stacks for position encoding
                 if self.training and self.model_config.guardrails:
                     # for guard rails we calculated the stacks on all tokens, but here we

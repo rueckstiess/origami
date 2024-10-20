@@ -3,7 +3,7 @@ import random
 from collections import OrderedDict
 from enum import Enum
 from typing import Any, Generator, Iterable, Optional, Tuple, Union
-
+from omegaconf import OmegaConf
 import numpy as np
 import torch
 
@@ -132,153 +132,6 @@ def peek_generator(iterable: Iterable[Any]) -> Tuple[Any, Generator[Any, Any, An
         return None, iterable
 
 
-from dataclasses import dataclass, field
-from enum import Enum
-
-from omegaconf import MISSING, OmegaConf
-
-
-class EstimationMethod(Enum):
-    SAMPLING = 1
-    FIELD_PROMPTING = 2
-
-
-class SequenceOrderMethod(Enum):
-    ORDERED = 1
-    SHUFFLED = 2
-
-
-class NumericMethod(Enum):
-    BINNING = 1
-
-
-class PositionEncodingMethod(Enum):
-    NONE = 1
-    INTEGER = 2
-    DOCUMENT = 3
-
-
-class BaseConfig:
-    """Wrap all configs deriving from BaseConfig in OmegaConf objects."""
-
-    def __new__(cls, **kwargs):
-        instance = super().__new__(cls)
-        cls.__init__(instance, **kwargs)
-        return OmegaConf.structured(instance)
-
-
-@dataclass(kw_only=True)
-class ModelConfig(BaseConfig):
-    """Model config for creating a GPT model."""
-
-    # architecture parameters
-    n_layer: int = MISSING
-    n_head: int = MISSING
-    n_embd: int = MISSING
-    vocab_size: int = MISSING
-    block_size: int = MISSING
-
-    # dropout hyperparameters
-    embd_pdrop: float = 0.1
-    resid_pdrop: float = 0.1
-    attn_pdrop: float = 0.1
-
-    # weight tieing between embedding matrix and linear head weights (saves parameters)
-    tie_weights: bool = False
-
-    # the default position encoding method to use (NONE, INTEGER, DOCUMENT)
-    position_encoding: PositionEncodingMethod = MISSING
-
-    # Whether to use an MLP to fuse position and token embeddings or just sum them
-    fuse_pos_with_mlp: bool = False
-
-    # whether or not to mask field tokens in loss calculation
-    mask_field_token_losses: bool = False
-
-    # whether or not to use guardrails (requires a DocumentVPDA to be passed into model)
-    guardrails: bool = True
-
-    @staticmethod
-    def from_preset(size: str, **kwargs) -> "ModelConfig":
-        match size:
-            case "gpt-nano":
-                return ModelConfig(n_layer=3, n_head=3, n_embd=48, **kwargs)
-            case "gpt-micro":
-                return ModelConfig(n_layer=4, n_head=4, n_embd=128, **kwargs)
-            case "gpt-mini":
-                return ModelConfig(n_layer=6, n_head=6, n_embd=192, **kwargs)
-            case "gpt-small":
-                return ModelConfig(n_layer=8, n_head=8, n_embd=384, **kwargs)
-            case "openai-gpt":
-                return ModelConfig(n_layer=12, n_head=12, n_embd=768, **kwargs)
-            case _:
-                raise ValueError(f"Unknown model size: {size}")
-
-
-@dataclass(repr=True, kw_only=True)
-class TrainConfig(BaseConfig):
-    """Train config for training a GPT model."""
-
-    # device to train on (auto, cpu, cuda, mps)
-    device: str = "auto"
-
-    # dataloder parameters (currently not used)
-    num_workers: int = 0
-
-    # optimizer parameters
-    batch_size: int = 100
-    n_batches: int = MISSING
-    n_warmup_batches: int = 1000
-    learning_rate: float = 1e-3
-    betas: tuple = (0.9, 0.95)
-    weight_decay: float = 0.1  # only applied on matmul weights
-    grad_norm_clip: float = 1.0
-    lr_end_factor: float = 0.01
-
-    # print and eval options
-    eval_every: int = 100
-    sample_eval: int = 100
-    sample_test: int = 100
-
-
-@dataclass(repr=True, kw_only=True)
-class PipelineConfig(BaseConfig):
-    """Config needed to build and execute pipelines."""
-
-    # split options
-    test_split: float = MISSING
-    shuffle_split: bool = True
-
-    # pipeline options
-    n_bins: int = 100
-    sequence_order: SequenceOrderMethod = MISSING
-    upscale: int = 1
-
-
-@dataclass(repr=True, kw_only=True)
-class DataConfig(BaseConfig):
-    """Config to define data source and target field."""
-
-    # database parameters
-    db: str = MISSING
-    coll: str = MISSING
-    projection: dict = field(default_factory=lambda: {"_id": 0})
-    limit: int = 0
-
-    # prediction options
-    target_field: str = MISSING
-
-
-@dataclass(repr=True, kw_only=True)
-class TopLevelConfig(BaseConfig):
-    """combined Model/Train/Data/Pipeline config."""
-
-    model: ModelConfig = ModelConfig()
-    train: TrainConfig = TrainConfig()
-    data: DataConfig = DataConfig()
-    pipeline: PipelineConfig = PipelineConfig()
-
-
 def walk_all_leaf_kvs(
     item,
     path="",
@@ -363,3 +216,15 @@ def count_parameters(m: torch.nn.Module, only_trainable: bool = False):
         parameters = [p for p in parameters if p.requires_grad]
     unique = {p.data_ptr(): p for p in parameters}.values()
     return sum(p.numel() for p in unique)
+
+
+def save_model(model: torch.nn.Module, config: OmegaConf, path: str):
+    model_dict = {"state_dict": model.state_dict()} | {"config": OmegaConf.to_container(config, enum_to_str=True)}
+    torch.save(model_dict, path)
+
+
+def load_model(path: str):
+    model_dict = torch.load(path)
+    config = OmegaConf.create(model_dict.pop("config"))
+
+    return model_dict, config
