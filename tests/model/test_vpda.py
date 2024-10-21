@@ -8,7 +8,7 @@ from sklearn.pipeline import Pipeline
 
 from origami.preprocessing import DocTokenizerPipe, PadTruncTokensPipe, TokenEncoderPipe
 from origami.utils.common import ArrayStart, FieldToken, Symbol
-from origami.model.vpda import INVALID, NOOP, VPDA, DocumentVPDA
+from origami.model.vpda import INVALID, NOOP, VPDA, ObjectVPDA
 
 START = 1
 END = 2
@@ -303,7 +303,7 @@ class TestDocumentVPDA(unittest.TestCase):
         # attach to class for use in tests
         cls.data = data
         cls.encoder = pipeline["encoder"].encoder
-        cls.vpda = DocumentVPDA(cls.encoder)
+        cls.vpda = ObjectVPDA(cls.encoder)
 
     def test_accepts_top_level_documents(self):
         vpda = TestDocumentVPDA.vpda
@@ -426,7 +426,7 @@ class TestDocumentVPDA(unittest.TestCase):
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
 
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
@@ -448,7 +448,7 @@ class TestDocumentVPDA(unittest.TestCase):
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 
@@ -463,11 +463,11 @@ class TestDocumentVPDA(unittest.TestCase):
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
         schema = parse_schema(data)
 
         # accept original documents
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 
@@ -500,7 +500,7 @@ class TestDocumentVPDA(unittest.TestCase):
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 
@@ -551,7 +551,7 @@ class TestDocumentVPDA(unittest.TestCase):
         tokens[5, 15] = encoder.encode(Symbol.END)
         tokens[5, 16] = encoder.encode(Symbol.PAD)
 
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == False).all())
 
@@ -593,7 +593,7 @@ class TestDocumentVPDA(unittest.TestCase):
         # value after PAD
         tokens[3, 7] = encoder.encode(1)
 
-        vpda = DocumentVPDA(encoder)
+        vpda = ObjectVPDA(encoder)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == False).all())
 
@@ -611,7 +611,7 @@ class TestDocumentVPDA(unittest.TestCase):
         schema = parse_schema(data)
 
         # accept original documents
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 
@@ -644,7 +644,7 @@ class TestDocumentVPDA(unittest.TestCase):
         schema = parse_schema(data)
 
         # accept original documents
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 
@@ -680,7 +680,7 @@ class TestDocumentVPDA(unittest.TestCase):
         schema = parse_schema(data)
 
         # accept original documents
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         accepts = vpda.accepts(tokens)
         self.assertTrue((accepts == True).all())
 

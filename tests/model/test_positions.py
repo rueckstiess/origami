@@ -17,7 +17,7 @@ from origami.model.positions import (
     NoPositionEncoding,
 )
 from origami.utils.common import ArrayStart, FieldToken, Symbol
-from origami.model.vpda import DocumentVPDA
+from origami.model.vpda import ObjectVPDA
 
 
 class TestNoPositionEncoding(unittest.TestCase):
@@ -113,7 +113,7 @@ class TestDocumentPositionEncoding(unittest.TestCase):
 
         # encode the document
 
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         vpda.accepts(tokens)
         stacks = torch.tensor(vpda.stacks)
 
@@ -174,7 +174,7 @@ class TestDocumentPositionEncoding(unittest.TestCase):
 
         pos_enc = DocumentPositionEncoding(encoder.vocab_size, 16, fuse_with_mlp=False)
 
-        vpda = DocumentVPDA(encoder, schema)
+        vpda = ObjectVPDA(encoder, schema)
         vpda.accepts(tokens)
         stacks = torch.tensor(vpda.stacks)
 

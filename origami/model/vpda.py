@@ -403,7 +403,7 @@ from origami.preprocessing import StreamEncoder
 from origami.utils.common import ArrayStart, FieldToken
 
 
-class DocumentVPDA(VPDA):
+class ObjectVPDA(VPDA):
     """VPDA for sequences of tokens for documents, as our DocTokenizerPipe produces.
 
     Requires access to the StreamEncoder to build the transition matrices.

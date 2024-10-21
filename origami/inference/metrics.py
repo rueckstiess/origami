@@ -2,12 +2,12 @@ import numpy as np
 import torch
 from torch.utils.data.dataloader import DataLoader
 
-from origami.model.gpt_torch import GPT
+from origami.model import ORIGAMI
 from origami.preprocessing import DFDataset
 
 
 class Metrics:
-    def __init__(self, model: GPT, batch_size: int = 128):
+    def __init__(self, model: ORIGAMI, batch_size: int = 128):
         self.model = model
         self.batch_size = batch_size
 

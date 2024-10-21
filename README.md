@@ -4,13 +4,13 @@ ORiGAMi - **O**bject **R**epresentat**i**on through **G**enerative **A**utoregre
 
 ## Installation
 
-```
+```shell
 pip install origami-ml
 ```
 
 ## Usage
 
-```
-from origami import ORIGAMI
+```python
+from origami.model import ORIGAMI
 ```
 

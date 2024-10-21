@@ -3,7 +3,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 
-from origami.model.gpt_torch import GPT
+from origami.model import ORIGAMI
 from origami.preprocessing import DFDataset, StreamEncoder, target_collate_fn
 from origami.utils import FieldToken
 
@@ -12,7 +12,7 @@ from .metrics import Metrics
 
 
 class Predictor(Metrics):
-    def __init__(self, model: GPT, encoder: StreamEncoder, target_field: str, max_batch_size: int = 128):
+    def __init__(self, model: ORIGAMI, encoder: StreamEncoder, target_field: str, max_batch_size: int = 128):
         self.model = model
         self.max_batch_size = max_batch_size
         self.batch_size = max_batch_size

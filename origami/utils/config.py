@@ -69,15 +69,15 @@ class ModelConfig(BaseConfig):
     @staticmethod
     def from_preset(size: str, **kwargs) -> "ModelConfig":
         match size:
-            case "gpt-nano":
+            case "small":
                 return ModelConfig(n_layer=3, n_head=3, n_embd=48, **kwargs)
-            case "gpt-micro":
+            case "medium":
                 return ModelConfig(n_layer=4, n_head=4, n_embd=128, **kwargs)
-            case "gpt-mini":
+            case "large":
                 return ModelConfig(n_layer=6, n_head=6, n_embd=192, **kwargs)
-            case "gpt-small":
+            case "xl":
                 return ModelConfig(n_layer=8, n_head=8, n_embd=384, **kwargs)
-            case "openai-gpt":
+            case "xxl":
                 return ModelConfig(n_layer=12, n_head=12, n_embd=768, **kwargs)
             case _:
                 raise ValueError(f"Unknown model size: {size}")

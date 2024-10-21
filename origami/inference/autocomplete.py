@@ -6,8 +6,9 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from origami.model.gpt_torch import GPT
-from origami.model.vpda import DocumentVPDA
+from origami.model import ORIGAMI
+
+from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset, StreamEncoder, detokenize, target_collate_fn
 from origami.utils import FieldToken, Symbol
 
@@ -17,7 +18,7 @@ from .batch_sampler import TargetTokenBatchSampler
 class AutoCompleter:
     def __init__(
         self,
-        model: GPT,
+        model: ORIGAMI,
         encoder: StreamEncoder,
         target_field: str,
         schema: Optional[Schema] = None,
@@ -25,7 +26,7 @@ class AutoCompleter:
         show_progress: bool = False,
     ):
         self.model = model
-        self.vpda = DocumentVPDA(encoder, schema)
+        self.vpda = ObjectVPDA(encoder, schema)
         self.encoder = encoder
         self.target_field = target_field
         self.max_batch_size = max_batch_size

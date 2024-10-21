@@ -12,8 +12,8 @@ extend-exclude = [
 [tool.ruff.lint]
 extend-select = ["I"]
 ignore = [
-    "E402",  # TODO(Thomas) to check; allow module level import not at top of file
-    "F841",  # TODO(Thomas) to check; allow unused variables
+    "E402",  # allow module level import not at top of file
+    "F841",  # allow unused variables
     "E712",  # allow "== True" and "== False"
     "E741",  # allow usage 'l', 'O', or 'I' as variable names, though they can be indistinguishable from numbers
     "F402",  # allow variable name shadowing; does not seem to work too well

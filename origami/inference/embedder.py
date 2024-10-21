@@ -3,13 +3,13 @@ from typing import Optional
 import torch
 from torch.utils.data.dataloader import DataLoader
 
-from origami.model.gpt_torch import GPT
+from origami.model import ORIGAMI
 from origami.preprocessing import DFDataset, StreamEncoder
 from origami.utils import FieldToken, Symbol
 
 
 class Embedder:
-    def __init__(self, model: GPT, encoder: StreamEncoder, target_field: Optional[str] = None, batch_size: int = 128):
+    def __init__(self, model: ORIGAMI, encoder: StreamEncoder, target_field: Optional[str] = None, batch_size: int = 128):
         self.model = model
         self.encoder = encoder
         self.batch_size = batch_size

@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 
 from origami.inference import Metrics, Predictor
 from origami.model import ORIGAMI
-from origami.model.vpda import DocumentVPDA
+from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
@@ -180,7 +180,7 @@ def train(source: str, **kwargs):
     config.model.vocab_size = encoder.vocab_size
 
     # create model with PDA
-    vpda = DocumentVPDA(encoder, schema)
+    vpda = ObjectVPDA(encoder, schema)
     model = ORIGAMI(config.model, config.train, vpda=vpda)
 
     if kwargs["verbose"]:

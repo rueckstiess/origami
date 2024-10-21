@@ -1,1 +1,1 @@
-from .gpt_torch import GPT as ORIGAMI
+from .origami import ORIGAMI

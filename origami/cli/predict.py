@@ -6,7 +6,7 @@ from click_option_group import optgroup
 
 from origami.inference import Predictor
 from origami.model import ORIGAMI
-from origami.model.vpda import DocumentVPDA
+from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset, TargetFieldPipe
 from origami.utils import Symbol, load_origami_model
 
@@ -46,7 +46,7 @@ def predict(source, **kwargs):
     schema = pipelines["train"]["schema"].schema
 
     # create model
-    vpda = DocumentVPDA(encoder, schema)
+    vpda = ObjectVPDA(encoder, schema)
     model = ORIGAMI(config.model, config.train, vpda=vpda)
     model.load_state_dict(state_dict)
 
