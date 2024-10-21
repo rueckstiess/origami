@@ -5,7 +5,7 @@
 # ORiGAMi - Object Representation through Generative Autoregressive Modelling 
 
 <p align="center">
-| <a><b>ORiGAMi Paper</b></a> | <a><b>ORiGAMi Blog Post</b></a> |
+| <a href=""><b>ORiGAMi Paper</b></a> | <a href=""><b>ORiGAMi Blog Post</b></a> |
 </p>
 
 
