@@ -263,7 +263,7 @@ class TestVPDA(unittest.TestCase):
         )
 
 
-class TestDocumentVPDA(unittest.TestCase):
+class TestObjectVPDA(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         data = [
@@ -306,8 +306,8 @@ class TestDocumentVPDA(unittest.TestCase):
         cls.vpda = ObjectVPDA(cls.encoder)
 
     def test_accepts_top_level_documents(self):
-        vpda = TestDocumentVPDA.vpda
-        encoder = TestDocumentVPDA.encoder
+        vpda = TestObjectVPDA.vpda
+        encoder = TestObjectVPDA.encoder
 
         accepts = vpda.accepts(
             torch.tensor(
@@ -356,8 +356,8 @@ class TestDocumentVPDA(unittest.TestCase):
         )
 
     def test_accepts_subdocuments(self):
-        vpda = TestDocumentVPDA.vpda
-        encoder = TestDocumentVPDA.encoder
+        vpda = TestObjectVPDA.vpda
+        encoder = TestObjectVPDA.encoder
 
         accepts = vpda.accepts(
             torch.tensor(
@@ -422,7 +422,7 @@ class TestDocumentVPDA(unittest.TestCase):
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
         )
 
-        df = pd.DataFrame({"docs": TestDocumentVPDA.data})
+        df = pd.DataFrame({"docs": TestObjectVPDA.data})
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
@@ -444,7 +444,7 @@ class TestDocumentVPDA(unittest.TestCase):
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
         )
 
-        df = pd.DataFrame({"docs": TestDocumentVPDA.data})
+        df = pd.DataFrame({"docs": TestObjectVPDA.data})
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
@@ -453,13 +453,13 @@ class TestDocumentVPDA(unittest.TestCase):
         self.assertTrue((accepts == True).all())
 
     def test_accepts_unknown_prim_value_with_schema(self):
-        data = TestDocumentVPDA.data
+        data = TestObjectVPDA.data
 
         pipeline = Pipeline(
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
         )
 
-        df = pd.DataFrame({"docs": TestDocumentVPDA.data})
+        df = pd.DataFrame({"docs": TestObjectVPDA.data})
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
@@ -496,7 +496,7 @@ class TestDocumentVPDA(unittest.TestCase):
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
         )
 
-        df = pd.DataFrame({"docs": TestDocumentVPDA.data})
+        df = pd.DataFrame({"docs": TestObjectVPDA.data})
         df = pipeline.fit_transform(df)
         tokens = torch.tensor(df["tokens"])
         encoder = pipeline["encoder"].encoder
@@ -598,7 +598,7 @@ class TestDocumentVPDA(unittest.TestCase):
         self.assertTrue((accepts == False).all())
 
     def test_accepts_values_with_schema(self):
-        data = TestDocumentVPDA.data
+        data = TestObjectVPDA.data
 
         pipeline = Pipeline(
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
@@ -631,7 +631,7 @@ class TestDocumentVPDA(unittest.TestCase):
         self.assertTrue((rejects == False).all())
 
     def test_accepts_arrays_with_schema(self):
-        data = TestDocumentVPDA.data
+        data = TestObjectVPDA.data
 
         pipeline = Pipeline(
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]
@@ -667,7 +667,7 @@ class TestDocumentVPDA(unittest.TestCase):
         self.assertTrue((accepts == True).all())
 
     def test_get_input_mask_with_schema(self):
-        data = TestDocumentVPDA.data
+        data = TestObjectVPDA.data
 
         pipeline = Pipeline(
             [("tokenizer", DocTokenizerPipe()), ("padder", PadTruncTokensPipe()), ("encoder", TokenEncoderPipe())]

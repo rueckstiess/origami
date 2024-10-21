@@ -1,5 +1,4 @@
 import pathlib
-import warnings
 
 import click
 from click_option_group import optgroup
@@ -13,17 +12,9 @@ from origami.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
 )
-from origami.utils import TopLevelConfig, count_parameters, save_origami_model
+from origami.utils import TopLevelConfig, count_parameters, save_origami_model, make_progress_callback
 
-from .utils import create_projection, load_data, make_progress_callback
-
-# suppress deprecation warning for setting epoch in LR scheduler, likely bug in pytorch
-warnings.filterwarnings(
-    "ignore",
-    category=UserWarning,
-    module="torch.optim.lr_scheduler",
-    message=r".*The epoch parameter in `scheduler\.step\(\)`.*",
-)
+from .utils import create_projection, load_data
 
 
 @click.command()

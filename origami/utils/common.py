@@ -3,14 +3,13 @@ import pickle
 import random
 from collections import OrderedDict
 from enum import Enum
-from typing import Any, Generator, Iterable, Optional, Tuple, Union
-
+from typing import Any, Generator, Iterable, Optional, Tuple, Union, Callable
 import numpy as np
 import torch
 from omegaconf import OmegaConf
 
 from origami.utils.config import TopLevelConfig
-
+from .guild import print_guild_scalars
 
 class Symbol(Enum):
     PAD = 0
@@ -240,3 +239,43 @@ def load_origami_model(path: str):
     model_dict["config"] = OmegaConf.merge(tlc, model_dict["config"])
 
     return model_dict
+
+
+def make_progress_callback(
+    train_config: "TrainConfig",
+    train_dataset: Optional["DFDataset"] = None,
+    test_dataset: Optional["DFDataset"] = None,
+    predictor: Optional["Predictor"] = None,
+) -> Callable:
+    predict_accuracy = hasattr(predictor, "accuracy")
+
+    def progress_callback(model):
+        
+        if model.batch_num % train_config.print_every == 0:
+            scalars = dict(
+                step=f"{int(model.batch_num / train_config.print_every)}",
+                epoch=model.epoch_num,
+                batch_num=model.batch_num,
+                batch_dt=f"{model.batch_dt*1000:.2f}",
+                batch_loss=f"{model.loss:.4f}",
+                lr=f"{model.learning_rate:.2e}",
+            )
+            if model.batch_num % train_config.eval_every == 0:
+                if train_dataset and train_config.sample_train > 0 and predict_accuracy:
+                    # evaluate on a sample of the training data
+                    scalars.update(
+                        train_acc=f"{predictor.accuracy(train_dataset.sample(n=train_config.sample_train)):.4f}",
+                    )
+                if test_dataset and train_config.sample_val > 0:
+                    # evaluate on a sample of the test data
+                    scalars.update(
+                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_val)):.4f}",
+                    )
+                    if predict_accuracy:
+                        scalars.update(
+                            test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_val)):.4f}",
+                        )
+
+            print_guild_scalars(**scalars)
+
+    return progress_callback

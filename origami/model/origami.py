@@ -10,13 +10,21 @@ from torch.utils.data.dataloader import DataLoader, default_collate
 
 from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset
-from origami.utils import PositionEncodingMethod, auto_device, torch_isin
-from origami.utils.config import ModelConfig, TrainConfig
+from origami.utils import auto_device, torch_isin
+from origami.utils.config import ModelConfig, TrainConfig, PositionEncodingMethod
 
 from .positions import (
     IntegerPositionEncoding,
-    NoPositionEncoding,
-    SharedDocumentPositionEncoding,
+    SharedKeyValuePositionEncoding,
+)
+
+# suppress deprecation warning for setting epoch in LR scheduler, likely bug in pytorch
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="torch.optim.lr_scheduler",
+    message=r".*The epoch parameter in `scheduler\.step\(\)`.*",
 )
 
 
@@ -68,12 +76,12 @@ class ORIGAMI(nn.Module):
                     fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
                 )
             case PositionEncodingMethod.KEY_VALUE:
-                self.pos_encoding = SharedDocumentPositionEncoding(
+                self.pos_encoding = SharedKeyValuePositionEncoding(
                     self.token_embed,
                     fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
                 )
             case PositionEncodingMethod.NONE:
-                self.pos_encoding = NoPositionEncoding()
+                self.pos_encoding = None
             case _:
                 raise ValueError(f"unknown position encoding {self.model_config.position_encoding}")
 
@@ -263,7 +271,7 @@ class ORIGAMI(nn.Module):
 
                 x = self.pos_encoding(tok_emb, stacks)
             case PositionEncodingMethod.NONE:
-                x = self.pos_encoding(tok_emb)  # noop with pos_embed = NoPositionEncoding
+                x = tok_emb
             case _:
                 raise ValueError(f"unknown position encoding {self.model_config.position_encoding}")
 

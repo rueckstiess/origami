@@ -12,22 +12,12 @@ from origami.preprocessing import (
 )
 from origami.model.positions import (
     BasePositionEncoding,
-    DocumentPositionEncoding,
+    KeyValuePositionEncoding,
     IntegerPositionEncoding,
-    NoPositionEncoding,
 )
 from origami.utils.common import ArrayStart, FieldToken, Symbol
 from origami.model.vpda import ObjectVPDA
 
-
-class TestNoPositionEncoding(unittest.TestCase):
-    def test_forward(self):
-        tok_emb = torch.rand((4, 8, 16))
-
-        pos_enc = NoPositionEncoding()
-        x = pos_enc(tok_emb)
-
-        self.assertTrue(torch.equal(tok_emb, x))
 
 
 class TestBasePositionEncoding(unittest.TestCase):
@@ -87,7 +77,7 @@ class TestIntegerPositionEncoding(unittest.TestCase):
         self.assertEqual(x.shape, tok_emb.shape)
 
 
-class TestDocumentPositionEncoding(unittest.TestCase):
+class TestKeyValuePositionEncoding(unittest.TestCase):
     def test_forward_sum_subdoc(self):
         docs = [
             {"foo": {"bar": 1}, "baz": 2},
@@ -109,7 +99,7 @@ class TestDocumentPositionEncoding(unittest.TestCase):
         schema = pipeline["schema"].schema
         encoder = pipeline["encoder"].encoder
 
-        pos_enc = DocumentPositionEncoding(encoder.vocab_size, 16, fuse_with_mlp=False)
+        pos_enc = KeyValuePositionEncoding(encoder.vocab_size, 16, fuse_with_mlp=False)
 
         # encode the document
 
@@ -172,7 +162,7 @@ class TestDocumentPositionEncoding(unittest.TestCase):
         schema = pipeline["schema"].schema
         encoder = pipeline["encoder"].encoder
 
-        pos_enc = DocumentPositionEncoding(encoder.vocab_size, 16, fuse_with_mlp=False)
+        pos_enc = KeyValuePositionEncoding(encoder.vocab_size, 16, fuse_with_mlp=False)
 
         vpda = ObjectVPDA(encoder, schema)
         vpda.accepts(tokens)

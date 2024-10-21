@@ -63,7 +63,7 @@ class ModelConfig(BaseConfig):
     # whether or not to mask field tokens in loss calculation
     mask_field_token_losses: bool = False
 
-    # whether or not to use guardrails (requires a DocumentVPDA to be passed into model)
+    # whether or not to use guardrails (requires a ObjectVPDA to be passed into model)
     guardrails: bool = True
 
     @staticmethod

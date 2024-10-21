@@ -2,12 +2,6 @@ import torch
 from torch import nn
 
 
-class NoPositionEncoding(nn.Module):
-    """A position encoding that does nothing, just returns the token embeddings as is."""
-
-    def forward(self, tok_emb: torch.Tensor) -> torch.Tensor:
-        return tok_emb
-
 
 class BasePositionEncoding(nn.Module):
     """Base class for Integer and Document position encodings. It allows for summation
@@ -62,9 +56,9 @@ class IntegerPositionEncoding(BasePositionEncoding):
         return tok_emb + pos_emb
 
 
-class DocumentPositionEncoding(BasePositionEncoding):
+class KeyValuePositionEncoding(BasePositionEncoding):
     """Position encoding based on PDA stacks. Each position is represented by a stack of
-    symbols which we get from the DocumentVPDA class. The symbols are embedded and summed up
+    symbols which we get from the ObjectVPDA class. The symbols are embedded and summed up
     which forms the position embedding. This can be summed with the token embeddings or
     fused via MLP (fuse_with_mlp=True)."""
 
@@ -99,8 +93,8 @@ class DocumentPositionEncoding(BasePositionEncoding):
         return tok_emb + pos_emb
 
 
-class SharedDocumentPositionEncoding(DocumentPositionEncoding):
-    """This is the same as DocumentPositionEncoding but it shares the embedding layer with
+class SharedKeyValuePositionEncoding(KeyValuePositionEncoding):
+    """This is the same as KeyValuePositionEncoding but it shares the embedding layer with
     the embedding we already use for all other tokens."""
 
     def __init__(self, embedding: nn.Embedding, fuse_with_mlp=False, **kwargs):
