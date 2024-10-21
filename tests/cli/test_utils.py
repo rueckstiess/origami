@@ -1,11 +1,10 @@
 import unittest
 from typing import List, Dict
 
-from storm_ml.cli.utils import filter_data, create_projection
+from origami.cli.utils import filter_data, create_projection
 
 
 class TestCreateProjection(unittest.TestCase):
-
     def test_include_fields(self):
         result = create_projection(include_fields="name,age,city")
         expected = {"name": 1, "age": 1, "city": 1}
@@ -38,33 +37,24 @@ class TestCreateProjection(unittest.TestCase):
         self.assertEqual(result, expected)
 
 
-
 class TestFilterData(unittest.TestCase):
     def setUp(self):
         self.data = [
             {"name": "John", "age": 30, "city": "New York"},
             {"name": "Alice", "age": 25, "city": "London"},
-            {"name": "Bob", "age": 35, "city": "Paris"}
+            {"name": "Bob", "age": 35, "city": "Paris"},
         ]
 
     def test_keep_fields(self):
         projection = {"name": 1, "age": 1}
         result = filter_data(self.data, projection)
-        expected = [
-            {"name": "John", "age": 30},
-            {"name": "Alice", "age": 25},
-            {"name": "Bob", "age": 35}
-        ]
+        expected = [{"name": "John", "age": 30}, {"name": "Alice", "age": 25}, {"name": "Bob", "age": 35}]
         self.assertEqual(result, expected)
 
     def test_remove_fields(self):
         projection = {"city": 0}
         result = filter_data(self.data, projection)
-        expected = [
-            {"name": "John", "age": 30},
-            {"name": "Alice", "age": 25},
-            {"name": "Bob", "age": 35}
-        ]
+        expected = [{"name": "John", "age": 30}, {"name": "Alice", "age": 25}, {"name": "Bob", "age": 35}]
         self.assertEqual(result, expected)
 
     def test_empty_projection(self):
@@ -81,11 +71,7 @@ class TestFilterData(unittest.TestCase):
     def test_non_existent_field(self):
         projection = {"name": 1, "non_existent": 1}
         result = filter_data(self.data, projection)
-        expected = [
-            {"name": "John"},
-            {"name": "Alice"},
-            {"name": "Bob"}
-        ]
+        expected = [{"name": "John"}, {"name": "Alice"}, {"name": "Bob"}]
         self.assertEqual(result, expected)
 
     def test_invalid_projection_mixed_values(self):
@@ -108,5 +94,6 @@ class TestFilterData(unittest.TestCase):
         result = filter_data(self.data, projection)
         self.assertEqual(result, self.data)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

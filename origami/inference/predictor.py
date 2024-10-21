@@ -3,9 +3,9 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 
-from storm_ml.model.gpt_torch import GPT
-from storm_ml.preprocessing import DFDataset, StreamEncoder, target_collate_fn
-from storm_ml.utils import FieldToken
+from origami.model.gpt_torch import GPT
+from origami.preprocessing import DFDataset, StreamEncoder, target_collate_fn
+from origami.utils import FieldToken
 
 from .batch_sampler import TargetTokenBatchSampler
 from .metrics import Metrics

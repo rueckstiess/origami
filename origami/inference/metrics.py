@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data.dataloader import DataLoader
 
-from storm_ml.model.gpt_torch import GPT
-from storm_ml.preprocessing import DFDataset
+from origami.model.gpt_torch import GPT
+from origami.preprocessing import DFDataset
 
 
 class Metrics:

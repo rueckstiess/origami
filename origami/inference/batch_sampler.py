@@ -5,7 +5,7 @@ from typing import Iterator
 import torch
 from torch.utils.data import Sampler
 
-from storm_ml.preprocessing import DFDataset
+from origami.preprocessing import DFDataset
 
 
 class TargetTokenBatchSampler(Sampler):

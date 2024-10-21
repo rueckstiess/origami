@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from mdbrtools.schema import Schema
 
-from storm_ml.utils.common import Symbol
+from origami.utils.common import Symbol
 
 INVALID = -1
 NOOP = 0
@@ -399,8 +399,8 @@ class VPDA:
         pd.reset_option("display.expand_frame_repr")
 
 
-from storm_ml.preprocessing import StreamEncoder
-from storm_ml.utils.common import ArrayStart, FieldToken
+from origami.preprocessing import StreamEncoder
+from origami.utils.common import ArrayStart, FieldToken
 
 
 class DocumentVPDA(VPDA):

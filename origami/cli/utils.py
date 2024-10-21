@@ -6,10 +6,10 @@ import click
 import pandas as pd
 from omegaconf import OmegaConf
 
-from storm_ml.inference import Predictor
-from storm_ml.preprocessing import DFDataset, docs_to_df, load_df_from_mongodb
-from storm_ml.utils import DataConfig, TrainConfig
-from storm_ml.utils.guild import print_guild_scalars
+from origami.inference import Predictor
+from origami.preprocessing import DFDataset, docs_to_df, load_df_from_mongodb
+from origami.utils import DataConfig, TrainConfig
+from origami.utils.guild import print_guild_scalars
 
 
 def create_projection(include_fields: Optional[str] = None, exclude_fields: Optional[str] = None) -> dict:

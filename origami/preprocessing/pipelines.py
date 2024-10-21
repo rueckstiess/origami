@@ -2,7 +2,7 @@ from typing import Optional
 
 from sklearn.pipeline import Pipeline
 
-from storm_ml.utils.config import NumericMethod, PipelineConfig, SequenceOrderMethod
+from origami.utils.config import NumericMethod, PipelineConfig, SequenceOrderMethod
 
 from .pipes import (
     DocPermuterPipe,

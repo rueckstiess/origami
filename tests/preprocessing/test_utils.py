@@ -3,8 +3,8 @@ import unittest
 import torch
 from pandas import DataFrame
 
-from storm_ml.preprocessing.utils import detokenize, docs_to_df, target_collate_fn, tokenize
-from storm_ml.utils.common import ArrayStart, FieldToken, Symbol
+from origami.preprocessing.utils import detokenize, docs_to_df, target_collate_fn, tokenize
+from origami.utils.common import ArrayStart, FieldToken, Symbol
 
 
 class TestDataUtils(unittest.TestCase):

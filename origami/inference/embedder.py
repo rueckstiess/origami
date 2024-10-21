@@ -3,9 +3,9 @@ from typing import Optional
 import torch
 from torch.utils.data.dataloader import DataLoader
 
-from storm_ml.model.gpt_torch import GPT
-from storm_ml.preprocessing import DFDataset, StreamEncoder
-from storm_ml.utils import FieldToken, Symbol
+from origami.model.gpt_torch import GPT
+from origami.preprocessing import DFDataset, StreamEncoder
+from origami.utils import FieldToken, Symbol
 
 
 class Embedder:

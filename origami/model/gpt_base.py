@@ -7,8 +7,8 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import LinearLR
 from torch.utils.data.dataloader import DataLoader, default_collate
 
-from storm_ml.preprocessing import DFDataset
-from storm_ml.utils import auto_device
+from origami.preprocessing import DFDataset
+from origami.utils import auto_device
 
 from .vpda import DocumentVPDA
 

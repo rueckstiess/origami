@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from storm_ml.preprocessing.encoder import StreamEncoder
-from storm_ml.utils.common import ArrayStart, Symbol
+from origami.preprocessing.encoder import StreamEncoder
+from origami.utils.common import ArrayStart, Symbol
 
 
 class TestEncoder(unittest.TestCase):

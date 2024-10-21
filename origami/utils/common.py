@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from storm_ml.utils.config import TopLevelConfig
+from origami.utils.config import TopLevelConfig
 
 
 class Symbol(Enum):
@@ -222,7 +222,7 @@ def count_parameters(m: torch.nn.Module, only_trainable: bool = False):
     return sum(p.numel() for p in unique)
 
 
-def save_storm_model(model: torch.nn.Module, pipelines: dict, config: OmegaConf, path: str):
+def save_origami_model(model: torch.nn.Module, pipelines: dict, config: OmegaConf, path: str):
     model_dict = {
         "state_dict": model.state_dict(),
         "config": OmegaConf.to_container(config, enum_to_str=True),
@@ -232,7 +232,7 @@ def save_storm_model(model: torch.nn.Module, pipelines: dict, config: OmegaConf,
     pickle.dump(model_dict, open(path, "wb"))
 
 
-def load_storm_model(path: str):
+def load_origami_model(path: str):
     model_dict = pickle.load(open(path, "rb"))
 
     # re-validate config

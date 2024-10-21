@@ -6,10 +6,10 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from storm_ml.model.gpt_torch import GPT
-from storm_ml.model.vpda import DocumentVPDA
-from storm_ml.preprocessing import DFDataset, StreamEncoder, detokenize, target_collate_fn
-from storm_ml.utils import FieldToken, Symbol
+from origami.model.gpt_torch import GPT
+from origami.model.vpda import DocumentVPDA
+from origami.preprocessing import DFDataset, StreamEncoder, detokenize, target_collate_fn
+from origami.utils import FieldToken, Symbol
 
 from .batch_sampler import TargetTokenBatchSampler
 

@@ -4,8 +4,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from storm_ml.model.vpda import DocumentVPDA
-from storm_ml.utils import PositionEncodingMethod, count_parameters, torch_isin
+from origami.model.vpda import DocumentVPDA
+from origami.utils import PositionEncodingMethod, count_parameters, torch_isin
 
 from .gpt_base import GPTBase
 from .positions import (

@@ -6,9 +6,9 @@ import torch
 from mdbrtools.schema import parse_schema
 from sklearn.pipeline import Pipeline
 
-from storm_ml.preprocessing import DocTokenizerPipe, PadTruncTokensPipe, TokenEncoderPipe
-from storm_ml.utils.common import ArrayStart, FieldToken, Symbol
-from storm_ml.model.vpda import INVALID, NOOP, VPDA, DocumentVPDA
+from origami.preprocessing import DocTokenizerPipe, PadTruncTokensPipe, TokenEncoderPipe
+from origami.utils.common import ArrayStart, FieldToken, Symbol
+from origami.model.vpda import INVALID, NOOP, VPDA, DocumentVPDA
 
 START = 1
 END = 2

@@ -6,14 +6,14 @@ from click_option_group import optgroup
 from omegaconf import OmegaConf
 from sklearn.model_selection import train_test_split
 
-from storm_ml.inference import Metrics, Predictor
-from storm_ml.model import STORM
-from storm_ml.model.vpda import DocumentVPDA
-from storm_ml.preprocessing import (
+from origami.inference import Metrics, Predictor
+from origami.model import ORIGAMI
+from origami.model.vpda import DocumentVPDA
+from origami.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
 )
-from storm_ml.utils import TopLevelConfig, count_parameters, save_storm_model
+from origami.utils import TopLevelConfig, count_parameters, save_origami_model
 
 from .utils import create_projection, load_data, make_progress_callback
 
@@ -32,7 +32,7 @@ warnings.filterwarnings(
     "--model-path",
     "-m",
     type=click.Path(dir_okay=False, path_type=pathlib.Path, resolve_path=True),
-    default="./model.storm",
+    default="./model.origami",
     show_default=True,
     help="path to write trained model",
 )
@@ -118,7 +118,7 @@ warnings.filterwarnings(
 @click.option("--verbose", "-v", is_flag=True, default=True)
 def train(source: str, **kwargs):
     """
-    Train a STORM model.
+    Train an ORIGAMI model.
     """
     config = TopLevelConfig()
 
@@ -181,7 +181,7 @@ def train(source: str, **kwargs):
 
     # create model with PDA
     vpda = DocumentVPDA(encoder, schema)
-    model = STORM(config.model, config.train, vpda=vpda)
+    model = ORIGAMI(config.model, config.train, vpda=vpda)
 
     if kwargs["verbose"]:
         # report number of parameters (note we don't count the decoder parameters in lm_head)
@@ -204,4 +204,4 @@ def train(source: str, **kwargs):
     model.train_model(train_dataset, batches=config.train.n_batches)
 
     # save model with config
-    save_storm_model(model, pipelines=pipelines, config=config, path=kwargs.get("model_path"))
+    save_origami_model(model, pipelines=pipelines, config=config, path=kwargs.get("model_path"))

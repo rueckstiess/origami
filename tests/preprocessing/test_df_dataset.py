@@ -4,7 +4,7 @@ import unittest
 import pandas as pd
 import torch
 
-from storm_ml.preprocessing import DFDataset
+from origami.preprocessing import DFDataset
 
 
 class TestDFDataset(unittest.TestCase):

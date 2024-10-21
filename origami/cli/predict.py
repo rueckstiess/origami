@@ -4,11 +4,11 @@ import pathlib
 import click
 from click_option_group import optgroup
 
-from storm_ml.inference import Predictor
-from storm_ml.model import STORM
-from storm_ml.model.vpda import DocumentVPDA
-from storm_ml.preprocessing import DFDataset, TargetFieldPipe
-from storm_ml.utils import Symbol, load_storm_model
+from origami.inference import Predictor
+from origami.model import ORIGAMI
+from origami.model.vpda import DocumentVPDA
+from origami.preprocessing import DFDataset, TargetFieldPipe
+from origami.utils import Symbol, load_origami_model
 
 from .utils import create_projection, load_data
 
@@ -19,7 +19,7 @@ from .utils import create_projection, load_data
     "--model-path",
     "-m",
     type=click.Path(dir_okay=False, exists=True, path_type=pathlib.Path, resolve_path=True),
-    default="./model.storm",
+    default="./model.origami",
     show_default=True,
     help="path to trained model",
 )
@@ -35,10 +35,10 @@ from .utils import create_projection, load_data
 @optgroup.option("--json", "-j", is_flag=True, default=False, help="output full JSON objects including target field")
 @click.option("--verbose", "-v", is_flag=True, default=True)
 def predict(source, **kwargs):
-    """Predict target fields with a trained STORM model."""
+    """Predict target fields with a trained ORIGAMI model."""
 
     # load model, config and pipelines
-    model_dict = load_storm_model(kwargs.get("model_path"))
+    model_dict = load_origami_model(kwargs.get("model_path"))
     state_dict = model_dict["state_dict"]
     config = model_dict["config"]
     pipelines = model_dict["pipelines"]
@@ -47,7 +47,7 @@ def predict(source, **kwargs):
 
     # create model
     vpda = DocumentVPDA(encoder, schema)
-    model = STORM(config.model, config.train, vpda=vpda)
+    model = ORIGAMI(config.model, config.train, vpda=vpda)
     model.load_state_dict(state_dict)
 
     # data configs
