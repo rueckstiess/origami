@@ -1,0 +1,266 @@
+- config: base
+
+  operations:
+    data:
+      description: "prepare data for {{model}} model"
+      main: "run_{{model}} data"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags:
+        seed: 1234
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: none
+        dataset:
+          type: string
+          required: true
+
+    train:
+      description: "train a {{model}} model on the training data"
+      main: "run_{{model}} train"
+      requires:
+        - env-files
+        - data-files
+      flags-dest: config:flags.yml
+      flags:
+        seed: 1234
+        fold: 0
+        dataset:
+          type: string
+          required: true
+
+    eval:
+      description: "evaluate a {{model}} model on the test data"
+      main: "run_{{model}} eval"
+      requires:
+        - env-files
+        - data-files
+        - model-files
+      flags-dest: config:flags.yml
+      flags:
+        seed: 1234
+        fold: 0
+        dataset:
+          type: string
+          required: true
+
+    all:
+      description: "load data, train {{model}} and evaluate in one run"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags:
+        seed: 1234
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: none
+        repeat: no
+        dataset:
+          type: string
+          required: true
+
+  operation-defaults:
+    # matches the guild_output_scalars() helper function
+    output-scalars:
+      - step: '\|  step: (\step)'
+      - '\|  (\key): (\value)'
+
+  resources:
+    data-files:
+      - operation: "{{model}}:data"
+        select:
+          - '.*\.gz'
+          - splits.json
+        target-type: link
+    model-files:
+      - operation: "{{model}}:train"
+        select:
+          - '.*\.pt'
+          - '.*\.joblib'
+        target-type: link
+    env-files:
+      - file: .env.local
+      - file: .env.remote
+
+# - model: baseline
+#   extends: base
+#   description: scikit-learn baseline classifiers
+#   params:
+#     model: baseline
+#   operations:
+#     train:
+#       flags:
+#         classifier:
+#           type: string
+#           choices: [LogisticRegression, RandomForestClassifier, SVC]
+#           required: true
+#     all:
+#       flags:
+#         classifier:
+#           type: string
+#           choices: [LogisticRegression, RandomForestClassifier, SVC]
+#           required: true
+
+
+- model: origami
+  extends: base
+  description: ORiGAMi classifier
+  params:
+    model: origami
+  operation-defaults:
+    flags-import: all
+    flags:
+      pipeline.sequence_order: SHUFFLED
+      model.position_encoding: DOCUMENT
+
+  operations:
+    hyperopt:
+      description: "hyper-parameter tuning of {{model}}"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags-import: all
+      flags:
+        seed: 1234
+        dataset:
+          type: string
+          required: true
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: 5-fold
+
+        train.print_every: 10
+        train.eval_every: 100
+        train.sample_train: 100
+        train.sample_test: 100
+        train.test_split: 0.2
+        train.shuffle_split: yes
+
+        # hyperparameter search space
+        train.n_batches: [5000, 10000, 20000, 30000]
+        train.batch_size: [10, 50, 100]
+        train.learning_rate: [1e-3, 5e-4, 1e-4]
+        model.n_embd: [32, 48, 64, 80]
+        model.n_head: [2, 4, 8]
+        model.n_layer: [2, 3, 4, 5, 6]
+        pipeline.upscale: [1, 4, 10, 40, 100, 400, 1000]
+
+
+- model: logreg
+  extends: base
+  description: logistic regression
+  params:
+    model: logreg
+  operations:
+    hyperopt:
+      description: "hyper-parameter tuning of {{model}}"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags-import: all
+      flags:
+        seed: 1234
+        dataset:
+          type: string
+          required: true
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: 5-fold
+
+        # hyperparameter search space
+        penalty: ["l1", "l2", "none"]
+        max_iter: [50, 100, 300, 500, 1000, 5000]
+        fit_intercept: [yes, no]
+        C: [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3, 1e4, 1e5]
+
+- model: rf
+  extends: base
+  description: random forest classifier
+  params:
+    model: rf
+  operations:
+    hyperopt:
+      description: "hyper-parameter tuning of {{model}}"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags-import: all
+      flags:
+        seed: 1234
+        dataset:
+          type: string
+          required: true
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: 5-fold
+
+        # hyperparameter search space
+        n_estimators: [20, 50, 100, 150, 200]
+        max_features: ["log2", "sqrt", "none"]
+        max_depth: [0, 1, 5, 10, 20, 30, 45]
+        min_samples_split: [5, 10]
+
+- model: xgboost
+  extends: base
+  description: xgboost classifier
+  params:
+    model: xgboost
+  operations:
+    hyperopt:
+      description: "hyper-parameter tuning of {{model}}"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags-import: all
+      flags:
+        seed: 1234
+        dataset:
+          type: string
+          required: true
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: 5-fold
+
+        # hyperparameter search space
+        learning_rate: [1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0]
+        max_depth: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        subsample: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        colsample_bytree: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        colsample_bylevel: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        min_child_weight: [1e-16, 1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2, 1e3, 1e4, 1e5]
+        reg_alpha: [1e-16, 1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2]
+        reg_lambda: [1e-16, 1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2]
+        gamma: [1e-16, 1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2]
+        n_estimators: [100, 200, 500, 1000, 1500, 2000, 3000, 4000, 5000]
+
+- model: lightgbm
+  extends: base
+  description: lightgbm classifier
+  params:
+    model: lightgbm
+  operations:
+    hyperopt:
+      description: "hyper-parameter tuning of {{model}}"
+      main: "run_{{model}} all"
+      requires:
+        - env-files
+      flags-dest: config:flags.yml
+      flags-import: all
+      flags:
+        seed: 1234
+        dataset:
+          type: string
+          required: true
+        # cross_val can be "none", "catalog", "5-fold"
+        cross_val: 5-fold
+
+        # hyperparameter search space
+        num_leaves: [5, 10, 20, 30, 40, 50]
+        max_depth: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        learning_rate: [1e-3, 1e-2, 1e-1, 1.0]
+        n_estimators: [50, 100, 200, 500, 1000, 1500, 2000]
+        min_child_weight: [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1e1, 1e2, 1e3, 1e4]
+        subsample: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+        colsample_bytree: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+        reg_alpha: [0, 1e-1, 1, 2, 5, 7, 10, 50, 100]
+        reg_lambda: [0, 1e-1, 1, 2, 5, 7, 10, 50, 100]

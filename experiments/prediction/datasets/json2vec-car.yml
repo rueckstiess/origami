@@ -1,0 +1,7 @@
+data:
+  db: json2vec
+  coll: car
+  projection:
+    _id: 0
+  limit: 0
+  target_field: target

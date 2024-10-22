@@ -1,7 +1,7 @@
 import pickle
 import random
 from collections import OrderedDict, defaultdict
-from copy import copy
+from copy import copy, deepcopy
 from typing import Optional
 
 import numpy as np
@@ -133,7 +133,7 @@ class TargetFieldPipe(BasePipe):
         if "docs" not in X.columns:
             raise ColumnMissingException("TargetFieldPipe requires column 'docs' in the DataFrame.")
 
-        X = X.copy()
+        X = deepcopy_df(X)
         docs, targets = zip(*X["docs"].map(self._move_target))
         X["docs"] = docs
         X["target"] = targets

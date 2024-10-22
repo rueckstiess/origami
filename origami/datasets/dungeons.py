@@ -23,7 +23,7 @@ def generate_data(
     num_colors: int = 3,
     num_treasures: int = 5,
     with_monsters: bool = False,
-    shuffle_doors: bool = False,
+    shuffle_rooms: bool = False,
 ):
     """
     Generates a dungeon-themed synthetic dataset for supervised learning purposes.
@@ -107,7 +107,7 @@ def generate_data(
         treasure = corridor[door][key_color + "_key"]
 
         # shuffle the doors optionally
-        if shuffle_doors:
+        if shuffle_rooms:
             random.shuffle(corridor)
 
         return {"door": door, "key_color": key_color, "corridor": corridor, "treasure": treasure}

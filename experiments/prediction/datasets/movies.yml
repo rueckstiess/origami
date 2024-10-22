@@ -1,0 +1,24 @@
+data:
+  db: sample_mflix
+  coll: movies
+  projection:
+    _id: 0
+    genres: 1
+    languages: 1
+    awards.wins: 1
+    awards.nominations: 1
+    year: 1
+    imdb.rating: 1
+    countries: 1
+    type: 1
+    tomatoes.viewer.rating: 1
+    tomatoes.viewer.numReviews: 1
+    tomatoes.viewer.meter: 1
+    tomatoes.critic.rating: 1
+    tomatoes.critic.numReviews: 1
+    tomatoes.critic.meter: 1
+    tomatoes.rotten: 1
+    num_mflix_comments: 1
+    rated: 1
+  limit: 0
+  target_field: rated

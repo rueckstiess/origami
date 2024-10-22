@@ -5,7 +5,7 @@ from tqdm.auto import tqdm
 
 from origami.model import ORIGAMI
 from origami.preprocessing import DFDataset, StreamEncoder, target_collate_fn
-from origami.utils import FieldToken
+from origami.utils import FieldToken, Symbol
 
 from .batch_sampler import TargetTokenBatchSampler
 from .metrics import Metrics
@@ -18,6 +18,25 @@ class Predictor(Metrics):
         self.batch_size = max_batch_size
         self.target_field = target_field
         self.encoder = encoder
+
+
+    def print_predictions(self, y_true, y_pred):
+        print(f"prediction    -->   target")
+        for i, (pred, target) in enumerate(zip(y_pred, y_true)):
+            pred_dec = self.encoder.decode(pred)
+            target_dec = self.encoder.decode(target)
+
+            line_str = f"{i: 5} {pred_dec}   -->   {target_dec}"
+            if target == Symbol.UNKNOWN:
+                print(line_str)
+            else:
+                if pred == target:
+                    # replace with green version
+                    print(f"\033[32m{line_str}\033[0m")
+                else:
+                    # replace with red version
+                    print(f"\033[31m{line_str}\033[0m")
+
 
     @torch.no_grad()
     def predict(
@@ -89,7 +108,7 @@ class Predictor(Metrics):
 
         return self.encoder.decode(predicted) if decode else predicted
 
-    def accuracy(self, dataset: DFDataset, show_progress: bool = False) -> float:
+    def accuracy(self, dataset: DFDataset, show_progress: bool = False, print_predictions: bool = False) -> float:
         """
         Calculates the accuracy of the model's predictions on the given dataset.
 
@@ -103,6 +122,9 @@ class Predictor(Metrics):
 
         y_true = self.encoder.encode(dataset.df["target"].to_numpy())
         y_pred = self.predict(dataset, decode=False, show_progress=show_progress).cpu().numpy()
+
+        if print_predictions:
+            self.print_predictions(y_true, y_pred)
 
         return accuracy_score(y_true, y_pred)
 
@@ -122,3 +144,5 @@ class Predictor(Metrics):
         y_true = self.encoder.encode(dataset.df["target"].to_numpy())
 
         return roc_auc_score(y_true, y_pred)
+
+

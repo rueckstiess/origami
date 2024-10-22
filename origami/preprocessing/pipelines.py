@@ -26,7 +26,7 @@ def build_prediction_pipelines(
             bins=pipeline_config.n_bins, threshold=pipeline_config.n_bins, strategy="kmeans"
         ),
         "schema": SchemaParserPipe(),
-        "tokenizer": DocTokenizerPipe(),
+        "tokenizer": DocTokenizerPipe(path_in_field_tokens=pipeline_config.path_in_field_tokens),
         "padding": PadTruncTokensPipe(length="max"),
         "encoder": TokenEncoderPipe(max_tokens=pipeline_config.max_vocab_size),
     }

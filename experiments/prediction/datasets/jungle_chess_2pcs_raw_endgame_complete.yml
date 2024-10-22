@@ -1,0 +1,7 @@
+data:
+  db: openml
+  coll: 41027-jungle_chess_2pcs_raw_endgame_complete
+  projection:
+    _id: 0
+  limit: 0
+  target_field: target

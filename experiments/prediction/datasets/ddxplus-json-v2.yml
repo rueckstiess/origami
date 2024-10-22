@@ -1,0 +1,10 @@
+data:
+  db: ddxplus
+  coll: train-semistructured
+  projection:
+    _id: 0
+    DIFFERENTIAL_DIAGNOSIS: 0
+    EVIDENCES: 0
+    EVIDENCES_JSON_V1: 0
+  limit: 0
+  target_field: PATHOLOGY

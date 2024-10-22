@@ -1,0 +1,7 @@
+data:
+  db: openml
+  coll: 40670-dna
+  projection:
+    _id: 0
+  limit: 0
+  target_field: target

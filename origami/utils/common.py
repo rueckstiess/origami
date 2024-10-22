@@ -79,25 +79,6 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-# def setup_logging(config):
-#     """monotonous bookkeeping"""
-#     work_dir = config.system.work_dir
-#     # create the work directory if it doesn't already exist
-#     os.makedirs(work_dir, exist_ok=True)
-#     # log the args (if any)
-#     with open(os.path.join(work_dir, "args.txt"), "w") as f:
-#         f.write(" ".join(sys.argv))
-#     # log the config itself
-#     with open(os.path.join(work_dir, "config.json"), "w") as f:
-#         f.write(json.dumps(config.to_dict(), indent=4))
-
-
-# def permute_document(doc):
-#     """shuffle the keys and values in a dictionary"""
-#     items = list(doc.items())
-#     random.shuffle(items)
-#     return OrderedDict(items)
-
 
 def torch_isin(input: torch.Tensor, allowed: list) -> torch.Tensor:
     """returns a boolean mask of the same shape as input, where True indicates that
@@ -242,10 +223,10 @@ def load_origami_model(path: str):
 
 
 def make_progress_callback(
-    train_config: "TrainConfig",
-    train_dataset: Optional["DFDataset"] = None,
-    test_dataset: Optional["DFDataset"] = None,
-    predictor: Optional["Predictor"] = None,
+    train_config: "TrainConfig", # type: ignore
+    train_dataset: Optional["DFDataset"] = None, # type: ignore
+    test_dataset: Optional["DFDataset"] = None, # type: ignore
+    predictor: Optional["Predictor"] = None, # type: ignore
 ) -> Callable:
     predict_accuracy = hasattr(predictor, "accuracy")
 
@@ -266,14 +247,14 @@ def make_progress_callback(
                     scalars.update(
                         train_acc=f"{predictor.accuracy(train_dataset.sample(n=train_config.sample_train)):.4f}",
                     )
-                if test_dataset and train_config.sample_val > 0:
+                if test_dataset and train_config.sample_test > 0:
                     # evaluate on a sample of the test data
                     scalars.update(
-                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_val)):.4f}",
+                        test_loss=f"{predictor.ce_loss(test_dataset.sample(n=train_config.sample_test)):.4f}",
                     )
                     if predict_accuracy:
                         scalars.update(
-                            test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_val)):.4f}",
+                            test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_test)):.4f}",
                         )
 
             print_guild_scalars(**scalars)

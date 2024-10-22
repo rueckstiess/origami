@@ -5,11 +5,6 @@ from typing import Optional
 from omegaconf import MISSING, OmegaConf
 
 
-class EstimationMethod(Enum):
-    SAMPLING = 1
-    FIELD_PROMPTING = 2
-
-
 class SequenceOrderMethod(Enum):
     ORDERED = 1
     SHUFFLED = 2
@@ -37,7 +32,7 @@ class BaseConfig:
 
 @dataclass(kw_only=True)
 class ModelConfig(BaseConfig):
-    """Model config for creating a GPT model."""
+    """Model config for creating an ORiGAMi model."""
 
     # architecture parameters
     n_layer: int = MISSING
@@ -54,8 +49,8 @@ class ModelConfig(BaseConfig):
     # weight tieing between embedding matrix and linear head weights (saves parameters)
     tie_weights: bool = False
 
-    # the default position encoding method to use (NONE, INTEGER, DOCUMENT)
-    position_encoding: PositionEncodingMethod = MISSING
+    # the position encoding method to use (NONE, INTEGER, KEY_VALUE)
+    position_encoding: PositionEncodingMethod = PositionEncodingMethod.KEY_VALUE
 
     # Whether to use an MLP to fuse position and token embeddings or just sum them
     fuse_pos_with_mlp: bool = False
@@ -69,15 +64,15 @@ class ModelConfig(BaseConfig):
     @staticmethod
     def from_preset(size: str, **kwargs) -> "ModelConfig":
         match size:
+            case "xs":
+                return ModelConfig(n_layer=3, n_head=1, n_embd=48, **kwargs)
             case "small":
-                return ModelConfig(n_layer=3, n_head=3, n_embd=48, **kwargs)
-            case "medium":
                 return ModelConfig(n_layer=4, n_head=4, n_embd=128, **kwargs)
-            case "large":
+            case "medium":
                 return ModelConfig(n_layer=6, n_head=6, n_embd=192, **kwargs)
-            case "xl":
+            case "large":
                 return ModelConfig(n_layer=8, n_head=8, n_embd=384, **kwargs)
-            case "xxl":
+            case "xl":
                 return ModelConfig(n_layer=12, n_head=12, n_embd=768, **kwargs)
             case _:
                 raise ValueError(f"Unknown model size: {size}")
@@ -111,7 +106,7 @@ class TrainConfig(BaseConfig):
     print_every: int = 100
     eval_every: int = 1000
     sample_train: int = 100
-    sample_val: int = 100
+    sample_test: int = 100
 
 
 @dataclass(repr=True, kw_only=True)
@@ -124,6 +119,7 @@ class PipelineConfig(BaseConfig):
     n_bins: int = 100
     sequence_order: SequenceOrderMethod = MISSING
     upscale: int = 1
+    path_in_field_tokens: bool = True
 
 
 @dataclass(repr=True, kw_only=True)

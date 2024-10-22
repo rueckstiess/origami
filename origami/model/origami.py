@@ -96,9 +96,6 @@ class ORIGAMI(nn.Module):
         self.head = nn.Linear(self.model_config.n_embd, self.model_config.vocab_size, bias=False)
 
         # "Using the Output Embedding to Improve Language Models" (Press & Wolf 2016)
-        # In the Naru paper, this is called Embedding Reuse. We share the weights of the
-        # embedding layer with the output layer.
-        # https://arxiv.org/abs/1608.05859
         if self.model_config.tie_weights:
             self.head.weight = self.token_embed.weight
 

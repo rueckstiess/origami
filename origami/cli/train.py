@@ -12,7 +12,7 @@ from origami.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
 )
-from origami.utils import TopLevelConfig, count_parameters, save_origami_model, make_progress_callback
+from origami.utils import TopLevelConfig, count_parameters, save_origami_model, make_progress_callback, set_seed
 
 from .utils import create_projection, load_data
 
@@ -27,6 +27,8 @@ from .utils import create_projection, load_data
     show_default=True,
     help="path to write trained model",
 )
+@click.option("--seed", type=int, default=1234, show_default=True, help="random seed")
+@click.option("--verbose", "-v", is_flag=True, default=False)
 @optgroup.group("Source Options")
 @optgroup.option("--source-db", "-d", type=str, help="database name, only used when SOURCE is a MongoDB URI.")
 @optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
@@ -48,7 +50,7 @@ from .utils import create_projection, load_data
     "--num-layers",
     "-L",
     type=int,
-    default=3,
+    default=4,
     show_default=True,
     help="number of transformer layers",
 )
@@ -106,11 +108,12 @@ from .utils import create_projection, load_data
     help="ratio for validation dataset, a value of 0.0 disables validation",
 )
 @optgroup.option("--target-field", "-t", type=str, help="target field name to predict")
-@click.option("--verbose", "-v", is_flag=True, default=True)
 def train(source: str, **kwargs):
     """
     Train an ORIGAMI model.
     """
+    set_seed(kwargs["seed"])
+
     config = TopLevelConfig()
 
     # data configs
@@ -177,9 +180,9 @@ def train(source: str, **kwargs):
     if kwargs["verbose"]:
         # report number of parameters (note we don't count the decoder parameters in lm_head)
         n_params = count_parameters(model)
-        click.option(f"running on device: {model.device}")
-        click.option(f"number of parameters: {n_params/1e6:.2f}M")
-        click.option(f"config:\n {OmegaConf.to_yaml(config)}")
+        click.echo(f"running on device: {model.device}")
+        click.echo(f"number of parameters: {n_params/1e6:.2f}M")
+        click.echo(f"config:\n {OmegaConf.to_yaml(config)}")
 
     # model callback during training, prints training and test metrics
     if config.data.target_field:

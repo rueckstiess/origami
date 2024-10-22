@@ -1,0 +1,8 @@
+data:
+  db: ddxplus
+  coll: train
+  projection:
+    _id: 0
+    DIFFERENTIAL_DIAGNOSIS: 0
+  limit: 1000
+  target_field: PATHOLOGY
