@@ -15,6 +15,7 @@ from origami.utils.config import ModelConfig, TrainConfig, PositionEncodingMetho
 
 from .positions import (
     IntegerPositionEncoding,
+    SineCosinePositionEncoding,
     SharedKeyValuePositionEncoding,
 )
 
@@ -71,6 +72,12 @@ class ORIGAMI(nn.Module):
         match self.model_config.position_encoding:
             case PositionEncodingMethod.INTEGER:
                 self.pos_encoding = IntegerPositionEncoding(
+                    self.model_config.block_size,
+                    self.model_config.n_embd,
+                    fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
+                )
+            case PositionEncodingMethod.SINE_COSINE:
+                self.pos_encoding = SineCosinePositionEncoding(
                     self.model_config.block_size,
                     self.model_config.n_embd,
                     fuse_with_mlp=self.model_config.fuse_pos_with_mlp,
@@ -254,6 +261,8 @@ class ORIGAMI(nn.Module):
         # position embeddings
         match self.model_config.position_encoding:
             case PositionEncodingMethod.INTEGER:
+                x = self.pos_encoding(tok_emb)
+            case PositionEncodingMethod.SINE_COSINE:
                 x = self.pos_encoding(tok_emb)
             case PositionEncodingMethod.KEY_VALUE:
                 # use the VPDA stacks for position encoding

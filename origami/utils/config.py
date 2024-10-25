@@ -18,7 +18,8 @@ class NumericMethod(Enum):
 class PositionEncodingMethod(Enum):
     NONE = 1
     INTEGER = 2
-    KEY_VALUE = 3
+    SINE_COSINE = 3
+    KEY_VALUE = 4
 
 
 class BaseConfig:
