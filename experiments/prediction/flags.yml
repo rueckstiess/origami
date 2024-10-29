@@ -1,8 +1,7 @@
 # uncomment when calling script from debugger
 # seed: 1234
 # dataset: json2vec-car
-
-cross_val: "none"
+cross_val: none
 repeat: no
 
 model:

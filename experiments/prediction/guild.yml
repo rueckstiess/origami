@@ -136,14 +136,17 @@
         train.test_split: 0.2
         train.shuffle_split: yes
 
-        # hyperparameter search space
-        train.n_batches: [5000, 10000, 20000, 30000]
-        train.batch_size: [10, 50, 100]
-        train.learning_rate: [1e-3, 5e-4, 1e-4]
-        model.n_embd: [32, 48, 64, 80]
-        model.n_head: [2, 4, 8]
-        model.n_layer: [2, 3, 4, 5, 6]
-        pipeline.upscale: [1, 4, 10, 40, 100, 400, 1000]
+        # hyperparameter search space (automobile)
+        train.n_batches: 5000
+        train.batch_size: [10, 50]
+        train.learning_rate: [1e-3, 5e-4]
+        model.n_embd: 192
+        model.n_head: 6
+        model.n_layer: [6, 8]
+        pipeline.upscale: 1
+        pipeline.sequence_order: ORDERED
+        model.fuse_pos_with_mlp: [yes, no]
+        model.mask_field_token_losses: [yes, no]
 
 
 - model: logreg

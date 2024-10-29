@@ -12,7 +12,8 @@ from origami.preprocessing import (
     DFDataset,
     build_prediction_pipelines,
 )
-from origami.utils import TopLevelConfig, count_parameters, save_origami_model, make_progress_callback, set_seed
+from origami.utils import TopLevelConfig, count_parameters, make_progress_callback, save_origami_model, set_seed
+from origami.utils.config import SequenceOrderMethod
 
 from .utils import create_projection, load_data
 
@@ -145,6 +146,14 @@ def train(source: str, **kwargs):
     config.pipeline.sequence_order = "SHUFFLED" if kwargs["shuffled"] else "ORDERED"
     config.pipeline.upscale = kwargs["upscaling"]
 
+    if config.pipeline.sequence_order == SequenceOrderMethod.ORDERED and config.pipeline.upscale > 1:
+        click.echo(
+            click.style(
+                f"info: `pipeline.upscale={config.pipeline.upscale}` is ignored when `pipeline.sequence_order` is `ORDERED`.",
+                fg="green",
+            )
+        )
+
     # load data
     df = load_data(source, config.data)
 
@@ -172,6 +181,30 @@ def train(source: str, **kwargs):
     encoder = pipelines["train"]["encoder"].encoder
     config.model.block_size = pipelines["train"]["padding"].length
     config.model.vocab_size = encoder.vocab_size
+
+    # allow schema transitions in the test data if evaluating during training
+    if test_dataset is not None:
+        pipelines["train"]["schema"].fit(test_df)
+
+    # warn about unique and high-cardinality keys in schema
+    total_count = schema.count
+    for path, field in schema.leaf_fields.items():
+        prim_values = schema.get_prim_values(path)
+        ratio = len(prim_values) / total_count
+        if ratio == 1:
+            click.echo(
+                click.style(
+                    f"warning: field `{path}` has only unique values and should be excluded with --exclude-fields",
+                    fg="red",
+                )
+            )
+        elif ratio > 0.2:
+            click.echo(
+                click.style(
+                    f"warning: field `{path}` is high cardinality with {int(ratio*100)}% unique values. Consider excluding it with --exclude-fields",
+                    fg="yellow",
+                )
+            )
 
     # create model with PDA
     vpda = ObjectVPDA(encoder, schema)

@@ -146,7 +146,7 @@ guild run origami:all dataset=json2vec-contraceptive model.n_embd=24 model.n_hea
 #### mushroom dataset
 
 ```
-guild run origami:all dataset=json2vec-contraceptive model.n_embd=64 model.n_head=4 model.n_layer=4 pipeline.sequence_order=SHUFFLED pipeline.upscale=100 train.batch_size=100 train.n_batches=10000 cross_val=5-fold
+guild run origami:all dataset=json2vec-mushroom model.n_embd=64 model.n_head=4 model.n_layer=4 pipeline.sequence_order=SHUFFLED pipeline.upscale=100 train.batch_size=100 train.n_batches=10000 cross_val=5-fold
 ```
 
 #### nursery dataset

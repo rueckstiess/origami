@@ -1,4 +1,5 @@
 import random
+from collections import OrderedDict
 from typing import Tuple
 
 colors = ["red", "blue", "green", "yellow", "purple", "orange", "black", "white", "brown", "gray"]
@@ -24,6 +25,7 @@ def generate_data(
     num_treasures: int = 5,
     with_monsters: bool = False,
     shuffle_rooms: bool = False,
+    shuffle_keys: bool = False,
 ):
     """
     Generates a dungeon-themed synthetic dataset for supervised learning purposes.
@@ -70,6 +72,10 @@ def generate_data(
         The number of treasures that each puzzle instance should have. Defaults to 5.
     with_monsters : bool, optional
         Whether to include 0-2 monsters in the puzzle instances. Defaults to False.
+    shuffle_rooms : bool, optional
+        Whether to shuffle the corridors array (makes it harder).
+    shuffle_keys : bool, optional
+        Whether to shuffle the keys in each room (makes it harder).
 
     Returns
     -------
@@ -84,6 +90,12 @@ def generate_data(
         for i in range(num_doors):
             # create random booleans for each color key
             keys = {f"{c}_key": random.choice(treasures[:num_treasures]) for c in colors[:num_colors]}
+
+            # optionally shuffle key order in dictionary
+            if shuffle_keys:
+                key_items = list(keys.items())
+                random.shuffle(key_items)
+                keys = OrderedDict(key_items)
 
             # optionally add monsters
             if with_monsters:

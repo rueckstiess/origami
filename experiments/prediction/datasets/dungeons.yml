@@ -1,6 +1,6 @@
 data:
   db: dungeons
-  coll: dungeon_10k_5_10_3_5_ms
+  coll: dungeon_10k_4_8_3_5_mkr
   projection:
     _id: 0
   limit: 0

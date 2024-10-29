@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 from dotenv import dotenv_values
 from guild.commands import runs_impl
+import guild.ipy as gipy
 from guild.ipy import RunsDataFrame, RunsSeries, _runs_cmd_args
 from guild.run import Run
 from matplotlib import pyplot as plt
@@ -76,7 +77,7 @@ def plot_scalar_history(
         if plot_means:
             # plot individual runs with thin line, no labels (recursively)
             kw = kwargs.copy()
-            kw.update({"linewidth": 0.5, "alpha": 0.3, "label": None})
+            kw.update({"linewidth": 0.5, "alpha": 0.4, "label": None})
             plot_scalar_history(runs, scalar, fig=fig, ax=ax, **kw)
 
             # calculate mean of runs
@@ -121,14 +122,21 @@ def load_secrets():
     return secrets
 
 
-def get_runs(**kw) -> list[Run]:
+def get_runs_by_ids(run_ids: list[str]):
+    """get access to runs based on run IDs. Expensive as we have to filter client-side."""
+    runs = gipy.runs()
+    runs = runs[runs["run"].apply(lambda r: str(r) in run_ids)]
+    return runs
+
+
+def _get_run_objects(**kw) -> list[Run]:
     """get access to runs objects based on filters."""
     return runs_impl.filtered_runs(_runs_cmd_args(**kw))
 
 
-def get_run(**kw) -> Run:
+def _get_run_object(**kw) -> Run:
     """get access to the first matching run object based on filters."""
-    runs = get_runs(**kw)
+    runs = _get_run_objects(**kw)
     assert len(runs) > 0, "No matching runs found."
     return runs[0]
 
@@ -137,7 +145,7 @@ def get_run_path(**kw) -> Path:
     """returns the path of a run given various filters. If multiple runs match, it returns
     the path of the latest run."""
 
-    run = get_run(**kw)
+    run = _get_run_object(**kw)
     return Path(run.dir)
 
 
@@ -145,5 +153,5 @@ def get_run_flags(**kw) -> SimpleNamespace:
     """returns the path of a run given various filters. If multiple runs match, it returns
     the path of the latest run."""
 
-    run = get_run(**kw)
+    run = _get_run_object(**kw)
     return SimpleNamespace(**run["flags"])

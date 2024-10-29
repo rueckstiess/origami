@@ -49,21 +49,19 @@ class ORIGAMIRunner(BaseRunner):
         train_df, test_df = split
 
         # create pipelines according to config
-        pipelines = build_prediction_pipelines(
-            self.config.pipeline, target_field=self.config.data.target_field
-        )
+        pipelines = build_prediction_pipelines(self.config.pipeline, target_field=self.config.data.target_field)
 
         # we fit first, because train_df can get modified in transform
         # pipelines['train'].fit(train_df)
 
         # the train_eval dataset is the train dataset but run through the test pipeline, i.e. not shuffled/upscaled
         # to get a proper "train" accuracy, we use train_eval instead of train
-        train_proc_df = pipelines['train'].fit_transform(train_df)
-        test_proc_df = pipelines['test'].transform(test_df)
-        train_eval_proc_df = pipelines['test'].transform(train_df)
+        train_proc_df = pipelines["train"].fit_transform(train_df)
+        test_proc_df = pipelines["test"].transform(test_df)
+        train_eval_proc_df = pipelines["test"].transform(train_df)
 
         # this is needed to allow transitions in vpda to work for test data
-        pipelines['train']["schema"].fit(test_df)
+        pipelines["train"]["schema"].fit(test_df)
 
         # datasets
         train_dataset = DFDataset(train_proc_df)
@@ -71,9 +69,9 @@ class ORIGAMIRunner(BaseRunner):
         test_dataset = DFDataset(test_proc_df)
 
         # get stateful objects
-        schema = pipelines['train']["schema"].schema
-        encoder = pipelines['train']["encoder"].encoder
-        block_size = pipelines['train']["padding"].length
+        schema = pipelines["train"]["schema"].schema
+        encoder = pipelines["train"]["encoder"].encoder
+        block_size = pipelines["train"]["padding"].length
 
         # print data stats
         print()
@@ -128,7 +126,7 @@ class ORIGAMIRunner(BaseRunner):
         predictor = Predictor(model, data["encoder"], self.config.data.target_field)
 
         # make process callback
-        progress_callback = make_progress_callback(self.config.train, data['train_eval'], data['test'], predictor)
+        progress_callback = make_progress_callback(self.config.train, data["train_eval"], data["test"], predictor)
 
         model.set_callback("on_batch_end", progress_callback)
         model.train_model(data["train"], batches=self.config.train.n_batches)
