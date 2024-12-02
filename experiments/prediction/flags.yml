@@ -26,8 +26,8 @@ model:
   # whether to mask field token losses in training
   mask_field_token_losses: no
 
-  # whether to use guardrails or not
-  guardrails: yes
+  # guardrails mode: NONE, STRUCTURE_ONLY, STRUCTURE_AND_VALUES
+  guardrails: STRUCTURE_AND_VALUES
 
 train:
   # device to run on: cpu, cuda, mps, auto
@@ -85,9 +85,3 @@ pipeline:
   # whether to encode the full field path or just the field name
   # if no, VPDA cannot be used with schema
   path_in_field_tokens: yes
-
-
-
-
-
-

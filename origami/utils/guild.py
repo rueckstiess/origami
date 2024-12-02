@@ -3,9 +3,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Optional
 
+import guild.ipy as gipy
 from dotenv import dotenv_values
 from guild.commands import runs_impl
-import guild.ipy as gipy
 from guild.ipy import RunsDataFrame, RunsSeries, _runs_cmd_args
 from guild.run import Run
 from matplotlib import pyplot as plt
@@ -129,14 +129,14 @@ def get_runs_by_ids(run_ids: list[str]):
     return runs
 
 
-def _get_run_objects(**kw) -> list[Run]:
+def get_run_objects(**kw) -> list[Run]:
     """get access to runs objects based on filters."""
     return runs_impl.filtered_runs(_runs_cmd_args(**kw))
 
 
-def _get_run_object(**kw) -> Run:
+def get_run_object(**kw) -> Run:
     """get access to the first matching run object based on filters."""
-    runs = _get_run_objects(**kw)
+    runs = get_run_objects(**kw)
     assert len(runs) > 0, "No matching runs found."
     return runs[0]
 
@@ -145,7 +145,7 @@ def get_run_path(**kw) -> Path:
     """returns the path of a run given various filters. If multiple runs match, it returns
     the path of the latest run."""
 
-    run = _get_run_object(**kw)
+    run = get_run_object(**kw)
     return Path(run.dir)
 
 
@@ -153,5 +153,5 @@ def get_run_flags(**kw) -> SimpleNamespace:
     """returns the path of a run given various filters. If multiple runs match, it returns
     the path of the latest run."""
 
-    run = _get_run_object(**kw)
+    run = get_run_object(**kw)
     return SimpleNamespace(**run["flags"])

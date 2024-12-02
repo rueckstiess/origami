@@ -3,12 +3,13 @@ import pathlib
 
 import click
 from click_option_group import optgroup
+from omegaconf import OmegaConf
 
 from origami.inference import Predictor
 from origami.model import ORIGAMI
 from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset, TargetFieldPipe
-from origami.utils import Symbol, load_origami_model
+from origami.utils import Symbol, count_parameters, load_origami_model
 from origami.utils.config import GuardrailsMethod
 
 from .utils import create_projection, load_data
@@ -47,12 +48,17 @@ def predict(source, **kwargs):
     schema = pipelines["train"]["schema"].schema
 
     # create model and load weights
-    if config.model.guardrails == GuardrailsMethod.STRUCTURE_AND_VALUES:
-        vpda = ObjectVPDA(encoder, schema)
-    elif config.model.guardrails == GuardrailsMethod.STRUCTURE_ONLY:
-        vpda = ObjectVPDA(encoder)
-    else:
-        vpda = None
+    match config.model.guardrails:
+        case GuardrailsMethod.STRUCTURE_AND_VALUES:
+            if not config.pipeline.path_in_field_tokens:
+                raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
+            vpda = ObjectVPDA(encoder, schema)
+        case GuardrailsMethod.STRUCTURE_ONLY:
+            vpda = ObjectVPDA(encoder)
+        case GuardrailsMethod.NONE:
+            vpda = None
+
+    click.echo(f"config:\n {OmegaConf.to_yaml(config)}")
 
     model = ORIGAMI(config.model, config.train, vpda=vpda)
     model.load_state_dict(state_dict)
@@ -80,8 +86,15 @@ def predict(source, **kwargs):
     # datasets
     test_dataset = DFDataset(test_df)
 
+    if kwargs["verbose"]:
+        # report number of parameters (note we don't count the decoder parameters in lm_head)
+        n_params = count_parameters(model)
+        click.echo(f"running on device: {model.device}")
+        click.echo(f"number of parameters: {n_params/1e6:.2f}M")
+        click.echo(f"config:\n {OmegaConf.to_yaml(config)}")
+
     # predict target field
-    predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.training.batch_size)
+    predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.train.batch_size)
 
     predictions = predictor.predict(test_dataset)
 

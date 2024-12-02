@@ -56,7 +56,7 @@ class ModelConfig(BaseConfig):
     # weight tieing between embedding matrix and linear head weights (saves parameters)
     tie_weights: bool = False
 
-    # the position encoding method to use (NONE, INTEGER, KEY_VALUE)
+    # the position encoding method to use (NONE, INTEGER, SINE_COSINE, KEY_VALUE)
     position_encoding: PositionEncodingMethod = PositionEncodingMethod.KEY_VALUE
 
     # Whether to use an MLP to fuse position and token embeddings or just sum them

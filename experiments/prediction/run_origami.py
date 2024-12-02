@@ -9,12 +9,12 @@ import pandas as pd
 from omegaconf import OmegaConf
 from runner import BaseRunner
 
-from origami.utils.config import SequenceOrderMethod
-from origami.preprocessing import DFDataset, build_prediction_pipelines, load_df_from_mongodb
-from origami.model import ORIGAMI
 from origami.inference import Predictor
+from origami.model import ORIGAMI
 from origami.model.vpda import ObjectVPDA
-from origami.utils import walk_all_leaf_kvs, make_progress_callback
+from origami.preprocessing import DFDataset, build_prediction_pipelines, load_df_from_mongodb
+from origami.utils import make_progress_callback, walk_all_leaf_kvs
+from origami.utils.config import GuardrailsMethod, SequenceOrderMethod
 from origami.utils.guild import get_run_path, load_secrets, print_guild_scalars
 
 
@@ -49,7 +49,9 @@ class ORIGAMIRunner(BaseRunner):
         train_df, test_df = split
 
         # create pipelines according to config
-        pipelines = build_prediction_pipelines(self.config.pipeline, target_field=self.config.data.target_field)
+        pipelines = build_prediction_pipelines(
+            self.config.pipeline, target_field=self.config.data.target_field, verbose=True
+        )
 
         # we fit first, because train_df can get modified in transform
         # pipelines['train'].fit(train_df)
@@ -60,8 +62,8 @@ class ORIGAMIRunner(BaseRunner):
         test_proc_df = pipelines["test"].transform(test_df)
         train_eval_proc_df = pipelines["test"].transform(train_df)
 
-        # this is needed to allow transitions in vpda to work for test data
-        pipelines["train"]["schema"].fit(test_df)
+        # this is needed to allow transitions in vpda to work for test data during evaluation
+        pipelines["train"]["schema"].fit(test_proc_df)
 
         # datasets
         train_dataset = DFDataset(train_proc_df)
@@ -105,10 +107,17 @@ class ORIGAMIRunner(BaseRunner):
         self.config.model.block_size = block_size
 
         # schema can only be used in VPDA if the full path is encoded in field tokens
-        if self.config.pipeline.path_in_field_tokens:
-            vpda = ObjectVPDA(encoder, schema)
-        else:
-            vpda = ObjectVPDA(encoder)
+
+        match self.config.model.guardrails:
+            case GuardrailsMethod.STRUCTURE_AND_VALUES:
+                if not self.config.pipeline.path_in_field_tokens:
+                    raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
+                vpda = ObjectVPDA(encoder, schema)
+            case GuardrailsMethod.STRUCTURE_ONLY:
+                vpda = ObjectVPDA(encoder)
+            case GuardrailsMethod.NONE:
+                vpda = None
+
         return ORIGAMI(self.config.model, self.config.train, vpda=vpda)
 
     def train(self, model, data: dict, fold: int) -> None:
@@ -172,7 +181,7 @@ class ORIGAMIRunner(BaseRunner):
         # create a predictor
         predictor = Predictor(model, data["encoder"], self.config.data.target_field)
         train_acc = predictor.accuracy(data["train_eval"])
-        test_acc = predictor.accuracy(data["test"])
+        test_acc = predictor.accuracy(data["test"], print_predictions=True)
         print_guild_scalars(
             fold=fold,
             train_acc=f"{train_acc:.4f}",

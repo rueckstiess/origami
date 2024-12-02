@@ -19,9 +19,8 @@ class Predictor(Metrics):
         self.target_field = target_field
         self.encoder = encoder
 
-
     def print_predictions(self, y_true, y_pred):
-        print(f"prediction    -->   target")
+        print("prediction    -->    target")
         for i, (pred, target) in enumerate(zip(y_pred, y_true)):
             pred_dec = self.encoder.decode(pred)
             target_dec = self.encoder.decode(target)
@@ -36,7 +35,6 @@ class Predictor(Metrics):
                 else:
                     # replace with red version
                     print(f"\033[31m{line_str}\033[0m")
-
 
     @torch.no_grad()
     def predict(
@@ -144,5 +142,3 @@ class Predictor(Metrics):
         y_true = self.encoder.encode(dataset.df["target"].to_numpy())
 
         return roc_auc_score(y_true, y_pred)
-
-

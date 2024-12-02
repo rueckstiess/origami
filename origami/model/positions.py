@@ -1,7 +1,8 @@
+import math
+
 import torch
 from torch import nn
-import math
- 
+
 
 class BasePositionEncoding(nn.Module):
     """Base class for Integer and Document position encodings. It allows for summation
@@ -59,36 +60,33 @@ class IntegerPositionEncoding(BasePositionEncoding):
 class SineCosinePositionEncoding(BasePositionEncoding):
     """Position encoding using sine and cosine functions of different frequencies as
     described in 'Attention is All You Need' (Vaswani et al., 2017).
-    
+
     The encoding uses sine for even indices and cosine for odd indices in the
     embedding dimension, with frequencies decreasing geometrically with the
     dimension index."""
 
     def __init__(self, block_size: int, embedding_dim: int, fuse_with_mlp=True, **kwargs):
         super().__init__(embedding_dim, fuse_with_mlp=fuse_with_mlp, **kwargs)
-        
+
         # Create constant position encoding matrix
         pe = torch.zeros(block_size, embedding_dim)
         position = torch.arange(0, block_size, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, embedding_dim, 2).float() * 
-            (-math.log(10000.0) / embedding_dim)
-        )
-        
+        div_term = torch.exp(torch.arange(0, embedding_dim, 2).float() * (-math.log(10000.0) / embedding_dim))
+
         # Apply sine to even indices
         pe[:, 0::2] = torch.sin(position * div_term)
         # Apply cosine to odd indices
         pe[:, 1::2] = torch.cos(position * div_term)
-        
+
         # Register the position encoding as a buffer (not a parameter)
         # This ensures it's saved and moved with the model but not trained
-        self.register_buffer('pe', pe.unsqueeze(0))
+        self.register_buffer("pe", pe.unsqueeze(0))
 
     def forward(self, tok_emb: torch.Tensor) -> torch.Tensor:
         """
         Args:
             tok_emb: Token embeddings of shape (batch_size, seq_len, embedding_dim)
-            
+
         Returns:
             Combined token and position embeddings of same shape as input
         """
@@ -99,10 +97,9 @@ class SineCosinePositionEncoding(BasePositionEncoding):
         if self.fuse_with_mlp:
             pos_emb = pos_emb.repeat(tok_emb.size(0), 1, 1)
             return self.fuse_mlp(torch.cat((pos_emb, tok_emb), dim=2))
-        
+
         # Otherwise simply add the positional encodings
         return tok_emb + pos_emb
-
 
 
 class KeyValuePositionEncoding(BasePositionEncoding):

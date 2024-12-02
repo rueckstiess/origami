@@ -40,6 +40,13 @@ from .utils import create_projection, load_data
 @optgroup.group("Config Options")
 @optgroup.option("--config-file", "-C", type=click.File("r"), help="path to config file")
 @optgroup.option(
+    "--set-parameter",
+    "-P",
+    type=str,
+    multiple=True,
+    help="set additional config parameters, format: key.subkey=value. Multiple parameters can be set.",
+)
+@optgroup.option(
     "--max-vocab-size",
     "-V",
     type=int,
@@ -75,14 +82,6 @@ from .utils import create_projection, load_data
     "--num-batches", "-N", type=int, default=10000, show_default=True, help="number of batches to train on"
 )
 @optgroup.option("--batch-size", "-B", type=int, default=100, show_default=True, help="batch size")
-@optgroup.option(
-    "--pos-encoding",
-    "-P",
-    type=click.Choice(["NONE", "INTEGER", "KEY_VALUE"]),
-    help="type of position encoding",
-    default="KEY_VALUE",
-    show_default=True,
-)
 @optgroup.option(
     "--upscaling",
     "-U",
@@ -132,6 +131,11 @@ def train(source: str, **kwargs):
 
     # data configs
     config.data.source = source
+
+    if source.startswith("mongodb://"):
+        if kwargs["source_db"] is None or kwargs["source_coll"] is None:
+            raise click.BadParameter("--source-db and --source-coll are required for MongoDB URI")
+
     config.data.db = kwargs["source_db"]
     config.data.coll = kwargs["source_coll"]
     config.data.projection = create_projection(kwargs["include_fields"], kwargs["exclude_fields"])
@@ -143,9 +147,7 @@ def train(source: str, **kwargs):
     config.model.n_layer = kwargs["num_layers"]
     config.model.n_head = kwargs["num_attn_heads"]
     config.model.n_embd = kwargs["hidden_dim"]
-    config.model.position_encoding = kwargs["pos_encoding"]
     config.model.guardrails = kwargs["guardrails"]
-    config.model.mask_field_token_losses = True
 
     # train configs
     config.train.n_batches = kwargs["num_batches"]
@@ -183,6 +185,12 @@ def train(source: str, **kwargs):
             )
         )
 
+    # set custom parameters (overrides other settings)
+    for p in kwargs["set_parameter"]:
+        key, value = p.split("=")
+        key, subkey = key.split(".")
+        config[key][subkey] = value
+
     # load data
     df = load_data(source, config.data)
 
@@ -193,7 +201,7 @@ def train(source: str, **kwargs):
         test_df = None
 
     # build pipelines
-    pipelines = build_prediction_pipelines(config.pipeline, config.data.target_field)
+    pipelines = build_prediction_pipelines(config.pipeline, config.data.target_field, verbose=kwargs["verbose"])
 
     # process train and test data
     train_proc_df = pipelines["train"].fit_transform(train_df)
@@ -207,6 +215,11 @@ def train(source: str, **kwargs):
         test_dataset = DFDataset(test_proc_df)
         # limit the number of test examples if dataset is too small
         config.train.sample_test = min(len(test_dataset), config.train.sample_test)
+
+        # for guardrails mode STRUCTURE_AND_VALUES, this is needed to allow transitions
+        # in vpda to work for test data
+        pipelines["train"]["schema"].fit(test_df)
+
     else:
         test_dataset = None
 
@@ -228,7 +241,7 @@ def train(source: str, **kwargs):
                     fg="red",
                 )
             )
-        elif ratio > 0.2:
+        elif ratio > 0.5:
             click.echo(
                 click.style(
                     f"warning: field `{path}` is high cardinality with {int(ratio*100)}% unique values. Consider excluding it with --exclude-fields",
@@ -240,12 +253,15 @@ def train(source: str, **kwargs):
     if kwargs["verbose"]:
         click.echo(">>> creating PDA rules\n")
 
-    if config.model.guardrails == GuardrailsMethod.STRUCTURE_AND_VALUES:
-        vpda = ObjectVPDA(encoder, schema)
-    elif config.model.guardrails == GuardrailsMethod.STRUCTURE_ONLY:
-        vpda = ObjectVPDA(encoder)
-    else:
-        vpda = None
+    match config.model.guardrails:
+        case GuardrailsMethod.STRUCTURE_AND_VALUES:
+            if not config.pipeline.path_in_field_tokens:
+                raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
+            vpda = ObjectVPDA(encoder, schema)
+        case GuardrailsMethod.STRUCTURE_ONLY:
+            vpda = ObjectVPDA(encoder)
+        case GuardrailsMethod.NONE:
+            vpda = None
 
     if kwargs["verbose"]:
         click.echo(">>> creating ORiGAMi model\n")

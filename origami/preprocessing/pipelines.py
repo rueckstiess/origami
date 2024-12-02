@@ -17,7 +17,7 @@ from .pipes import (
 
 
 def build_prediction_pipelines(
-    pipeline_config: PipelineConfig, target_field: Optional[str] = None
+    pipeline_config: PipelineConfig, target_field: Optional[str] = None, verbose: bool = False
 ) -> tuple[Pipeline, Pipeline]:
     """build common train/test pipelines for prediction tasks."""
 
@@ -26,6 +26,7 @@ def build_prediction_pipelines(
             bins=pipeline_config.n_bins, threshold=pipeline_config.n_bins, strategy="kmeans"
         ),
         "schema": SchemaParserPipe(),
+        "target": TargetFieldPipe(target_field),
         "tokenizer": DocTokenizerPipe(path_in_field_tokens=pipeline_config.path_in_field_tokens),
         "padding": PadTruncTokensPipe(length="max"),
         "encoder": TokenEncoderPipe(max_tokens=pipeline_config.max_vocab_size),
@@ -44,18 +45,21 @@ def build_prediction_pipelines(
 
     test_pipes = ("tokenizer", "padding", "encoder")
 
+    # add target if needed
+    if target_field is not None:
+        test_pipes = ("target",) + test_pipes
+        train_pipes = ("target",) + train_pipes
+
     # add binning if needed
     if pipeline_config.numeric_method == NumericMethod.BINNING:
         test_pipes = ("binning",) + test_pipes
         train_pipes = ("binning",) + train_pipes
 
-    # add target if needed
-    if target_field is not None:
-        pipes["target"] = TargetFieldPipe(target_field)
-        test_pipes = ("target",) + test_pipes
-        train_pipes = ("target",) + train_pipes
+    train_pipeline = Pipeline([(name, pipes[name]) for name in train_pipes], verbose=verbose)
+    test_pipeline = Pipeline([(name, pipes[name]) for name in test_pipes], verbose=verbose)
 
-    train_pipeline = Pipeline([(name, pipes[name]) for name in train_pipes], verbose=True)
-    test_pipeline = Pipeline([(name, pipes[name]) for name in test_pipes], verbose=True)
+    if verbose:
+        print(f"train pipeline: {train_pipeline}")
+        print(f"test pipeline: {test_pipeline}")
 
     return {"train": train_pipeline, "test": test_pipeline}

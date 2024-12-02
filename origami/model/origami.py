@@ -1,4 +1,7 @@
 import time
+
+# suppress deprecation warning for setting epoch in LR scheduler, likely bug in pytorch
+import warnings
 from collections import defaultdict
 from typing import Optional
 
@@ -11,16 +14,14 @@ from torch.utils.data.dataloader import DataLoader, default_collate
 from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset
 from origami.utils import auto_device, torch_isin
-from origami.utils.config import ModelConfig, TrainConfig, PositionEncodingMethod
+from origami.utils.config import GuardrailsMethod, ModelConfig, PositionEncodingMethod, TrainConfig
 
 from .positions import (
     IntegerPositionEncoding,
-    SineCosinePositionEncoding,
     SharedKeyValuePositionEncoding,
+    SineCosinePositionEncoding,
 )
 
-# suppress deprecation warning for setting epoch in LR scheduler, likely bug in pytorch
-import warnings
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -136,10 +137,10 @@ class ORIGAMI(nn.Module):
 
         tokens = default_collate(tokens)
 
-        if self.model_config.guardrails:
-            out_masks = torch.tensor(self.vpda.get_sequence_mask(tokens))[:, 1:].to(self.device)
-        else:
+        if self.model_config.guardrails == GuardrailsMethod.NONE:
             out_masks = None
+        else:
+            out_masks = torch.tensor(self.vpda.get_sequence_mask(tokens))[:, 1:].to(self.device)
 
         # targets are the same as input but shifted by one token
         tokens = tokens.to(self.device)
@@ -266,7 +267,7 @@ class ORIGAMI(nn.Module):
                 x = self.pos_encoding(tok_emb)
             case PositionEncodingMethod.KEY_VALUE:
                 # use the VPDA stacks for position encoding
-                if self.training and self.model_config.guardrails:
+                if self.training and self.model_config.guardrails != GuardrailsMethod.NONE:
                     # for guard rails we calculated the stacks on all tokens, but here we
                     # only need it for the inputs, so slicing 2 elements off the end (pop+push symbol)
                     stacks = torch.tensor(self.vpda.stacks[:, :-2]).to(self.device)

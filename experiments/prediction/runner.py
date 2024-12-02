@@ -14,9 +14,9 @@ from pymongo import MongoClient
 from sklearn.model_selection import KFold, train_test_split
 from utils import flatten_config
 
-from origami.utils.config import TopLevelConfig
 from origami.utils import set_seed
-from origami.utils.guild import detect_remote, get_runs, load_secrets, print_guild_scalars
+from origami.utils.config import TopLevelConfig
+from origami.utils.guild import detect_remote, get_run_objects, load_secrets, print_guild_scalars
 
 
 class BaseRunner:
@@ -221,7 +221,7 @@ class BaseRunner:
             return
 
         model_op = os.environ.get("GUILD_OP", "debug")
-        runs = get_runs(
+        runs = get_run_objects(
             operations=model_op, labels="temp", filter_expr=f"dataset={self.config.dataset}", completed=True
         )
         config = OmegaConf.to_container(self.config, enum_to_str=True)

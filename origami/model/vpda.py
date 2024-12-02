@@ -430,13 +430,13 @@ class ObjectVPDA(VPDA):
 
         self.field_token_ids = [i for ft, i in encoder.tokens_to_ids.items() if isinstance(ft, FieldToken)]
         # include UNKNOWN as possible field token
-        self.field_token_ids.append(encoder.encode(Symbol.UNKNOWN.value))
+        self.field_token_ids.append(encoder.encode(Symbol.UNKNOWN))
 
         prim_value_token_ids = [
             i for pvt, i in encoder.tokens_to_ids.items() if not isinstance(pvt, (ArrayStart, FieldToken, Symbol))
         ]
         # UNKNOWN is treated as primitive value
-        prim_value_token_ids.append(encoder.encode(Symbol.UNKNOWN.value))
+        prim_value_token_ids.append(encoder.encode(Symbol.UNKNOWN))
 
         array_token_ids = set(i for at, i in encoder.tokens_to_ids.items() if isinstance(at, ArrayStart))
 
