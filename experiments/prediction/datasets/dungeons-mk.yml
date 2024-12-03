@@ -1,0 +1,7 @@
+data:
+  db: dungeons
+  coll: dungeon_10k_4_8_3_5_mk
+  projection:
+    _id: 0
+  limit: 0
+  target_field: treasure
