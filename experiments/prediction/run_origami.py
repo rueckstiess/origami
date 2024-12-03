@@ -113,10 +113,8 @@ class ORIGAMIRunner(BaseRunner):
                 if not self.config.pipeline.path_in_field_tokens:
                     raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
                 vpda = ObjectVPDA(encoder, schema)
-            case GuardrailsMethod.STRUCTURE_ONLY:
+            case GuardrailsMethod.STRUCTURE_ONLY | GuardrailsMethod.NONE:
                 vpda = ObjectVPDA(encoder)
-            case GuardrailsMethod.NONE:
-                vpda = None
 
         return ORIGAMI(self.config.model, self.config.train, vpda=vpda)
 

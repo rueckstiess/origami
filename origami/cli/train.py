@@ -258,10 +258,8 @@ def train(source: str, **kwargs):
             if not config.pipeline.path_in_field_tokens:
                 raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
             vpda = ObjectVPDA(encoder, schema)
-        case GuardrailsMethod.STRUCTURE_ONLY:
+        case GuardrailsMethod.STRUCTURE_ONLY | GuardrailsMethod.NONE:
             vpda = ObjectVPDA(encoder)
-        case GuardrailsMethod.NONE:
-            vpda = None
 
     if kwargs["verbose"]:
         click.echo(">>> creating ORiGAMi model\n")
