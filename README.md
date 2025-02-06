@@ -50,33 +50,15 @@ ORiGAMi comes with a command line interface (CLI) and a Python SDK.
 
 ### Usage from the Command Line
 
-The CLI allows to train a model and make predictions and generate synthetic data from a trained model. After installation, run `origami` from your shell to see an overview of available commands.
+The CLI allows to train a model and make predictions from a trained model. After installation, run `origami` from your shell to see an overview of available commands.
 
-Help for specific commands is available with `origami <command> --help`, where `<command>` is one of `train`, `predict`, `generate`.
+Help for specific commands is available with `origami <command> --help`, where `<command>` is currently one of `train` or `predict`.
 
-#### Model Training
-
-To train a model, use the `origami train` command. ORiGAMi works well with MongoDB. For example, to train a model on the `shop.orders` collection on a locally running MongoDB instance on standard port 27017, use the following command:
-
-```
-origami train "mongodb://localhost:27017" --source-db shop --source-coll orders
-```
-
-#### Making Predictions
-
-...TBD...
-
-#### Generating Synthetic Data
-
-...TBD...
+Detailed documentation for the CLI and available options can be found in [`CLI.md`](CLI.md).
 
 ### Usage with Python
 
-...TBD...
-
-```python
-from origami.model import ORIGAMI
-```
+To see an example on how to use ORiGAMi from Python, take a look at the provided [./notebooks](./notebooks/) folder, e.g. the [`example_origami_dungeons.ipynb`](./notebooks/example_origami_dungeons.ipynb) notebook.
 
 ## Experiment Reproduction
 
