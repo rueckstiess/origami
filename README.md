@@ -36,6 +36,8 @@ pip install origami-ml
 You can also clone the repository to your local machine and install the dependencies manually:
 
 ```shell
+git clone https://github.com/mongodb-labs/origami.git
+cd origami
 pip install -r requirements.txt
 pip install -e .
 ```
