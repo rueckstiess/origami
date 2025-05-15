@@ -82,7 +82,7 @@ def load_data(source: str, data_config: DataConfig) -> pd.DataFrame:
     Returns:
     - pandas.DataFrame: The loaded data as a DataFrame.
     """
-    if source.startswith("mongodb://"):
+    if source.startswith("mongodb://") or source.startswith("mongodb+srv://"):
         # load data from MongoDB, project out _id field by default
         projection = {"_id": 0} | OmegaConf.to_object(data_config.projection)
         df = load_df_from_mongodb(
