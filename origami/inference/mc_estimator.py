@@ -10,8 +10,9 @@ from torch.utils.data import DataLoader
 
 from origami.model.origami import ORIGAMI
 from origami.preprocessing import DFDataset
+from origami.preprocessing.pipes import DocPermuterPipe, SortFieldsPipe
 from origami.utils import Symbol
-from origami.utils.common import OPERATORS
+from origami.utils.common import OPERATORS, sort_dict_fields
 
 
 class MCEstimator:
@@ -50,7 +51,10 @@ class MCEstimator:
         self.encoder = pipeline["encoder"].encoder
         self.schema = pipeline["schema"].schema
         self.discretizers = pipeline["binning"].discretizers
-        self.has_permuter = "permuter" in pipeline.named_steps
+
+        # Detect pipeline components by class type (not name)
+        self.has_permuter = any(isinstance(step, DocPermuterPipe) for _, step in pipeline.steps)
+        self.has_sorter = any(isinstance(step, SortFieldsPipe) for _, step in pipeline.steps)
 
     @torch.no_grad()
     def estimate(self, query: Query, n: int = 1000) -> tuple[float, list[dict]]:
@@ -143,7 +147,13 @@ class MCEstimator:
         # Generate n complete documents
         samples = []
         for _ in range(n):
-            doc = {field: float(np.random.choice(vals)) for field, vals in field_allowed_values.items()}
+            doc = {field: np.random.choice(field_allowed_values[field]) for field in all_schema_fields}
+
+            # Apply field ordering to match training pipeline
+            if self.has_sorter:
+                # Sort fields alphabetically if SortFieldsPipe was used in training
+                doc = sort_dict_fields(doc)
+
             samples.append(doc)
 
         return samples

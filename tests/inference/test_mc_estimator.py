@@ -16,6 +16,7 @@ from origami.preprocessing import (
     KBinsDiscretizerPipe,
     PadTruncTokensPipe,
     SchemaParserPipe,
+    SortFieldsPipe,
     TokenEncoderPipe,
 )
 from origami.utils import ModelConfig, TrainConfig
@@ -115,6 +116,13 @@ class TestMCEstimatorConstructor:
         estimator = MCEstimator(model, pipeline)
 
         assert estimator.has_permuter is False
+
+    def test_constructor_detects_no_sorter(self, pipeline_and_model):
+        """Test that constructor correctly detects absence of sorter."""
+        pipeline, model = pipeline_and_model
+        estimator = MCEstimator(model, pipeline)
+
+        assert estimator.has_sorter is False
 
 
 class TestGetAllowedValues:
@@ -220,6 +228,63 @@ class TestGenerateUniformSamples:
         # Should span a reasonable portion of the full range
         # (not just a tiny interval)
         assert b_range > 2.0  # Original range is [-5, 5]
+
+    def test_samples_with_sorted_fields(self, simple_2d_dataset):
+        """Test that samples are sorted when SortFieldsPipe is in pipeline."""
+        df, _ = simple_2d_dataset
+
+        # Create pipeline WITH SortFieldsPipe
+        pipeline = Pipeline(
+            [
+                ("binning", KBinsDiscretizerPipe(bins=10, strategy="uniform")),
+                ("sorter", SortFieldsPipe()),  # Add sorter
+                ("schema", SchemaParserPipe()),
+                ("tokenizer", DocTokenizerPipe()),
+                ("padding", PadTruncTokensPipe(length="max")),
+                ("encoder", TokenEncoderPipe()),
+            ]
+        )
+
+        processed_df = pipeline.fit_transform(df).reset_index(drop=True)
+
+        schema = pipeline["schema"].schema
+        encoder = pipeline["encoder"].encoder
+        block_size = pipeline["padding"].length
+
+        model_config = ModelConfig.from_preset("xs")
+        model_config.vocab_size = encoder.vocab_size
+        model_config.block_size = block_size
+        model_config.position_encoding = "KEY_VALUE"
+
+        train_config = TrainConfig()
+        train_config.learning_rate = 1e-3
+
+        vpda = ObjectVPDA(encoder, schema)
+        model = ORIGAMI(model_config, train_config, vpda=vpda)
+
+        dataset = DFDataset(processed_df)
+        model.train_model(dataset, batches=10)
+
+        # Create estimator
+        estimator = MCEstimator(model, pipeline, batch_size=100)
+
+        # Verify has_sorter is True
+        assert estimator.has_sorter is True
+
+        # Generate samples
+        query = Query()
+        query.add_predicate(Predicate("a", "gte", (3.0,)))
+        query.add_predicate(Predicate("a", "lte", (7.0,)))
+
+        samples = estimator._generate_uniform_samples(query, n=10)
+
+        # All samples should have alphabetically sorted keys
+        from collections import OrderedDict
+
+        for doc in samples:
+            assert isinstance(doc, OrderedDict)
+            keys = list(doc.keys())
+            assert keys == sorted(keys), f"Keys {keys} are not sorted"
 
 
 class TestCalculateQueryRegionSize:

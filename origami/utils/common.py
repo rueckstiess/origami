@@ -72,6 +72,27 @@ class ArrayStart:
         return hash(self.size)
 
 
+def sort_dict_fields(doc: dict) -> OrderedDict:
+    """Sort dictionary fields alphabetically and return an OrderedDict.
+
+    This ensures consistent field ordering across documents, which is important
+    for models that are sensitive to field order (e.g., when tokenizing documents).
+
+    Args:
+        doc: Dictionary to sort
+
+    Returns:
+        OrderedDict with fields sorted alphabetically by key
+
+    Example:
+        >>> doc = {'z': 1, 'a': 2, 'b': 3}
+        >>> sorted_doc = sort_dict_fields(doc)
+        >>> list(sorted_doc.keys())
+        ['a', 'b', 'z']
+    """
+    return OrderedDict(sorted(doc.items(), key=lambda x: x[0]))
+
+
 def try_compare(x, op, y, default=False):
     try:
         return op(x, y)
