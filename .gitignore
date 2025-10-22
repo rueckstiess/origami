@@ -15,3 +15,5 @@ env/
 .env.remote
 *.origami
 dist/
+*.pt
+dump/

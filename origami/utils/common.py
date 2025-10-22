@@ -1,17 +1,24 @@
 import itertools
+import operator
 import pickle
 import random
 from collections import OrderedDict
 from enum import Enum
+from types import NoneType
 from typing import Any, Callable, Generator, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 from omegaconf import OmegaConf
 
 from origami.utils.config import TopLevelConfig
 
 from .guild import print_guild_scalars
+
+
+class QueryRegionEmptyException(Exception):
+    pass
 
 
 class Symbol(Enum):
@@ -63,6 +70,96 @@ class ArrayStart:
 
     def __hash__(self):
         return hash(self.size)
+
+
+def try_compare(x, op, y, default=False):
+    try:
+        return op(x, y)
+    except TypeError:
+        # if the types are not comparable, it's not a match
+        # MongoDB calls this type bracketing
+        return default
+
+
+def eq_with_nan(a, b):
+    if pd.isna(a) and pd.isna(b):
+        return True
+    return operator.eq(a, b)
+
+
+def ge_with_nan(a, b):
+    if eq_with_nan(a, b):
+        return True
+    return operator.ge(a, b)
+
+
+def le_with_nan(a, b):
+    if eq_with_nan(a, b):
+        return True
+    return operator.le(a, b)
+
+
+def type_eq(a, b):
+    TYPE_CLASSES = {
+        "double": float,
+        "string": str,
+        "object": Symbol.SUBDOC_START,
+        "array": ArrayStart,
+        "bool": bool,
+        "null": NoneType,
+        "int": int,
+        "number": (int, float, complex),
+    }
+
+    return isinstance(a, TYPE_CLASSES[b])
+
+
+def size_eq(a, b):
+    if isinstance(a, ArrayStart):
+        return a.size == b
+    return False
+
+
+class EncodingTypes(Enum):
+    ANY = 1
+    CONSTANT = 2
+    BINARY = 3
+    CATEGORICAL = 4
+    DATETIME = 5
+    GAUSSIAN = 6
+    MIXOFGAUSS = 7
+    HISTOGRAM = 8
+    MIXED = 9
+    DOCUMENT = 10
+    SET = 11
+
+
+OPERATORS = {
+    "gt": lambda a, val: try_compare(a, operator.gt, val[0]),
+    "lt": lambda a, val: try_compare(a, operator.lt, val[0]),
+    "gte": lambda a, val: try_compare(a, ge_with_nan, val[0]),
+    "lte": lambda a, val: try_compare(a, le_with_nan, val[0]),
+    "eq": lambda a, val: try_compare(a, eq_with_nan, val[0]),
+    "ne": lambda a, val: try_compare(a, operator.ne, val[0], True),
+    "in": lambda a, val: try_compare(val, operator.contains, a),
+    "nin": lambda a, val: try_compare(val, lambda x, y: operator.not_(operator.contains(x, y)), a, True),
+    "type": lambda a, val: try_compare(a, type_eq, val[0]),
+    "size": lambda a, val: try_compare(a, size_eq, val[0]),
+    "exists": lambda a, val: (a is not None and not pd.isna(a)) and val[0],
+}
+
+
+PYTHON_BSON_TYPE_MAP = {
+    "str": "string",
+    "int": "int",
+    "float": "double",
+    "bool": "bool",
+    "datetime": "date",
+    "ObjectId": "objectId",
+    "dict": "object",
+    "list": "array",
+    "NoneType": "null",
+}
 
 
 def pad_trunc(lst, length, pad_token=Symbol.PAD):
@@ -222,6 +319,17 @@ def load_origami_model(path: str):
     model_dict["config"] = OmegaConf.merge(tlc, model_dict["config"])
 
     return model_dict
+
+
+def mult_error(estimate: int, actual: int) -> float:
+    """calculates the multiplicative error between estimates and ground truth,
+    as used in e.g. Naru."""
+
+    # round to nearest integer and clamp at minimum of 1
+    actual = max(1, np.round(actual))
+    estimate = max(1, np.round(estimate))
+
+    return max(actual, estimate) / min(actual, estimate)
 
 
 def make_progress_callback(
