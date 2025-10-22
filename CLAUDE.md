@@ -61,7 +61,9 @@ origami predict <source> --target-field <field> [options]
   - `predictor.py`: Main prediction interface
   - `embedder.py`: Embedding generation
   - `autocomplete.py`: Autocompletion functionality
+  - `sampler.py`: Generate samples from learned model distribution
   - `mc_estimator.py`: Monte Carlo cardinality estimator for query selectivity
+  - `rejection_estimator.py`: Rejection sampling cardinality estimator
 - **`origami/utils/`**: Utilities and configuration
   - `config.py`: Configuration classes using OmegaConf
   - `query_utils.py`: Query evaluation and selectivity calculation utilities
@@ -149,3 +151,50 @@ cardinality = probability * collection_size
 - `evaluate_ground_truth(query, docs)`: Count documents matching query predicates
 - `calculate_selectivity(query, docs)`: Calculate fraction of documents matching query
 - `compare_estimate_to_ground_truth(query, docs, estimated_prob)`: Compare estimates with actual counts and compute error metrics (q-error, relative error, etc.)
+
+## Sampling and Rejection Sampling
+
+### Sampler
+The `Sampler` class generates unbiased samples from the learned model distribution:
+
+```python
+from origami.inference import Sampler
+
+# Initialize sampler
+sampler = Sampler(model, encoder, schema, temperature=1.0)
+
+# Generate samples
+documents, log_probs = sampler.sample(n=1000)
+
+# documents: list of dicts sampled from P_model(x)
+# log_probs: numpy array of log P(document)
+```
+
+### Rejection Sampling Estimator
+The `RejectionEstimator` uses rejection sampling for query selectivity estimation:
+
+```python
+from origami.inference import Sampler, RejectionEstimator
+
+# Initialize sampler and estimator
+sampler = Sampler(model, encoder, schema)
+estimator = RejectionEstimator(sampler)
+
+# Create a query
+query = Query()
+query.add_predicate(Predicate('field_name', 'gte', (min_value,)))
+query.add_predicate(Predicate('field_name', 'lte', (max_value,)))
+
+# Estimate selectivity
+selectivity, accepted_samples = estimator.estimate(query, n=1000)
+cardinality = selectivity * collection_size
+```
+
+**How it works:**
+1. Samples n documents from the learned model distribution
+2. Rejects samples that don't match the query predicates
+3. Returns unbiased estimate: selectivity = (# accepted) / n
+
+**When to use:**
+- **Rejection Sampling**: Best for common queries (high selectivity)
+- **MC Sampling**: Best for rare queries (low selectivity)
