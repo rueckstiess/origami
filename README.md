@@ -24,22 +24,37 @@ ORiGAMi circumvents this by directly operating on JSON data. Once a model is tra
 
 ## Installation
 
-ORiGAMi requires Python version 3.10 or 3.11. We recommend using a virtual environment, such as
-Python's native [`venv`](https://docs.python.org/3/library/venv.html).
+ORiGAMi requires Python 3.11. We recommend using [`uv`](https://docs.astral.sh/uv/) for dependency management and virtual environments.
 
-To install ORiGAMi with `pip`, use
+### Install from PyPI
 
 ```shell
 pip install origami-ml
 ```
 
-You can also clone the repository to your local machine and install the dependencies manually:
+### Install from source with uv (recommended for development)
+
+First, install `uv` if you haven't already:
+
+```shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then clone and install the project:
 
 ```shell
 git clone https://github.com/rueckstiess/origami.git
 cd origami
-pip install -r requirements.txt
-pip install -e .
+uv sync --extra dev
+```
+
+This will automatically create a virtual environment, install Python 3.11 if needed, and install all dependencies.
+
+To run commands in the uv environment:
+
+```shell
+uv run origami --help
+uv run pytest
 ```
 
 ## Usage
