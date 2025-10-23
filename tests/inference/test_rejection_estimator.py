@@ -1,6 +1,7 @@
+from unittest.mock import Mock
+
 import pytest
 from mdbrtools.query import Predicate, Query
-from unittest.mock import Mock
 
 from origami.inference import RejectionEstimator
 
@@ -93,7 +94,7 @@ class TestEstimateMethod:
         # Mock sampler to return documents that all match
         mock_sampler.sample.return_value = (
             [{"a": 5.0}, {"a": 6.0}, {"a": 7.0}],  # documents
-            [0.1, 0.1, 0.1]  # log_probs (not used in rejection estimator)
+            [0.1, 0.1, 0.1],  # log_probs (not used in rejection estimator)
         )
 
         estimator = RejectionEstimator(mock_sampler)
@@ -110,10 +111,7 @@ class TestEstimateMethod:
     def test_estimate_none_accepted(self, mock_sampler):
         """Test when no samples match the query."""
         # Mock sampler to return documents that don't match
-        mock_sampler.sample.return_value = (
-            [{"a": 1.0}, {"a": 2.0}, {"a": 3.0}],
-            [0.1, 0.1, 0.1]
-        )
+        mock_sampler.sample.return_value = ([{"a": 1.0}, {"a": 2.0}, {"a": 3.0}], [0.1, 0.1, 0.1])
 
         estimator = RejectionEstimator(mock_sampler)
 
@@ -129,10 +127,7 @@ class TestEstimateMethod:
     def test_estimate_partial_acceptance(self, mock_sampler):
         """Test when some samples match."""
         # Mock sampler to return mixed documents
-        mock_sampler.sample.return_value = (
-            [{"a": 5.0}, {"a": 15.0}, {"a": 7.0}, {"a": 20.0}],
-            [0.1, 0.1, 0.1, 0.1]
-        )
+        mock_sampler.sample.return_value = ([{"a": 5.0}, {"a": 15.0}, {"a": 7.0}, {"a": 20.0}], [0.1, 0.1, 0.1, 0.1])
 
         estimator = RejectionEstimator(mock_sampler)
 
@@ -149,10 +144,7 @@ class TestEstimateMethod:
 
     def test_estimate_return_samples_false(self, mock_sampler):
         """Test that return_samples=False returns None for samples."""
-        mock_sampler.sample.return_value = (
-            [{"a": 5.0}, {"a": 6.0}],
-            [0.1, 0.1]
-        )
+        mock_sampler.sample.return_value = ([{"a": 5.0}, {"a": 6.0}], [0.1, 0.1])
 
         estimator = RejectionEstimator(mock_sampler)
 
@@ -184,10 +176,7 @@ class TestEstimateIntegration:
 
     def test_selectivity_in_valid_range(self, mock_sampler):
         """Test that selectivity is always between 0 and 1."""
-        mock_sampler.sample.return_value = (
-            [{"a": i} for i in range(10)],
-            [0.1] * 10
-        )
+        mock_sampler.sample.return_value = ([{"a": i} for i in range(10)], [0.1] * 10)
 
         estimator = RejectionEstimator(mock_sampler)
 
@@ -201,10 +190,7 @@ class TestEstimateIntegration:
     def test_different_query_sizes(self, mock_sampler):
         """Test with different sample sizes."""
         for n in [10, 50, 100]:
-            mock_sampler.sample.return_value = (
-                [{"a": 5.0}] * n,
-                [0.1] * n
-            )
+            mock_sampler.sample.return_value = ([{"a": 5.0}] * n, [0.1] * n)
 
             estimator = RejectionEstimator(mock_sampler)
 

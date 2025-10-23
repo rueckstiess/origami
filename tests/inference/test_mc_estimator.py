@@ -1,9 +1,6 @@
-import math
-
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 from mdbrtools.query import Predicate, Query
 from sklearn.pipeline import Pipeline
 

@@ -135,11 +135,7 @@ class TestSortFieldsPipe(unittest.TestCase):
 
     def test_sort_fields_multiple_docs(self):
         """Test sorting fields across multiple documents."""
-        docs = [
-            {"z": 1, "a": 2},
-            {"b": 3, "a": 4, "c": 5},
-            {"x": 6, "y": 7}
-        ]
+        docs = [{"z": 1, "a": 2}, {"b": 3, "a": 4, "c": 5}, {"x": 6, "y": 7}]
         df = pd.DataFrame({"docs": docs})
 
         pipe = SortFieldsPipe()
@@ -161,7 +157,7 @@ class TestSortFieldsPipe(unittest.TestCase):
             "b_bool": True,
             "n_none": None,
             "d_list": [1, 2, 3],
-            "c_dict": {"nested": "value"}
+            "c_dict": {"nested": "value"},
         }
         df = pd.DataFrame({"docs": [doc]})
 

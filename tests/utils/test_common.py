@@ -287,7 +287,7 @@ class TestSortDictFields(unittest.TestCase):
             "b_bool": True,
             "n_none": None,
             "d_list": [1, 2, 3],
-            "c_dict": {"nested": "value"}
+            "c_dict": {"nested": "value"},
         }
         result = sort_dict_fields(doc)
 

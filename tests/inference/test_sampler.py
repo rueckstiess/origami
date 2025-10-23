@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 
 from origami.inference import Sampler
@@ -16,7 +15,7 @@ def mock_model():
     model.train = Mock()
     model.model_config.guardrails = False
     model.model_config.block_size = 50
-    model.device = 'cpu'
+    model.device = "cpu"
 
     return model
 

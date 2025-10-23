@@ -137,7 +137,7 @@ class Sampler:
             if guardrails and masks is not None:
                 # Mask invalid tokens by setting logits to -inf
                 mask = masks[:, -1, :]
-                logits = logits.masked_fill(~mask, float('-inf'))
+                logits = logits.masked_fill(~mask, float("-inf"))
 
             # Convert logits to probabilities
             probs = F.softmax(logits, dim=-1)
