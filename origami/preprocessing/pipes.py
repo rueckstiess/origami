@@ -11,7 +11,14 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.utils.validation import check_is_fitted
 
-from origami.utils.common import ArrayStart, Symbol, pad_trunc, reorder_with_target_last, walk_all_leaf_kvs
+from origami.utils.common import (
+    ArrayStart,
+    Symbol,
+    pad_trunc,
+    reorder_with_target_last,
+    sort_dict_fields,
+    walk_all_leaf_kvs,
+)
 
 from .encoder import StreamEncoder
 from .utils import CAT_THRESHOLD, deepcopy_df, tokenize
@@ -84,6 +91,26 @@ class DocPermuterPipe(BasePipe):
         X["ordered_docs"] = X["docs"]
         X["docs"] = X["docs"].astype("object").apply(self._shuffle_keys)
 
+        return X
+
+
+class SortFieldsPipe(BasePipe):
+    """A Pipe that sorts document fields alphabetically.
+
+    Ensures consistent field ordering across all documents by sorting field names
+    alphabetically. This is important for models that are sensitive to field order.
+
+    Expects a DataFrame with `docs` column.
+
+    Modifies the `docs` column in-place, converting each dict to an OrderedDict
+    with alphabetically sorted keys.
+    """
+
+    def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        if "docs" not in X.columns:
+            raise ColumnMissingException("SortFieldsPipe requires column 'docs' in the DataFrame.")
+        X = X.copy()
+        X["docs"] = X["docs"].apply(sort_dict_fields)
         return X
 
 

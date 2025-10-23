@@ -100,7 +100,11 @@ class ORIGAMI(nn.Module):
             activation="gelu",
             batch_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, self.model_config.n_layer)
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer,
+            self.model_config.n_layer,
+            enable_nested_tensor=False
+        )
         self.head = nn.Linear(self.model_config.n_embd, self.model_config.vocab_size, bias=False)
 
         # "Using the Output Embedding to Improve Language Models" (Press & Wolf 2016)

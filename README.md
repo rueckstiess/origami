@@ -10,7 +10,9 @@
 
 ## Disclaimer
 
-Please note: This tool is not officially supported or endorsed by MongoDB, Inc. The code is released for use "AS IS" without any warranties of any kind, including, but not limited to its installation, use, or performance. Do not run this tool against critical production systems.
+This is a personal fork of the original [mongodb-labs/origami](https://github.com/mongodb-labs/origami) project. While I was the original author, I have since left MongoDB and am continuing development and maintenance of this fork independently.
+
+This tool is not officially supported or endorsed by MongoDB, Inc. The code is released for use "AS IS" without any warranties of any kind, including, but not limited to its installation, use, or performance. Do not run this tool against critical production systems.
 
 ## Overview
 
@@ -34,7 +36,7 @@ pip install origami-ml
 You can also clone the repository to your local machine and install the dependencies manually:
 
 ```shell
-git clone https://github.com/mongodb-labs/origami.git
+git clone https://github.com/rueckstiess/origami.git
 cd origami
 pip install -r requirements.txt
 pip install -e .

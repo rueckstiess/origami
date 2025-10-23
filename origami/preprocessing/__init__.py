@@ -1,5 +1,5 @@
 from .pipes import (
-    UpscalerPipe, DocPermuterPipe, ShuffleRowsPipe, SchemaParserPipe, 
+    UpscalerPipe, DocPermuterPipe, ShuffleRowsPipe, SortFieldsPipe, SchemaParserPipe,
     TargetFieldPipe, DocTokenizerPipe, TokenEncoderPipe, PadTruncTokensPipe,
     ExistsTrackerPipe, KBinsDiscretizerPipe, IdSetterPipe
 )

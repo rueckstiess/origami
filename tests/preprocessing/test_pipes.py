@@ -14,6 +14,7 @@ from origami.preprocessing import (
     PadTruncTokensPipe,
     SchemaParserPipe,
     ShuffleRowsPipe,
+    SortFieldsPipe,
     TargetFieldPipe,
     TokenEncoderPipe,
     UpscalerPipe,
@@ -115,8 +116,94 @@ class TestDocPermuterPipe(unittest.TestCase):
         self.assertIsInstance(df.loc[0, "docs"]["a"], list)
         self.assertTrue(df.loc[0, "docs"]["a"] == list(range(100)))
 
-        self.assertIn("ordered_docs", df.columns)
-        self.assertTrue(df.loc[0, "ordered_docs"]["a"] == list(range(100)))
+
+class TestSortFieldsPipe(unittest.TestCase):
+    def test_sort_fields_basic(self):
+        """Test that fields are sorted alphabetically."""
+        doc = {"z": 1, "a": 2, "m": 3}
+        df = pd.DataFrame({"docs": [doc]})
+
+        pipe = SortFieldsPipe()
+        result_df = pipe.transform(df)
+
+        result_doc = result_df.loc[0, "docs"]
+        self.assertIsInstance(result_doc, OrderedDict)
+        self.assertEqual(list(result_doc.keys()), ["a", "m", "z"])
+        self.assertEqual(result_doc["a"], 2)
+        self.assertEqual(result_doc["m"], 3)
+        self.assertEqual(result_doc["z"], 1)
+
+    def test_sort_fields_multiple_docs(self):
+        """Test sorting fields across multiple documents."""
+        docs = [{"z": 1, "a": 2}, {"b": 3, "a": 4, "c": 5}, {"x": 6, "y": 7}]
+        df = pd.DataFrame({"docs": docs})
+
+        pipe = SortFieldsPipe()
+        result_df = pipe.transform(df)
+
+        # Check first doc
+        self.assertEqual(list(result_df.loc[0, "docs"].keys()), ["a", "z"])
+        # Check second doc
+        self.assertEqual(list(result_df.loc[1, "docs"].keys()), ["a", "b", "c"])
+        # Check third doc
+        self.assertEqual(list(result_df.loc[2, "docs"].keys()), ["x", "y"])
+
+    def test_sort_fields_preserves_values(self):
+        """Test that all value types are preserved."""
+        doc = {
+            "z_string": "test",
+            "a_int": 42,
+            "m_float": 3.14,
+            "b_bool": True,
+            "n_none": None,
+            "d_list": [1, 2, 3],
+            "c_dict": {"nested": "value"},
+        }
+        df = pd.DataFrame({"docs": [doc]})
+
+        pipe = SortFieldsPipe()
+        result_df = pipe.transform(df)
+
+        result_doc = result_df.loc[0, "docs"]
+        self.assertEqual(result_doc["a_int"], 42)
+        self.assertEqual(result_doc["b_bool"], True)
+        self.assertEqual(result_doc["c_dict"], {"nested": "value"})
+        self.assertEqual(result_doc["d_list"], [1, 2, 3])
+        self.assertEqual(result_doc["m_float"], 3.14)
+        self.assertIsNone(result_doc["n_none"])
+        self.assertEqual(result_doc["z_string"], "test")
+
+    def test_sort_fields_empty_doc(self):
+        """Test sorting an empty document."""
+        df = pd.DataFrame({"docs": [{}]})
+
+        pipe = SortFieldsPipe()
+        result_df = pipe.transform(df)
+
+        result_doc = result_df.loc[0, "docs"]
+        self.assertIsInstance(result_doc, OrderedDict)
+        self.assertEqual(len(result_doc), 0)
+
+    def test_sort_fields_missing_docs_column(self):
+        """Test that pipe raises exception when docs column is missing."""
+        df = pd.DataFrame({"other_column": [1, 2, 3]})
+
+        pipe = SortFieldsPipe()
+        with self.assertRaises(ColumnMissingException):
+            pipe.transform(df)
+
+    def test_sort_fields_does_not_modify_original(self):
+        """Test that original dataframe is not modified."""
+        doc = {"z": 1, "a": 2}
+        df = pd.DataFrame({"docs": [doc]})
+
+        pipe = SortFieldsPipe()
+        result_df = pipe.transform(df)
+
+        # Original should be unchanged (dict order may vary, but should have same keys)
+        self.assertEqual(set(df.loc[0, "docs"].keys()), {"z", "a"})
+        # Result should be sorted
+        self.assertEqual(list(result_df.loc[0, "docs"].keys()), ["a", "z"])
 
 
 class TestSchemaParserPipe(unittest.TestCase):

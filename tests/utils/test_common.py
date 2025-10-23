@@ -7,6 +7,7 @@ from origami.utils.common import (
     get_value_at_path,
     parse_path,
     reorder_with_target_last,
+    sort_dict_fields,
     walk_all_leaf_kvs,
 )
 
@@ -247,6 +248,73 @@ class TestDictionaryUtils(unittest.TestCase):
         expected = {"a": 1, "b": {"b1": True, "b2": False, "new": {"deeper": Symbol.UNKNOWN}}, "c": "test"}
         self.assertEqual(dict(result), expected)
         self.assertEqual(value, Symbol.UNKNOWN)
+
+
+class TestSortDictFields(unittest.TestCase):
+    def test_sort_simple_dict(self):
+        """Test sorting a simple dictionary."""
+        doc = {"z": 1, "a": 2, "m": 3}
+        result = sort_dict_fields(doc)
+
+        self.assertIsInstance(result, OrderedDict)
+        self.assertEqual(list(result.keys()), ["a", "m", "z"])
+        self.assertEqual(result["a"], 2)
+        self.assertEqual(result["m"], 3)
+        self.assertEqual(result["z"], 1)
+
+    def test_sort_already_sorted(self):
+        """Test sorting an already sorted dictionary."""
+        doc = {"a": 1, "b": 2, "c": 3}
+        result = sort_dict_fields(doc)
+
+        self.assertEqual(list(result.keys()), ["a", "b", "c"])
+        self.assertEqual(dict(result), doc)
+
+    def test_sort_empty_dict(self):
+        """Test sorting an empty dictionary."""
+        doc = {}
+        result = sort_dict_fields(doc)
+
+        self.assertIsInstance(result, OrderedDict)
+        self.assertEqual(len(result), 0)
+
+    def test_sort_preserves_values(self):
+        """Test that sorting preserves all value types."""
+        doc = {
+            "z_string": "test",
+            "a_int": 42,
+            "m_float": 3.14,
+            "b_bool": True,
+            "n_none": None,
+            "d_list": [1, 2, 3],
+            "c_dict": {"nested": "value"},
+        }
+        result = sort_dict_fields(doc)
+
+        self.assertEqual(list(result.keys()), ["a_int", "b_bool", "c_dict", "d_list", "m_float", "n_none", "z_string"])
+        self.assertEqual(result["a_int"], 42)
+        self.assertEqual(result["b_bool"], True)
+        self.assertEqual(result["c_dict"], {"nested": "value"})
+        self.assertEqual(result["d_list"], [1, 2, 3])
+        self.assertEqual(result["m_float"], 3.14)
+        self.assertIsNone(result["n_none"])
+        self.assertEqual(result["z_string"], "test")
+
+    def test_sort_numeric_string_keys(self):
+        """Test sorting with numeric string keys."""
+        doc = {"10": "ten", "2": "two", "1": "one"}
+        result = sort_dict_fields(doc)
+
+        # String sorting: "1" < "10" < "2"
+        self.assertEqual(list(result.keys()), ["1", "10", "2"])
+
+    def test_sort_case_sensitive(self):
+        """Test that sorting is case-sensitive."""
+        doc = {"Z": 1, "a": 2, "A": 3, "z": 4}
+        result = sort_dict_fields(doc)
+
+        # Uppercase comes before lowercase in ASCII
+        self.assertEqual(list(result.keys()), ["A", "Z", "a", "z"])
 
 
 if __name__ == "__main__":
