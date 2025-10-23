@@ -1,6 +1,58 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "origami-ml"
+version = "0.1.0"
+description = "An ML classifier model to make predictions from semi-structured data."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Thomas Rueckstiess", email = "me@tomr.au" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "click>=8.1.7",
+    "click-option-group>=0.5.6",
+    "guildai>=0.9.0",
+    "lightgbm>=4.5.0",
+    "matplotlib>=3.9.2",
+    "mdbrtools>=0.1.1",
+    "numpy>=1.26.4",
+    "omegaconf>=2.3.0",
+    "openml>=0.15.1",
+    "pandas>=2.2.3",
+    "pymongo>=4.8.0",
+    "python-dotenv>=1.0.1",
+    "scikit-learn>=1.5.2",
+    "torch>=2.4.1",
+    "tqdm>=4.66.4",
+    "xgboost>=2.1.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.1.1",
+    "jupyter-contrib-nbextensions>=0.7.0",
+    "pytest>=8.3.3",
+    "ruff>=0.9.3",
+]
+
+[project.scripts]
+origami = "origami.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rueckstiess/origami"
+Repository = "https://github.com/rueckstiess/origami"
+Issues = "https://github.com/rueckstiess/origami/issues"
 
 [tool.ruff]
 indent-width = 4

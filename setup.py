@@ -17,11 +17,11 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="origami-ml",
     author="Thomas Rueckstiess",
-    author_email="thomas.rueckstiess@mongodb.com",
+    author_email="me@tomr.au",
     description="An ML classifier model to make predictions from semi-structured data.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/mongodb-labs/origami",
+    url="https://github.com/rueckstiess/origami",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
