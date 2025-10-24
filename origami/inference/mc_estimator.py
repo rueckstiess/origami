@@ -1,4 +1,5 @@
 import math
+import random
 
 import numpy as np
 import pandas as pd
@@ -147,8 +148,7 @@ class MCEstimator:
         # Generate n complete documents
         samples = []
         for _ in range(n):
-            doc = {field: np.random.choice(field_allowed_values[field]) for field in all_schema_fields}
-
+            doc = {field: random.choice(field_allowed_values[field]) for field in all_schema_fields}
             # Apply field ordering to match training pipeline
             if self.has_sorter:
                 # Sort fields alphabetically if SortFieldsPipe was used in training
