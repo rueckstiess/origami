@@ -70,3 +70,9 @@ ignore = [
     "E741",  # allow usage 'l', 'O', or 'I' as variable names, though they can be indistinguishable from numbers
     "F402",  # allow variable name shadowing; does not seem to work too well
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Suppress pkg_resources deprecation warning from guildai (deprecated dependency, will be removed)
+    "ignore:pkg_resources is deprecated:UserWarning:guild",
+]
