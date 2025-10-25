@@ -30,6 +30,7 @@ class ColumnMissingException(Exception):
 
 class BasePipe(BaseEstimator, TransformerMixin):
     def fit(self, X: pd.DataFrame, y=None):
+        self._is_fitted = True
         return self
 
     def transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
@@ -207,7 +208,7 @@ class TokenEncoderPipe(BasePipe):
 
     def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
         """explicitly implemented here for performance reasons, so we only need to encode once."""
-
+        self._is_fitted = True
         # if max_tokens is specified, we need to truncate before encoding and can't
         # fit_transform, because we don't know how many tokens we'll end up with
         if self.max_tokens:
@@ -285,6 +286,7 @@ class ExistsTrackerPipe(BasePipe):
                 self._walk_all_keys(value, prefix=path)
 
     def fit(self, X: pd.DataFrame, y=None) -> "ExistsTrackerPipe":
+        self._is_fitted = True
         if "docs" not in X.columns:
             raise ColumnMissingException("ExistsTrackerPipe requires column 'docs' in the DataFrame.")
 

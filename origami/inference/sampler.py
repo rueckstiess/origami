@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -77,7 +78,17 @@ class Sampler:
 
         # Decode token sequences to documents
         token_sequences = self.encoder.decode(completed_idx)
-        documents = [detokenize(tokens) for tokens in token_sequences]
+
+        documents = []
+        # try to detokenize back into documents, skip invalid sequences
+        for tokens in token_sequences:
+            try:
+                doc = detokenize(tokens)
+                documents.append(doc)
+            except Exception as e:
+                warnings.warn(
+                    f"Invalid / incomplete token sequence, could not detokenize {tokens}. This document will be skipped."
+                )
 
         # Switch model back to train mode
         self.model.train()
