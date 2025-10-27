@@ -76,9 +76,7 @@ def embed(source, **kwargs):
 
     # validate position="target" requires target_field
     if kwargs["position"] == "target" and config.data.target_field is None:
-        raise click.BadParameter(
-            "--position=target requires a target field. Model was trained without --target-field."
-        )
+        raise click.BadParameter("--position=target requires a target field. Model was trained without --target-field.")
 
     # create model and load weights
     match config.model.guardrails:
