@@ -17,3 +17,8 @@ env/
 dist/
 *.pt
 dump/
+*.npy
+*.csv
+*.json[l]
+*.png
+*.pdf

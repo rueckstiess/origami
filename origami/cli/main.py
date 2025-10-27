@@ -1,5 +1,6 @@
 import click
 
+from origami.cli.embed import embed
 from origami.cli.predict import predict
 from origami.cli.train import train
 
@@ -13,3 +14,4 @@ def main():
 
 main.add_command(train)
 main.add_command(predict)
+main.add_command(embed)

@@ -3,7 +3,9 @@ import pathlib
 from typing import Optional
 
 import click
+import numpy as np
 import pandas as pd
+import torch
 from omegaconf import OmegaConf
 
 from origami.preprocessing import docs_to_df, load_df_from_mongodb
@@ -132,3 +134,72 @@ def load_data(source: str, data_config: DataConfig) -> pd.DataFrame:
         df = df.head(data_config.limit)
 
     return df
+
+
+def infer_output_format(file_path: pathlib.Path) -> str:
+    """
+    Infer output format from file extension.
+
+    Args:
+        file_path: Path to the output file.
+
+    Returns:
+        str: The inferred format ('csv', 'json', 'jsonl', 'torch', or 'numpy').
+
+    Raises:
+        ValueError: If the file extension is not supported.
+    """
+    suffix = file_path.suffix.lower()
+    format_map = {
+        ".csv": "csv",
+        ".json": "json",
+        ".jsonl": "jsonl",
+        ".pt": "torch",
+        ".pth": "torch",
+        ".npy": "numpy",
+    }
+    if suffix not in format_map:
+        supported = ", ".join(format_map.keys())
+        raise ValueError(f"Unsupported output format: {suffix}. Supported: {supported}")
+    return format_map[suffix]
+
+
+def save_embeddings(embeddings: np.ndarray, output_file: pathlib.Path, format: str) -> None:
+    """
+    Save embeddings to file in the specified format.
+
+    Args:
+        embeddings: NumPy array of embeddings with shape (n_docs, n_embd).
+        output_file: Path to the output file.
+        format: Output format ('csv', 'json', 'jsonl', 'torch', or 'numpy').
+
+    Raises:
+        ValueError: If the format is not supported.
+    """
+    match format:
+        case "csv":
+            # Save as CSV with columns: emb_0, emb_1, ..., emb_n
+            df = pd.DataFrame(embeddings, columns=[f"emb_{i}" for i in range(embeddings.shape[1])])
+            df.to_csv(output_file, index=False)
+
+        case "json":
+            # Save as nested array
+            with open(output_file, "w") as f:
+                json.dump(embeddings.tolist(), f, indent=2)
+
+        case "jsonl":
+            # One embedding array per line
+            with open(output_file, "w") as f:
+                for row in embeddings:
+                    f.write(json.dumps(row.tolist()) + "\n")
+
+        case "torch":
+            # Save as PyTorch tensor (convert from numpy)
+            torch.save(torch.from_numpy(embeddings), output_file)
+
+        case "numpy":
+            # Save as NumPy array
+            np.save(output_file, embeddings)
+
+        case _:
+            raise ValueError(f"Unsupported format: {format}")
