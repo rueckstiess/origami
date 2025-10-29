@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ORiGAMi is a transformer-based machine learning model for supervised classification from semi-structured data (MongoDB documents, JSON files). It directly operates on JSON data without requiring manual feature extraction or flattening to tabular format.
 
+## Git Workflow
+
+**IMPORTANT: This repository is a fork of mongodb-labs/origami**
+
+Git remotes:
+- `origin`: https://github.com/rueckstiess/origami.git (fork)
+- `upstream`: https://github.com/mongodb-labs/origami.git (original)
+
+**Pull Request Policy:**
+- **ALWAYS** create pull requests against `rueckstiess/origami` (origin), NOT against `mongodb-labs/origami` (upstream)
+- Use `--repo rueckstiess/origami` when creating PRs with `gh pr create`
+- PRs should target the `main` branch of the fork
+
 ## Development Commands
 
 ### Installation and Setup
