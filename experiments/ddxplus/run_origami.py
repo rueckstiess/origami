@@ -18,9 +18,8 @@ from origami.preprocessing import (
     UpscalerPipe,
     load_df_from_mongodb,
 )
-from origami.utils.common import set_seed
+from origami.utils.common import load_secrets, print_scalars, set_seed
 from origami.utils.config import ModelConfig, PositionEncodingMethod, TrainConfig
-from origami.utils.guild import load_secrets, print_guild_scalars
 
 flags = SimpleNamespace()
 
@@ -111,7 +110,7 @@ metrics = Metrics(model)
 
 def progress_callback(model):
     if model.batch_num % train_config.print_every == 0:
-        print_guild_scalars(
+        print_scalars(
             step=f"{int(model.batch_num / train_config.print_every)}",
             epoch=model.epoch_num,
             batch_num=model.batch_num,
@@ -186,4 +185,4 @@ gtpa_at_1 = np.mean(gtpa_at_1)
 gtpa = np.mean(gtpa)
 
 print(f"\n Evaluation result for {flags.eval_data} dataset")
-print_guild_scalars(ddr=ddr, ddp=ddp, f1=f1, gtpa_at_1=gtpa_at_1, gtpa=gtpa)
+print_scalars(ddr=ddr, ddp=ddp, f1=f1, gtpa_at_1=gtpa_at_1, gtpa=gtpa)

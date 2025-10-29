@@ -1,5 +1,6 @@
 import itertools
 import operator
+import os
 import pickle
 import random
 from collections import OrderedDict
@@ -10,11 +11,45 @@ from typing import Any, Callable, Generator, Iterable, List, Optional, Tuple, Un
 import numpy as np
 import pandas as pd
 import torch
+from dotenv import dotenv_values
 from omegaconf import OmegaConf
 
 from origami.utils.config import TopLevelConfig
 
-from .guild import print_guild_scalars
+
+def print_scalars(**kwargs) -> None:
+    """Prints scalars in a nice column format for tracking during training.
+
+    Each key-value pair is printed on the same line separated by '|' markers.
+    This format makes it easy to parse training metrics from console output.
+
+    Example:
+        >>> print_scalars(step=100, loss=0.5, accuracy=0.95)
+        |  step: 100  |  loss: 0.5  |  accuracy: 0.95  |
+    """
+    for key, val in kwargs.items():
+        print(f"|  {key}: {val}", end="  ")
+    print("|")
+
+
+def detect_remote() -> bool:
+    """Returns True if this experiment runs on GCP.
+
+    TODO: Find better way of detecting remote execution that works for all clouds.
+    """
+    return os.environ.get("USER", None) == "gcpuser"
+
+
+def load_secrets():
+    """Loads secrets from .env.local or .env.remote depending on where the code is executed.
+
+    Returns:
+        dict: Dictionary of environment variables from the appropriate .env file
+    """
+    env = "remote" if detect_remote() else "local"
+    secrets = dotenv_values(f".env.{env}")
+    print(f"\nloading {env} secrets.\n")
+    return secrets
 
 
 class QueryRegionEmptyException(Exception):
@@ -387,7 +422,7 @@ def make_progress_callback(
                             test_acc=f"{predictor.accuracy(test_dataset.sample(n=train_config.sample_test)):.4f}",
                         )
 
-            print_guild_scalars(**scalars)
+            print_scalars(**scalars)
 
     return progress_callback
 

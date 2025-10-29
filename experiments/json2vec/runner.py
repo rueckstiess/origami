@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import pickle
 import sys
 from argparse import ArgumentParser
@@ -12,11 +11,10 @@ import pandas as pd
 from omegaconf import OmegaConf
 from pymongo import MongoClient
 from sklearn.model_selection import KFold, train_test_split
-from utils import flatten_config
 
 from origami.utils import set_seed
+from origami.utils.common import detect_remote, load_secrets, print_scalars
 from origami.utils.config import TopLevelConfig
-from origami.utils.guild import detect_remote, get_run_objects, load_secrets, print_guild_scalars
 
 
 class BaseRunner:
@@ -157,7 +155,7 @@ class BaseRunner:
             scalars[f"{key}_max"] = np.max([e[key] for e in evals])
 
         # print rounded scalars
-        print_guild_scalars(**{k: f"{v:.4f}" for k, v in scalars.items()})
+        print_scalars(**{k: f"{v:.4f}" for k, v in scalars.items()})
         return scalars
 
     def get_splits(self, df) -> tuple:
@@ -217,22 +215,25 @@ class BaseRunner:
 
     def _verify_skip_identical(self):
         """if a completed run with the exact same flags already exists, skip (unless `repeat` flag is set)"""
-        if self.config.get("repeat", False):
-            return
+        pass
+        # if self.config.get("repeat", False):
+        #     return
 
-        model_op = os.environ.get("GUILD_OP", "debug")
-        runs = get_run_objects(
-            operations=model_op, labels="temp", filter_expr=f"dataset={self.config.dataset}", completed=True
-        )
-        config = OmegaConf.to_container(self.config, enum_to_str=True)
-        del config["data"]
-        config = flatten_config(config)
+        # model_op = os.environ.get("GUILD_OP", "debug")
 
-        for run in runs:
-            run_flags = run["flags"]
-            diff = set(run_flags.items()) - set(config.items())
-            if diff == set():
-                raise Exception(f"run has the same config as completed run {run.short_id} -- skipping.")
+        # runs = gapi.runs.list(
+        #     filters={"status": "completed", "op": model_op},
+        #     order_by=["-created"],
+        # )
+        # config = OmegaConf.to_container(self.config, enum_to_str=True)
+        # del config["data"]
+        # config = flatten_config(config)
+
+        # for run in runs:
+        #     run_flags = run["flags"]
+        #     diff = set(run_flags.items()) - set(config.items())
+        #     if diff == set():
+        #         raise Exception(f"run has the same config as completed run {run.short_id} -- skipping.")
 
     def verify(self):
         """any verification checks before starting the run. If this method returns raises an
