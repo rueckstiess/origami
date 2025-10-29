@@ -41,7 +41,6 @@ setup(
     install_requires=[
         "click>=8.1.7",
         "click-option-group>=0.5.6",
-        "guildai>=0.9.0",
         "lightgbm>=4.5.0",
         "matplotlib>=3.9.2",
         "mdbrtools>=0.1.1",

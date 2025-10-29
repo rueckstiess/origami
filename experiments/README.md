@@ -11,7 +11,11 @@ There are 3 sub-directories, each with their own `README.md` file:
 
 ### Experiment Tracking
 
-We use the open source library [guild.ai](https://guild.ai) for experiment management and result tracking.
+**Note:** As of October 2025, the `guildai` dependency has been removed from the main ORiGAMi codebase as it is no longer actively maintained. The experiments in `json2vec`, `ddxplus`, and `codenet` directories were originally designed to use [guild.ai](https://guild.ai) for experiment management and result tracking, but these have not been migrated. Newer experiments use [yanex](https://github.com/rueckstiess/yanex) for experiment tracking.
+
+If you wish to run the legacy experiments (`json2vec`, `ddxplus`, `codenet`), you will need to:
+1. Install `guildai` separately: `pip install guildai>=0.9.0`
+2. Be aware that you may encounter deprecation warnings from the guild package
 
 ### Datasets
 
