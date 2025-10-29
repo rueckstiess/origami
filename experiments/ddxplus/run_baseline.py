@@ -12,7 +12,7 @@ from utils import get_scores
 from xgboost import XGBClassifier
 
 from origami.preprocessing import load_df_from_mongodb
-from origami.utils.guild import load_secrets, print_guild_scalars
+from origami.utils.common import load_secrets, print_scalars
 
 # experiment flags
 model_name = "LogisticRegression"  # "XGBoost" # "RandomForest"
@@ -202,7 +202,7 @@ for clf_seed in range(n_random_seeds):
         results[score_name].append(score)
 
     guild_output = {"step": clf_seed} | scores_val | scores_test
-    print_guild_scalars(**guild_output)
+    print_scalars(**guild_output)
 
 print("\n\nAggregated metrics:")
 keys = list(results.keys())
@@ -214,5 +214,5 @@ for key in keys:
     scalars[f"{key}_max"] = np.max(results[key])
 
 # print rounded scalars
-print_guild_scalars(**{k: f"{v:.4f}" for k, v in scalars.items()})
+print_scalars(**{k: f"{v:.4f}" for k, v in scalars.items()})
 print()

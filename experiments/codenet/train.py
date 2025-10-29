@@ -17,9 +17,8 @@ from origami.preprocessing import (
     UpscalerPipe,
     load_df_from_mongodb,
 )
-from origami.utils.common import set_seed
+from origami.utils.common import load_secrets, print_scalars, set_seed
 from origami.utils.config import GuardrailsMethod, ModelConfig, PositionEncodingMethod, TrainConfig
-from origami.utils.guild import load_secrets, print_guild_scalars
 
 # populated by guild
 flags = SimpleNamespace()
@@ -154,7 +153,7 @@ predictor = Predictor(model, encoder, TARGET_FIELD)
 
 
 def progress_callback(model):
-    print_guild_scalars(
+    print_scalars(
         step=f"{int(model.batch_num)}",
         epoch=model.epoch_num,
         batch_num=model.batch_num,
@@ -166,7 +165,7 @@ def progress_callback(model):
         try:
             # train_acc = predictor.accuracy(train_dataset.sample(n=100))
             test_acc = predictor.accuracy(test_dataset.sample(n=100), show_progress=True)
-            print_guild_scalars(
+            print_scalars(
                 step=f"{int(model.batch_num)}",
                 # train_acc=f"{train_acc:.4f}",
                 test_acc=f"{test_acc:.4f}",
@@ -192,7 +191,7 @@ model.save("gpt-codenet-snapshot.pt")
 print("model saved to gpt-codenet-snapshot.pt")
 
 test_acc = predictor.accuracy(test_dataset, show_progress=True)
-print_guild_scalars(
+print_scalars(
     step=f"{int(model.batch_num / train_config.eval_every)}",
     test_acc=f"{test_acc:.4f}",
 )

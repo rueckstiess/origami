@@ -11,8 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 from utils import IdentityTransformer
 
-from origami.utils.common import flatten_docs
-from origami.utils.guild import load_secrets, print_guild_scalars
+from origami.utils.common import flatten_docs, load_secrets, print_scalars
 
 
 class BaselineRunner(BaseRunner):
@@ -124,7 +123,7 @@ class BaselineRunner(BaseRunner):
         train_acc = accuracy_score(data["y_train"], model.predict(data["X_train"]))
         test_acc = accuracy_score(data["y_test"], model.predict(data["X_test"]))
 
-        print_guild_scalars(
+        print_scalars(
             fold=fold,
             train_acc=f"{train_acc:.4f}",
             test_acc=f"{test_acc:.4f}",

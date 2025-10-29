@@ -14,8 +14,8 @@ from origami.model import ORIGAMI
 from origami.model.vpda import ObjectVPDA
 from origami.preprocessing import DFDataset, build_prediction_pipelines, load_df_from_mongodb
 from origami.utils import make_progress_callback, walk_all_leaf_kvs
+from origami.utils.common import load_secrets, print_scalars
 from origami.utils.config import GuardrailsMethod, SequenceOrderMethod
-from origami.utils.guild import get_run_path, load_secrets, print_guild_scalars
 
 
 class ORIGAMIRunner(BaseRunner):
@@ -164,7 +164,9 @@ class ORIGAMIRunner(BaseRunner):
                 label=label,
                 cwd=os.environ["PROJECT_DIR"],
             )
-            model_path = get_run_path(labels=[label])
+            # get_run_path no longer supported
+            # model_path = get_run_path(labels=[label])
+            model_path = Path(gapi.runs.list(filters={"label": label})[0].dir)
             model_path = Path.joinpath(model_path, f"origami_checkpoint_fold_{k}.pt")
 
             # wait until file was created
@@ -180,7 +182,7 @@ class ORIGAMIRunner(BaseRunner):
         predictor = Predictor(model, data["encoder"], self.config.data.target_field)
         train_acc = predictor.accuracy(data["train_eval"])
         test_acc = predictor.accuracy(data["test"], print_predictions=True)
-        print_guild_scalars(
+        print_scalars(
             fold=fold,
             train_acc=f"{train_acc:.4f}",
             test_acc=f"{test_acc:.4f}",
