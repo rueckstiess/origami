@@ -98,18 +98,24 @@ class Embedder:
                 case "target":
                     indices = torch.where(inputs == target_token_id)[1]
                 case "last":
-                    indices = torch.full((inputs.size(0),), inputs.size(1) - 1, dtype=torch.long)
+                    indices = torch.full(
+                        (inputs.size(0),), inputs.size(1) - 1, dtype=torch.long, device=self.model.device
+                    )
                 case "end":
                     indices = torch.where(inputs == end_token_id)[1]
 
             match reduction:
                 case "index":
-                    emb_batch = self.model.hidden(inputs)[torch.arange(inputs.size(0)), indices, :]
+                    emb_batch = self.model.hidden(inputs)[
+                        torch.arange(inputs.size(0), device=self.model.device), indices, :
+                    ]
                 case "sum":
-                    emb_batch = torch.cumsum(self.model.hidden(inputs), dim=1)[torch.arange(inputs.size(0)), indices, :]
+                    emb_batch = torch.cumsum(self.model.hidden(inputs), dim=1)[
+                        torch.arange(inputs.size(0), device=self.model.device), indices, :
+                    ]
                 case "mean":
                     emb_batch = torch.cumsum(self.model.hidden(inputs), dim=1)[
-                        torch.arange(inputs.size(0)), indices, :
+                        torch.arange(inputs.size(0), device=self.model.device), indices, :
                     ] / (indices.unsqueeze(1) + 1)
 
             embeddings = torch.cat((embeddings, emb_batch), dim=0)
