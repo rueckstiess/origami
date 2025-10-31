@@ -139,16 +139,16 @@ def embed(source, **kwargs):
     if kwargs["verbose"]:
         click.echo("generating embeddings...", err=True)
 
-    with tqdm(total=len(test_dataset), disable=not kwargs["verbose"], desc="Embedding", unit="doc") as pbar:
+    with tqdm(total=len(test_dataset), disable=not kwargs["verbose"], desc="Embedding", unit="docs") as pbar:
         # custom wrapper to update progress bar
-        original_model_call = model.forward
+        original_hidden_call = model.hidden
 
-        def forward_with_progress(*args, **fwd_kwargs):
-            result = original_model_call(*args, **fwd_kwargs)
+        def hidden_with_progress(*args, **fwd_kwargs):
+            result = original_hidden_call(*args, **fwd_kwargs)
             pbar.update(args[0].size(0))  # update by batch size
             return result
 
-        model.forward = forward_with_progress
+        model.hidden = hidden_with_progress
 
         embeddings = embedder.embed(
             test_dataset,
@@ -156,7 +156,7 @@ def embed(source, **kwargs):
             kwargs["reduction"],
         )
 
-        model.forward = original_model_call
+        model.hidden = original_hidden_call
 
     # move to CPU
     embeddings = embeddings.cpu()

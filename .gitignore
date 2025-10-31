@@ -22,3 +22,5 @@ dump/
 *.json[l]
 *.png
 *.pdf
+experiments/index-advisor/ab-results/*
+experiments/index-advisor/cache/*
