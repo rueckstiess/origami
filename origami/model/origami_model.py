@@ -4,6 +4,7 @@ Complete ORIGAMI model for JSON classification/generation.
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -14,6 +15,9 @@ from .backbone import create_backbone
 from .config import OrigamiConfig
 from .embeddings import OrigamiEmbeddings
 from .heads import ContinuousHead, DiscreteHead
+
+if TYPE_CHECKING:
+    from origami.tokenizer.vocabulary import Vocabulary
 
 
 @dataclass
@@ -54,11 +58,12 @@ class OrigamiModel(nn.Module):
         continuous_head: Optional MoG head for numeric values
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: OrigamiConfig, vocab: "Vocabulary | None" = None):
         """Initialize ORIGAMI model.
 
         Args:
             config: Model configuration
+            vocab: Vocabulary instance (required if use_grammar_constraints=True)
         """
         super().__init__()
 
@@ -77,6 +82,16 @@ class OrigamiModel(nn.Module):
         self.continuous_head: ContinuousHead | None = None
         if config.use_continuous_head:
             self.continuous_head = ContinuousHead(config)
+
+        # Grammar constraints PDA (optional)
+        self._grammar_pda = None
+        if config.use_grammar_constraints:
+            if vocab is None:
+                raise ValueError(
+                    "vocab is required when use_grammar_constraints=True"
+                )
+            from origami.constraints.json_grammar import JSONGrammarPDA
+            self._grammar_pda = JSONGrammarPDA(vocab, max_depth=config.max_depth)
 
     def forward(
         self,
@@ -116,9 +131,10 @@ class OrigamiModel(nn.Module):
         # 3. Discrete head
         logits = self.discrete_head(hidden)
 
-        # 4. Apply grammar constraints (no-op placeholder for Phase 4)
+        # 4. Apply grammar constraints (both training and inference)
+        # By masking invalid tokens, the model focuses probability mass on valid tokens only.
         if self.config.use_grammar_constraints:
-            logits = self._apply_grammar_mask(logits, input_ids)
+            logits = self._apply_grammar_mask(logits, input_ids, attention_mask)
 
         # 5. Continuous head (if enabled)
         continuous_params = None
@@ -144,20 +160,33 @@ class OrigamiModel(nn.Module):
             hidden_states=hidden,
         )
 
-    def _apply_grammar_mask(self, logits: Tensor, input_ids: Tensor) -> Tensor:
+    def _apply_grammar_mask(
+        self,
+        logits: Tensor,
+        input_ids: Tensor,
+        attention_mask: Tensor | None = None,
+    ) -> Tensor:
         """Apply grammar constraints to logits.
 
-        Currently a no-op placeholder. Will be implemented in Phase 4.
+        Uses the PDA to compute which tokens are grammatically valid at each
+        position, then masks invalid tokens with -inf.
 
         Args:
             logits: Raw logits of shape (batch, seq_len, vocab_size)
             input_ids: Input token IDs for grammar state
+            attention_mask: Optional attention mask
 
         Returns:
-            Masked logits (currently unchanged)
+            Logits with invalid tokens masked to -inf
         """
-        # TODO: Phase 4 - Implement grammar constraint masking
-        return logits
+        if self._grammar_pda is None:
+            return logits
+
+        # Compute valid token mask for each position
+        valid_mask = self._grammar_pda.compute_valid_mask(input_ids, attention_mask)
+
+        # Apply mask: set invalid tokens to -inf
+        return self._grammar_pda.apply_constraints(logits, valid_mask)
 
     def _compute_loss(
         self,

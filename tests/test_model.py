@@ -390,7 +390,7 @@ class TestOrigamiModel:
 
     def test_forward_no_labels(self, config, tokenizer):
         """Test forward pass without labels."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
 
@@ -410,7 +410,7 @@ class TestOrigamiModel:
 
     def test_forward_with_labels(self, config, tokenizer):
         """Test forward pass with labels (computes loss)."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
 
@@ -429,7 +429,7 @@ class TestOrigamiModel:
 
     def test_forward_batch(self, config, tokenizer):
         """Test forward pass with batched input."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         objects = [
             {"name": "Alice", "age": 30},
@@ -455,7 +455,7 @@ class TestOrigamiModel:
         This test verifies the bug fix where attention_mask was passed but
         not used in _compute_loss. Padding positions should be ignored.
         """
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         # Create a batch with sequences of different lengths
         objects = [
@@ -495,7 +495,7 @@ class TestOrigamiModel:
 
     def test_padding_positions_ignored_in_loss(self, config, tokenizer):
         """Test that loss is only computed on valid (non-padding) positions."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         # Use objects that are already in the tokenizer's vocabulary
         short_obj = {"name": "Alice"}
@@ -543,9 +543,9 @@ class TestOrigamiModel:
         # Allow some tolerance for numerical differences
         assert abs(output_combined.loss.item() - expected_avg.item()) < 1.0
 
-    def test_get_num_parameters(self, config):
+    def test_get_num_parameters(self, config, tokenizer):
         """Test parameter counting."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         num_params = model.get_num_parameters(trainable_only=True)
         total_params = model.get_num_parameters(trainable_only=False)
@@ -555,7 +555,7 @@ class TestOrigamiModel:
 
     def test_model_gradient_flow(self, config, tokenizer):
         """Test that gradients flow through the model."""
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         # Use data with arrays so index_embeddings gets gradients
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30, "scores": [90, 85]}])
@@ -587,7 +587,7 @@ class TestOrigamiModel:
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_forward_on_device(self, config, tokenizer, device):
         """Test forward pass on different devices."""
-        model = OrigamiModel(config).to(device)
+        model = OrigamiModel(config, vocab=tokenizer.vocab).to(device)
 
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
         batch = batch.to(device)
@@ -608,7 +608,7 @@ class TestOrigamiModel:
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_gradient_flow_on_device(self, config, tokenizer, device):
         """Test gradient computation on different devices."""
-        model = OrigamiModel(config).to(device)
+        model = OrigamiModel(config, vocab=tokenizer.vocab).to(device)
 
         # Use data with arrays so index_embeddings gets gradients
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30, "scores": [90, 85]}])
@@ -644,8 +644,9 @@ class TestOrigamiModel:
             n_layers=2,
             use_continuous_head=True,
             num_mixture_components=3,
+            max_depth=tokenizer.max_depth,
         )
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         # Verify continuous head exists
         assert model.continuous_head is not None
@@ -675,8 +676,9 @@ class TestOrigamiModel:
             n_layers=2,
             use_continuous_head=True,
             num_mixture_components=3,
+            max_depth=tokenizer.max_depth,
         )
-        model = OrigamiModel(config)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
         seq_len = batch.input_ids.shape[1]

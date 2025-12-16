@@ -738,7 +738,7 @@ class OrigamiConfig:
     lstm_num_layers: int = 2
     
     # Position encoding (pluggable)
-    kvpe_pooling: Literal["sum", "weighted", "rotary", "gru", "transformer"] = "rotary"
+    kvpe_pooling: Literal["sum", "weighted", "rotary", "gru", "transformer"] = "sum"  # MVP: sum (original paper)
     kvpe_pooling_kwargs: dict = field(default_factory=dict)  # e.g., {"num_layers": 2} for GRU
     
     # Continuous head (optional)
@@ -778,32 +778,41 @@ class TrainingConfig:
 ```python
 class OrigamiEmbeddings(nn.Module):
     """Token embeddings + KVPE position encoding."""
-    
-    def __init__(self, config: OrigamiConfig, vocab: Vocabulary): ...
-    
+
+    def __init__(self, config: OrigamiConfig, vocab: Vocabulary):
+        # Token embeddings (shared with KVPE for key position encoding)
+        self.token_embedding = nn.Embedding(vocab.size, config.d_model)
+
+        # KVPE with shared key embeddings
+        self.kvpe = KeyValuePositionEncoding(
+            d_model=config.d_model,
+            vocab_size=vocab.size,
+            max_depth=config.max_depth,
+            max_array_index=config.max_array_position,
+            pooling=config.kvpe_pooling,
+            share_key_embeddings=True,
+            **config.kvpe_pooling_kwargs,
+        )
+        self.kvpe.set_key_embeddings(self.token_embedding)  # Share embeddings
+
+        self.dropout = nn.Dropout(config.dropout)
+
     def forward(
         self,
         input_ids: torch.LongTensor,        # (batch, seq_len)
         path_types: torch.LongTensor,       # (batch, seq_len, max_depth)
         path_ids: torch.LongTensor,         # (batch, seq_len, max_depth)
         path_lengths: torch.LongTensor,     # (batch, seq_len)
-        numeric_values: torch.FloatTensor | None = None,  # (batch, seq_len)
     ) -> torch.FloatTensor:
         # 1. Token embeddings
         embeds = self.token_embedding(input_ids)  # (batch, seq_len, d_model)
-        
-        # 2. Scale NUM token embeddings by preprocessed value
-        #    numeric_values are already scaled by sklearn scaler during tokenization
-        if numeric_values is not None:
-            num_mask = (input_ids == self.vocab.num_token_id)
-            # Multiply embedding by scaled value (which is roughly in [-3, 3] for standard scaler)
-            embeds = embeds.clone()
-            embeds[num_mask] = embeds[num_mask] * numeric_values[num_mask].unsqueeze(-1)
-        
-        # 3. Add position encoding (non-commutative KVPE)
+
+        # 2. Add position encoding (KVPE)
         pos_embeds = self.kvpe(path_types, path_ids, path_lengths)
-        
+
         return self.dropout(embeds + pos_embeds)
+
+        # Note: NUM token scaling for continuous head added in Phase 6
 ```
 
 **Numeric Value Preprocessing** (in tokenizer/data pipeline):
@@ -990,16 +999,17 @@ class OrigamiModel(nn.Module):
     
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        path_ids: torch.LongTensor,
-        array_positions: torch.LongTensor,
+        input_ids: torch.LongTensor,           # (batch, seq_len)
+        path_types: torch.LongTensor,          # (batch, seq_len, max_depth) - 0=pad, 1=key, 2=index
+        path_ids: torch.LongTensor,            # (batch, seq_len, max_depth) - key vocab ID or array index
+        path_lengths: torch.LongTensor,        # (batch, seq_len)
         attention_mask: torch.BoolTensor | None = None,
-        numeric_values: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
-        numeric_labels: torch.FloatTensor | None = None,
+        numeric_values: torch.FloatTensor | None = None,  # Phase 6: for continuous head
+        numeric_labels: torch.FloatTensor | None = None,  # Phase 6: for continuous head
     ) -> OrigamiOutput:
         # 1. Embeddings
-        hidden = self.embeddings(input_ids, path_ids, array_positions, numeric_values)
+        hidden = self.embeddings(input_ids, path_types, path_ids, path_lengths)
         
         # 2. Backbone
         hidden = self.backbone(hidden, attention_mask)
@@ -1398,32 +1408,34 @@ HuggingFace integration is optional.
 
 ### Phase 3: Model Core
 6. `config.py` - Configuration dataclass with all options
-7. `embeddings.py` - Token embeddings + KVPE + NUM scaling
-8. `backbone.py` - Start with TransformerBackbone only
+7. `embeddings.py` - Token embeddings + KVPE (shared key embeddings)
+8. `backbone.py` - TransformerBackbone using PyTorch built-in layers
 9. `heads.py` - DiscreteHead only initially
-10. `origami_model.py` - Assemble components, basic forward pass
+10. `origami_model.py` - Assemble components, basic forward pass (grammar mask as no-op placeholder)
+11. Add `encode_batch()` to JSONTokenizer - converts TokenizedInstance to tensors
 
 ### Phase 4: Grammar Constraints
-11. `json_grammar.py` - Stack-based grammar state machine
-12. `constrained_loss.py` - Masked cross-entropy loss
-13. Integration tests: verify only valid sequences can be generated
+12. `json_grammar.py` - Stack-based grammar state machine
+13. `constrained_loss.py` - Masked cross-entropy loss
+14. Integration tests: verify only valid sequences can be generated
 
 ### Phase 5: Training Infrastructure
-14. `collator.py` - Batching with key-order shuffling for augmentation
-15. `trainer.py` - Training loop with upscaling support
-16. End-to-end test on synthetic dataset (dungeons-style)
+15. `collator.py` - Batching with key-order shuffling (note: encode_batch already in tokenizer)
+16. `trainer.py` - Training loop with upscaling support
+17. End-to-end test on synthetic dataset (dungeons-style)
 
 ### Phase 6: Extensions
-17. `numeric_scaler.py` - sklearn-based preprocessing for continuous values
-18. `ContinuousHead` in `heads.py` - Mixture of Gaussians output
-19. `tabular_tokenizer.py` - Simplified fixed-schema mode
-20. `LSTMBackbone` in `backbone.py`
-21. HuggingFace integration (optional)
+18. `numeric_scaler.py` - sklearn-based preprocessing for continuous values
+19. `ContinuousHead` in `heads.py` - Mixture of Gaussians output
+20. NUM token scaling in embeddings layer
+21. `tabular_tokenizer.py` - Simplified fixed-schema mode
+22. `LSTMBackbone` in `backbone.py`
+23. HuggingFace integration (optional)
 
 ### Phase 7: Validation
-22. Reproduce JSONified dataset results (Section 4.1)
-23. Reproduce DDXPlus results (Section 4.2) 
-24. Reproduce CodeNet results (Section 4.3)
+24. Reproduce JSONified dataset results (Section 4.1)
+25. Reproduce DDXPlus results (Section 4.2)
+26. Reproduce CodeNet results (Section 4.3)
 
 ---
 
@@ -1433,7 +1445,7 @@ HuggingFace integration is optional.
    - `sum`: Matches original paper (for reproducibility), but commutative
    - `rotary`: Good balance of efficiency and order-awareness
    - `gru`: Most expressive, but sequential
-   - **Suggestion**: Default to `rotary`, keep `sum` for ablation comparison with paper
+   - **Decision**: Default to `sum` for MVP (matches original paper), easy to switch to rotary/gru
 
 2. **Continuous head scaler integration**:
    - Currently: Separate `NumericScaler` preprocessing step
