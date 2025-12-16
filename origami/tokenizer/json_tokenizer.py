@@ -6,10 +6,13 @@ Supports key-order shuffling for data augmentation during training.
 
 import pickle
 import random
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path as FilePath
 from typing import Any
+
+import torch
+from torch import Tensor
 
 from .errors import DecodeError
 from .path import IndexElement, KeyElement, Path
@@ -43,6 +46,51 @@ class TokenizedInstance:
 
     def __len__(self) -> int:
         return len(self.tokens)
+
+
+@dataclass
+class EncodedBatch:
+    """A batch of encoded JSON objects ready for model input.
+
+    All tensors are padded to the maximum sequence length in the batch.
+
+    Attributes:
+        input_ids: Token IDs of shape (batch, seq_len)
+        path_types: Path element types (0=pad, 1=key, 2=index)
+            of shape (batch, seq_len, max_depth)
+        path_ids: Path element IDs (vocab ID for keys, index for arrays)
+            of shape (batch, seq_len, max_depth)
+        path_lengths: Path depths of shape (batch, seq_len)
+        attention_mask: Boolean mask where True = valid position,
+            shape (batch, seq_len)
+        numeric_values: Scaled numeric values for NUM tokens (Phase 6),
+            shape (batch, seq_len)
+        numeric_mask: Boolean mask for NUM token positions (Phase 6),
+            shape (batch, seq_len)
+        lengths: Sequence lengths before padding, shape (batch,)
+    """
+
+    input_ids: Tensor
+    path_types: Tensor
+    path_ids: Tensor
+    path_lengths: Tensor
+    attention_mask: Tensor
+    numeric_values: Tensor
+    numeric_mask: Tensor
+    lengths: Tensor
+
+    def to(self, device: torch.device) -> "EncodedBatch":
+        """Move all tensors to the specified device."""
+        return EncodedBatch(
+            input_ids=self.input_ids.to(device),
+            path_types=self.path_types.to(device),
+            path_ids=self.path_ids.to(device),
+            path_lengths=self.path_lengths.to(device),
+            attention_mask=self.attention_mask.to(device),
+            numeric_values=self.numeric_values.to(device),
+            numeric_mask=self.numeric_mask.to(device),
+            lengths=self.lengths.to(device),
+        )
 
 
 class JSONTokenizer:
@@ -319,6 +367,109 @@ class JSONTokenizer:
             List of token IDs.
         """
         return [self.vocab.encode(token) for token in instance.tokens]
+
+    def encode_batch(
+        self,
+        objects: list[dict],
+        shuffle: bool = False,
+        device: torch.device | None = None,
+    ) -> EncodedBatch:
+        """Tokenize and encode a batch of JSON objects.
+
+        This is the main entry point for preparing data for the model.
+        It tokenizes each object, converts to token IDs, encodes paths,
+        and pads to create batched tensors.
+
+        Args:
+            objects: List of JSON-like dictionaries to encode.
+            shuffle: If True, randomly permute key order at each level.
+            device: Device for output tensors. If None, uses CPU.
+
+        Returns:
+            EncodedBatch with all tensors ready for model input.
+        """
+        from origami.position_encoding import (
+            PATH_TYPE_INDEX,
+            PATH_TYPE_KEY,
+        )
+
+        if not objects:
+            raise ValueError("Cannot encode empty batch")
+
+        # Tokenize all objects
+        instances = [self.tokenize(obj, shuffle=shuffle) for obj in objects]
+
+        # Convert to token IDs
+        batch_token_ids = [self.encode_tokens(inst) for inst in instances]
+        batch_paths = [inst.paths for inst in instances]
+
+        # Get batch dimensions
+        batch_size = len(objects)
+        max_seq_len = max(len(ids) for ids in batch_token_ids)
+        lengths = torch.tensor([len(ids) for ids in batch_token_ids], dtype=torch.long)
+
+        # Initialize tensors
+        input_ids = torch.full(
+            (batch_size, max_seq_len), self.vocab.pad_token_id, dtype=torch.long
+        )
+        attention_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+        path_types = torch.zeros(
+            batch_size, max_seq_len, self.max_depth, dtype=torch.long
+        )
+        path_ids = torch.zeros(
+            batch_size, max_seq_len, self.max_depth, dtype=torch.long
+        )
+        path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
+
+        # Numeric values (placeholder for Phase 6)
+        numeric_values = torch.zeros(batch_size, max_seq_len, dtype=torch.float)
+        numeric_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+
+        # Fill tensors
+        for b, (token_ids, paths) in enumerate(zip(batch_token_ids, batch_paths, strict=True)):
+            seq_len = len(token_ids)
+            input_ids[b, :seq_len] = torch.tensor(token_ids, dtype=torch.long)
+            attention_mask[b, :seq_len] = True
+
+            # Encode paths
+            for t, path in enumerate(paths):
+                depth = min(len(path), self.max_depth)
+                path_lengths[b, t] = depth
+
+                for d, element in enumerate(path[:depth]):
+                    if isinstance(element, KeyElement):
+                        path_types[b, t, d] = PATH_TYPE_KEY
+                        # Encode key to vocab ID
+                        key_token = KeyToken(element.key)
+                        path_ids[b, t, d] = self.vocab.encode(key_token)
+                    elif isinstance(element, IndexElement):
+                        path_types[b, t, d] = PATH_TYPE_INDEX
+                        # Clamp index to valid range
+                        path_ids[b, t, d] = min(
+                            element.index, self.max_array_index - 1
+                        )
+
+        # Move to device if specified
+        if device is not None:
+            input_ids = input_ids.to(device)
+            path_types = path_types.to(device)
+            path_ids = path_ids.to(device)
+            path_lengths = path_lengths.to(device)
+            attention_mask = attention_mask.to(device)
+            numeric_values = numeric_values.to(device)
+            numeric_mask = numeric_mask.to(device)
+            lengths = lengths.to(device)
+
+        return EncodedBatch(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            numeric_values=numeric_values,
+            numeric_mask=numeric_mask,
+            lengths=lengths,
+        )
 
     def save(self, path: str | FilePath) -> None:
         """Save the tokenizer (including vocabulary) to a file."""

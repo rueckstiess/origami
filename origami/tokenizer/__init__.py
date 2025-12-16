@@ -5,7 +5,7 @@ sequences of tokens with path information for position encoding.
 """
 
 from .errors import DecodeError, VocabularyFrozenError
-from .json_tokenizer import JSONTokenizer, TokenizedInstance
+from .json_tokenizer import EncodedBatch, JSONTokenizer, TokenizedInstance
 from .path import IndexElement, KeyElement, Path, PathElement, path_to_string
 from .vocabulary import (
     ARRAY_END,
@@ -34,6 +34,7 @@ __all__ = [
     # Tokenizer
     "JSONTokenizer",
     "TokenizedInstance",
+    "EncodedBatch",
     # Path
     "KeyElement",
     "IndexElement",
