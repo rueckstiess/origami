@@ -9,7 +9,6 @@ from torch import Tensor
 
 from origami.tokenizer.vocabulary import Vocabulary
 
-
 # Stack content types
 STACK_EMPTY = 0
 STACK_OBJECT = 1
@@ -48,11 +47,32 @@ class JSONGrammarPDA:
         self.vocab = vocab
         self.max_depth = max_depth
 
-        # Pre-compute token ID sets for efficient mask creation
+        # Pre-compute token ID tensors
         self._key_ids = torch.tensor(sorted(vocab.get_all_key_ids()), dtype=torch.long)
         self._value_ids = torch.tensor(
             sorted(vocab.get_all_primitive_value_ids()), dtype=torch.long
         )
+
+        # Pre-compute mask patterns for vectorized operations
+        vocab_size = vocab.size
+
+        # Mask for all keys + OBJ_END (valid after value in object)
+        self._keys_and_obj_end_mask = torch.zeros(vocab_size, dtype=torch.bool)
+        self._keys_and_obj_end_mask[self._key_ids] = True
+        self._keys_and_obj_end_mask[vocab.obj_end_id] = True
+
+        # Mask for all values + OBJ_START + ARRAY_START (valid after key in object)
+        self._values_and_containers_mask = torch.zeros(vocab_size, dtype=torch.bool)
+        self._values_and_containers_mask[self._value_ids] = True
+        self._values_and_containers_mask[vocab.obj_start_id] = True
+        self._values_and_containers_mask[vocab.array_start_id] = True
+
+        # Mask for array elements (values + containers + ARRAY_END)
+        self._array_elements_mask = self._values_and_containers_mask.clone()
+        self._array_elements_mask[vocab.array_end_id] = True
+
+        # Cache for device-specific masks (lazy initialization)
+        self._device_masks: dict[torch.device, tuple[Tensor, Tensor, Tensor]] = {}
 
     def compute_valid_mask(
         self,
@@ -144,11 +164,14 @@ class JSONGrammarPDA:
         seen_start: Tensor,  # (batch,)
         root_closed: Tensor,  # (batch,)
         ended: Tensor,  # (batch,)
-        key_ids: Tensor,  # (n_keys,)
-        value_ids: Tensor,  # (n_values,)
+        _key_ids: Tensor,  # (n_keys,) - unused, kept for API compatibility
+        _value_ids: Tensor,  # (n_values,) - unused, kept for API compatibility
         device: torch.device,
     ) -> Tensor:
         """Get valid tokens at current position based on PDA state.
+
+        Uses pre-computed mask patterns for O(1) vectorized operations
+        instead of O(vocab_size) loops.
 
         State transitions:
         1. Initial (not seen_start): Only START valid
@@ -171,6 +194,15 @@ class JSONGrammarPDA:
         current_container = torch.gather(stack, 1, depth_idx).squeeze(1)  # (batch,)
         current_container = torch.where(depth == 0, torch.zeros_like(current_container), current_container)
 
+        # Get cached device-specific masks (avoids repeated .to() calls)
+        if device not in self._device_masks:
+            self._device_masks[device] = (
+                self._keys_and_obj_end_mask.to(device),
+                self._values_and_containers_mask.to(device),
+                self._array_elements_mask.to(device),
+            )
+        keys_and_obj_end, values_and_containers, array_elements = self._device_masks[device]
+
         # Case 1: After END -> only PAD valid
         valid[ended, self.vocab.pad_token_id] = True
 
@@ -187,36 +219,18 @@ class JSONGrammarPDA:
         valid[ready_for_root, self.vocab.obj_start_id] = True
         valid[ready_for_root, self.vocab.array_start_id] = True
 
-        # Case 5: Inside object, awaiting value -> any value type
+        # Case 5: Inside object, awaiting value -> values + containers (vectorized)
         in_obj_awaiting_val = (current_container == STACK_OBJECT) & awaiting_value & ~ended
-        if in_obj_awaiting_val.any():
-            # Set all value IDs valid for those positions
-            for vid in value_ids:
-                valid[in_obj_awaiting_val, vid.item()] = True
-            # Nested containers
-            valid[in_obj_awaiting_val, self.vocab.obj_start_id] = True
-            valid[in_obj_awaiting_val, self.vocab.array_start_id] = True
+        # Use outer product: (batch,) x (vocab,) -> (batch, vocab)
+        valid = valid | (in_obj_awaiting_val.unsqueeze(1) & values_and_containers.unsqueeze(0))
 
-        # Case 6: Inside object, not awaiting value -> key or OBJ_END
+        # Case 6: Inside object, not awaiting value -> keys + OBJ_END (vectorized)
         in_obj_not_awaiting = (current_container == STACK_OBJECT) & ~awaiting_value & ~ended
-        if in_obj_not_awaiting.any():
-            # Set all key IDs valid for those positions
-            for kid in key_ids:
-                valid[in_obj_not_awaiting, kid.item()] = True
-            # Close object
-            valid[in_obj_not_awaiting, self.vocab.obj_end_id] = True
+        valid = valid | (in_obj_not_awaiting.unsqueeze(1) & keys_and_obj_end.unsqueeze(0))
 
-        # Case 7: Inside array -> any value or ARRAY_END
+        # Case 7: Inside array -> values + containers + ARRAY_END (vectorized)
         in_array = (current_container == STACK_ARRAY) & ~ended
-        if in_array.any():
-            # Set all value IDs valid for those positions
-            for vid in value_ids:
-                valid[in_array, vid.item()] = True
-            # Nested containers
-            valid[in_array, self.vocab.obj_start_id] = True
-            valid[in_array, self.vocab.array_start_id] = True
-            # Close array
-            valid[in_array, self.vocab.array_end_id] = True
+        valid = valid | (in_array.unsqueeze(1) & array_elements.unsqueeze(0))
 
         return valid
 
@@ -343,3 +357,107 @@ class JSONGrammarPDA:
             Logits with invalid tokens masked
         """
         return logits.masked_fill(~valid_mask, masked_value)
+
+    def get_next_token_mask(
+        self,
+        token_ids: Tensor,  # (batch, seq_len)
+    ) -> Tensor:
+        """Get valid next-token mask efficiently for autoregressive generation.
+
+        Unlike compute_valid_mask which computes masks for ALL positions,
+        this method only returns the mask for the NEXT position after the
+        sequence. This is O(seq_len) instead of O(seq_len^2) for generation.
+
+        Args:
+            token_ids: Input token IDs of shape (batch, seq_len)
+
+        Returns:
+            Boolean mask of shape (batch, vocab_size) indicating valid
+            tokens for position seq_len (the next token to generate).
+        """
+        batch_size, seq_len = token_ids.shape
+        device = token_ids.device
+
+        # Initialize state tensors
+        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
+        depth = torch.zeros(batch_size, dtype=torch.long, device=device)
+        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+        # Process all tokens to get final state
+        for t in range(seq_len):
+            token = token_ids[:, t]
+            stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
+                token, stack, depth, awaiting_value, seen_start, root_closed, ended
+            )
+
+        # Get valid tokens for next position based on final state
+        key_ids = self._key_ids.to(device)
+        value_ids = self._value_ids.to(device)
+
+        return self._get_valid_tokens(
+            stack, depth, awaiting_value, seen_start, root_closed, ended,
+            key_ids, value_ids, device
+        )
+
+    def get_next_token_mask_incremental(
+        self,
+        last_token: Tensor,  # (batch,)
+        stack: Tensor,  # (batch, max_depth)
+        depth: Tensor,  # (batch,)
+        awaiting_value: Tensor,  # (batch,)
+        seen_start: Tensor,  # (batch,)
+        root_closed: Tensor,  # (batch,)
+        ended: Tensor,  # (batch,)
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Update state with one token and return next-token mask.
+
+        For incremental generation where we maintain state between steps.
+        This is O(1) per token instead of O(seq_len).
+
+        Args:
+            last_token: The last generated token (batch,)
+            stack, depth, awaiting_value, seen_start, root_closed, ended:
+                Current PDA state tensors
+
+        Returns:
+            Tuple of (valid_mask, stack, depth, awaiting_value, seen_start,
+                     root_closed, ended) - the mask and updated state.
+        """
+        device = last_token.device
+
+        # Update state with the new token
+        stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
+            last_token, stack, depth, awaiting_value, seen_start, root_closed, ended
+        )
+
+        # Get valid tokens for next position
+        key_ids = self._key_ids.to(device)
+        value_ids = self._value_ids.to(device)
+
+        valid_mask = self._get_valid_tokens(
+            stack, depth, awaiting_value, seen_start, root_closed, ended,
+            key_ids, value_ids, device
+        )
+
+        return valid_mask, stack, depth, awaiting_value, seen_start, root_closed, ended
+
+    def init_state(
+        self,
+        batch_size: int,
+        device: torch.device,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Initialize PDA state tensors for incremental generation.
+
+        Returns:
+            Tuple of (stack, depth, awaiting_value, seen_start, root_closed, ended)
+        """
+        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
+        depth = torch.zeros(batch_size, dtype=torch.long, device=device)
+        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        return stack, depth, awaiting_value, seen_start, root_closed, ended

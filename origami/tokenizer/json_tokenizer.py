@@ -125,8 +125,13 @@ class JSONTokenizer:
         """Build vocabulary from a collection of JSON objects.
 
         Iterates through all objects, extracting keys and values to build
-        the vocabulary. Does NOT handle numeric binning - that should be
-        done in a preprocessing step.
+        the vocabulary. After fitting, the vocabulary is frozen so that
+        unknown tokens at inference time are mapped to UNK_KEY/UNK_VALUE.
+
+        If called on an already-fitted tokenizer, creates a fresh vocabulary.
+
+        Does NOT handle numeric binning - that should be done in a
+        preprocessing step.
 
         Args:
             objects: Iterable of JSON-like dictionaries.
@@ -134,8 +139,14 @@ class JSONTokenizer:
         Returns:
             self, for method chaining.
         """
+        # Create fresh vocabulary if re-fitting
+        if self.vocab.frozen:
+            self.vocab = Vocabulary()
+
         for obj in objects:
             self._fit_value(obj)
+        # Freeze vocabulary so unknown tokens map to UNK at inference time
+        self.vocab.freeze()
         return self
 
     def _fit_value(self, value: Any) -> None:
@@ -267,7 +278,7 @@ class JSONTokenizer:
         # Expect OBJ_START for root object
         if pos >= len(token_ids) or token_ids[pos] != self.vocab.obj_start_id:
             raise DecodeError(
-                f"Expected OBJ_START token after START", token_ids, pos
+                "Expected OBJ_START token after START", token_ids, pos
             )
 
         # Decode root value

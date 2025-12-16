@@ -3,7 +3,8 @@
 Complete ORIGAMI model for JSON classification/generation.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -17,6 +18,7 @@ from .embeddings import OrigamiEmbeddings
 from .heads import ContinuousHead, DiscreteHead
 
 if TYPE_CHECKING:
+    from origami.tokenizer.json_tokenizer import JSONTokenizer
     from origami.tokenizer.vocabulary import Vocabulary
 
 
@@ -134,7 +136,10 @@ class OrigamiModel(nn.Module):
         # 4. Apply grammar constraints (both training and inference)
         # By masking invalid tokens, the model focuses probability mass on valid tokens only.
         if self.config.use_grammar_constraints:
-            logits = self._apply_grammar_mask(logits, input_ids, attention_mask)
+            # In inference mode without labels, only compute mask for last position (faster)
+            # In training mode, compute masks for all positions
+            last_only = torch.is_inference_mode_enabled() and labels is None
+            logits = self._apply_grammar_mask(logits, input_ids, attention_mask, last_position_only=last_only)
 
         # 5. Continuous head (if enabled)
         continuous_params = None
@@ -165,16 +170,24 @@ class OrigamiModel(nn.Module):
         logits: Tensor,
         input_ids: Tensor,
         attention_mask: Tensor | None = None,
+        last_position_only: bool = False,
     ) -> Tensor:
         """Apply grammar constraints to logits.
 
         Uses the PDA to compute which tokens are grammatically valid at each
         position, then masks invalid tokens with -inf.
 
+        Note: Grammar computation always runs on CPU for performance, as the
+        PDA state updates involve many small tensor operations that cause
+        excessive synchronization overhead on MPS/CUDA.
+
         Args:
             logits: Raw logits of shape (batch, seq_len, vocab_size)
             input_ids: Input token IDs for grammar state
             attention_mask: Optional attention mask
+            last_position_only: If True, only compute mask for the last position.
+                Much faster for autoregressive generation where we only need
+                the last position's logits.
 
         Returns:
             Logits with invalid tokens masked to -inf
@@ -182,11 +195,28 @@ class OrigamiModel(nn.Module):
         if self._grammar_pda is None:
             return logits
 
-        # Compute valid token mask for each position
-        valid_mask = self._grammar_pda.compute_valid_mask(input_ids, attention_mask)
+        # Run grammar computation on CPU for performance (avoids MPS/CUDA sync overhead)
+        original_device = logits.device
+        input_ids_cpu = input_ids.cpu()
+        attention_mask_cpu = attention_mask.cpu() if attention_mask is not None else None
 
-        # Apply mask: set invalid tokens to -inf
-        return self._grammar_pda.apply_constraints(logits, valid_mask)
+        if last_position_only:
+            # Fast path: only compute mask for last position (O(seq_len) vs O(seq_len^2))
+            valid_mask_cpu = self._grammar_pda.get_next_token_mask(input_ids_cpu)
+            # Ensure contiguous layout before device transfer
+            valid_mask = valid_mask_cpu.contiguous().to(original_device)
+            # Only mask the last position's logits
+            logits = logits.clone()
+            logits[:, -1] = logits[:, -1].masked_fill(~valid_mask, float("-inf"))
+            return logits
+        else:
+            # Full path: compute mask for all positions (needed for training)
+            valid_mask_cpu = self._grammar_pda.compute_valid_mask(input_ids_cpu, attention_mask_cpu)
+            # Clone and make contiguous before device transfer to avoid shared storage issues
+            valid_mask = valid_mask_cpu.clone().contiguous().to(original_device)
+            # Apply mask using masked_fill which is MPS-safe
+            # Clone logits first to avoid in-place modification
+            return logits.clone().masked_fill(~valid_mask, float("-inf"))
 
     def _compute_loss(
         self,
@@ -268,3 +298,91 @@ class OrigamiModel(nn.Module):
         if trainable_only:
             return sum(p.numel() for p in self.parameters() if p.requires_grad)
         return sum(p.numel() for p in self.parameters())
+
+    def save(
+        self,
+        path: str | Path,
+        tokenizer: "JSONTokenizer | None" = None,
+    ) -> None:
+        """Save model to a checkpoint file.
+
+        Saves model config, state dict, and optionally the tokenizer.
+        The saved checkpoint can be loaded with `OrigamiModel.load()`.
+
+        Args:
+            path: Path to save checkpoint to (typically .pt file)
+            tokenizer: Optional tokenizer to save with the model
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        checkpoint = {
+            "model_config": asdict(self.config),
+            "model_state_dict": self.state_dict(),
+        }
+
+        if tokenizer is not None:
+            # Serialize tokenizer state
+            checkpoint["tokenizer_state"] = {
+                "vocab": tokenizer.vocab.to_dict(),
+                "max_depth": tokenizer.max_depth,
+                "max_array_index": tokenizer.max_array_index,
+            }
+
+        torch.save(checkpoint, path)
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        device: torch.device | str | None = None,
+    ) -> tuple["OrigamiModel", "JSONTokenizer | None"]:
+        """Load model from a checkpoint file.
+
+        Creates a new model instance with the saved configuration and
+        loads the weights. Also loads the tokenizer if it was saved.
+
+        Args:
+            path: Path to checkpoint file
+            device: Device to load model to. If None, uses CPU.
+
+        Returns:
+            Tuple of (model, tokenizer). Tokenizer is None if not saved.
+
+        Example:
+            ```python
+            model, tokenizer = OrigamiModel.load("checkpoint.pt")
+            generator = OrigamiGenerator(model, tokenizer)
+            ```
+        """
+        from origami.tokenizer import JSONTokenizer
+        from origami.tokenizer.vocabulary import Vocabulary
+
+        path = Path(path)
+        device = device or "cpu"
+
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+
+        # Reconstruct config
+        config = OrigamiConfig(**checkpoint["model_config"])
+
+        # Reconstruct tokenizer if saved
+        tokenizer = None
+        if "tokenizer_state" in checkpoint:
+            tokenizer_state = checkpoint["tokenizer_state"]
+            vocab = Vocabulary.from_dict(tokenizer_state["vocab"])
+            tokenizer = JSONTokenizer()
+            tokenizer.vocab = vocab
+            tokenizer.max_depth = tokenizer_state["max_depth"]
+            tokenizer.max_array_index = tokenizer_state["max_array_index"]
+            tokenizer._fitted = True
+
+        # Create model with vocab for grammar constraints
+        vocab = tokenizer.vocab if tokenizer else None
+        model = cls(config, vocab=vocab)
+
+        # Load weights
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.to(device)
+
+        return model, tokenizer

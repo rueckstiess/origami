@@ -276,29 +276,31 @@ class Vocabulary:
         """
         return self._value_ids | {self.unk_value_id, self.num_token_id}
 
-    def save(self, path: str | Path) -> None:
-        """Save the vocabulary to a file using pickle."""
-        path = Path(path)
-        with path.open("wb") as f:
-            pickle.dump(
-                {
-                    "token_to_id": self._token_to_id,
-                    "id_to_token": self._id_to_token,
-                    "key_ids": self._key_ids,
-                    "value_ids": self._value_ids,
-                    "next_id": self._next_id,
-                    "frozen": self._frozen,
-                },
-                f,
-            )
+    def to_dict(self) -> dict:
+        """Serialize vocabulary to a dictionary.
+
+        Returns:
+            Dictionary containing all vocabulary state.
+        """
+        return {
+            "token_to_id": self._token_to_id,
+            "id_to_token": self._id_to_token,
+            "key_ids": self._key_ids,
+            "value_ids": self._value_ids,
+            "next_id": self._next_id,
+            "frozen": self._frozen,
+        }
 
     @classmethod
-    def load(cls, path: str | Path) -> "Vocabulary":
-        """Load a vocabulary from a pickle file."""
-        path = Path(path)
-        with path.open("rb") as f:
-            data = pickle.load(f)
+    def from_dict(cls, data: dict) -> "Vocabulary":
+        """Reconstruct vocabulary from a dictionary.
 
+        Args:
+            data: Dictionary from to_dict()
+
+        Returns:
+            Reconstructed Vocabulary instance.
+        """
         vocab = cls()
         vocab._token_to_id = data["token_to_id"]
         vocab._id_to_token = data["id_to_token"]
@@ -307,6 +309,20 @@ class Vocabulary:
         vocab._next_id = data["next_id"]
         vocab._frozen = data["frozen"]
         return vocab
+
+    def save(self, path: str | Path) -> None:
+        """Save the vocabulary to a file using pickle."""
+        path = Path(path)
+        with path.open("wb") as f:
+            pickle.dump(self.to_dict(), f)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Vocabulary":
+        """Load a vocabulary from a pickle file."""
+        path = Path(path)
+        with path.open("rb") as f:
+            data = pickle.load(f)
+        return cls.from_dict(data)
 
     def __repr__(self) -> str:
         return (

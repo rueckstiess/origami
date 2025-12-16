@@ -10,7 +10,6 @@ embedding vector. Different strategies have different properties:
 - transformer: Self-attention over path elements
 """
 
-import math
 from abc import ABC, abstractmethod
 
 import torch

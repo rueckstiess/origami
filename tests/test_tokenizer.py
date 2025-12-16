@@ -1,7 +1,6 @@
 """Tests for the JSON tokenizer module."""
 
 import tempfile
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -572,3 +571,72 @@ class TestTokenizerEncodeTokens:
 
         assert len(ids) == len(instance.tokens)
         assert len(ids) == len(instance.paths)
+
+
+class TestUnknownTokenHandling:
+    """Tests for handling unknown keys and values after fitting."""
+
+    def test_unknown_key_maps_to_unk_key(self):
+        """Unknown keys should map to UNK_KEY token after fit."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"known_key": "value"}])
+
+        # Tokenize object with unknown key
+        obj = {"unknown_key": "value"}
+        instance = tokenizer.tokenize(obj)
+        ids = tokenizer.encode_tokens(instance)
+
+        # Should contain UNK_KEY instead of raising error
+        assert tokenizer.vocab.unk_key_id in ids
+
+    def test_unknown_value_maps_to_unk_value(self):
+        """Unknown values should map to UNK_VALUE token after fit."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"key": "known_value"}])
+
+        # Tokenize object with unknown value
+        obj = {"key": "unknown_value"}
+        instance = tokenizer.tokenize(obj)
+        ids = tokenizer.encode_tokens(instance)
+
+        # Should contain UNK_VALUE instead of raising error
+        assert tokenizer.vocab.unk_value_id in ids
+
+    def test_mixed_known_unknown(self):
+        """Objects with mix of known and unknown tokens should work."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"name": "Alice", "age": 30}])
+
+        # Object with known key, unknown value + unknown key, known value
+        obj = {"name": "Bob", "city": 30}  # "Bob" unknown, "city" unknown
+        instance = tokenizer.tokenize(obj)
+        ids = tokenizer.encode_tokens(instance)
+
+        # Should have both UNK types
+        assert tokenizer.vocab.unk_key_id in ids  # "city"
+        assert tokenizer.vocab.unk_value_id in ids  # "Bob"
+
+    def test_encode_batch_with_unknown_tokens(self):
+        """encode_batch should handle unknown tokens gracefully."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"name": "Alice"}])
+
+        # Batch with known and unknown tokens
+        objects = [
+            {"name": "Alice"},  # All known
+            {"name": "Bob", "extra": "data"},  # Unknown value + unknown key
+        ]
+        batch = tokenizer.encode_batch(objects)
+
+        # Should not raise, should produce valid tensors
+        assert batch.input_ids.shape[0] == 2
+        # UNK tokens should be present in second sequence
+        assert (batch.input_ids[1] == tokenizer.vocab.unk_key_id).any()
+        assert (batch.input_ids[1] == tokenizer.vocab.unk_value_id).any()
+
+    def test_vocab_frozen_after_fit(self):
+        """Vocabulary should be frozen after fit."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"key": "value"}])
+
+        assert tokenizer.vocab.frozen

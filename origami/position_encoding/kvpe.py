@@ -16,7 +16,6 @@ from torch import Tensor
 
 from .pooling import PathPooling, create_pooling
 
-
 # Path type constants
 PATH_TYPE_PAD = 0
 PATH_TYPE_KEY = 1
@@ -151,35 +150,29 @@ class KeyValuePositionEncoding(nn.Module):
 
         Keys use key embeddings, indices use index embeddings,
         padding positions get zero embeddings.
+
+        Note: Uses element-wise multiplication instead of masked_scatter
+        for MPS compatibility. masked_scatter with boolean indexing can
+        cause intermittent gradient tracking issues on MPS during backward.
         """
-        batch_size, seq_len, max_depth = path_types.shape
-        device = path_types.device
+        key_emb = self._get_key_embeddings()
 
-        # Initialize with zeros
-        embeds = torch.zeros(
-            batch_size, seq_len, max_depth, self.d_model, device=device
-        )
+        # Embed all positions as if they were keys (clamped to valid range)
+        key_ids_clamped = path_ids.clamp(0, key_emb.num_embeddings - 1)
+        key_embeds = key_emb(key_ids_clamped)  # (batch, seq_len, max_depth, d_model)
 
-        # Masks for each type
-        key_mask = path_types == PATH_TYPE_KEY
-        index_mask = path_types == PATH_TYPE_INDEX
+        # Embed all positions as if they were indices (clamped to valid range)
+        index_ids_clamped = path_ids.clamp(0, self.max_array_index - 1)
+        index_embeds = self.index_embeddings(index_ids_clamped)
 
-        # Embed keys
-        if key_mask.any():
-            key_emb = self._get_key_embeddings()
-            # Clamp to valid vocab range
-            key_ids = path_ids.clamp(0, key_emb.num_embeddings - 1)
-            key_embeds = key_emb(key_ids)
-            embeds = embeds.masked_scatter(key_mask.unsqueeze(-1), key_embeds[key_mask])
+        # Create masks for each type, expanded to embedding dimension
+        # Using float conversion for gradient-safe multiplication
+        key_mask = (path_types == PATH_TYPE_KEY).unsqueeze(-1).float()
+        index_mask = (path_types == PATH_TYPE_INDEX).unsqueeze(-1).float()
 
-        # Embed indices
-        if index_mask.any():
-            # Clamp to valid index range
-            index_ids = path_ids.clamp(0, self.max_array_index - 1)
-            index_embeds = self.index_embeddings(index_ids)
-            embeds = embeds.masked_scatter(
-                index_mask.unsqueeze(-1), index_embeds[index_mask]
-            )
+        # Select appropriate embeddings using element-wise multiplication
+        # Padding positions (type=0) get zeros since neither mask is True
+        embeds = key_embeds * key_mask + index_embeds * index_mask
 
         return embeds
 

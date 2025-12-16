@@ -3,7 +3,6 @@
 Combines token embeddings with Key-Value Position Encoding (KVPE).
 """
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 

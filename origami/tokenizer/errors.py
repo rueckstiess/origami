@@ -1,6 +1,6 @@
 """Exception classes for tokenization errors."""
 
-from typing import Sequence
+from collections.abc import Sequence
 
 
 class DecodeError(Exception):

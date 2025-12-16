@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from origami.constraints.json_grammar import JSONGrammarPDA, STACK_OBJECT, STACK_ARRAY
+from origami.constraints.json_grammar import JSONGrammarPDA
 from origami.tokenizer.vocabulary import Vocabulary
 
 

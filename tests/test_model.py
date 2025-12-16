@@ -21,17 +21,7 @@ from origami.model import (
     create_backbone,
 )
 from origami.tokenizer import JSONTokenizer
-
-
-# Device fixtures for multi-device testing
-def get_available_devices():
-    """Get list of available devices for testing."""
-    devices = [torch.device("cpu")]
-    if torch.cuda.is_available():
-        devices.append(torch.device("cuda"))
-    if torch.backends.mps.is_available():
-        devices.append(torch.device("mps"))
-    return devices
+from origami.utils import available_devices as get_available_devices
 
 
 AVAILABLE_DEVICES = get_available_devices()
