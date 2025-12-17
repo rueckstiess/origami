@@ -7,12 +7,16 @@ __version__ = "0.1.0"
 
 # Re-export key classes for convenience
 from origami.model import OrigamiConfig, OrigamiModel, OrigamiOutput
+from origami.pipeline import OrigamiPipeline, PipelineConfig
 from origami.tokenizer import EncodedBatch, JSONTokenizer, Vocabulary
 
 __all__ = [
     # Version
     "__version__",
-    # Model
+    # Pipeline (recommended API)
+    "OrigamiPipeline",
+    "PipelineConfig",
+    # Model (advanced usage)
     "OrigamiConfig",
     "OrigamiModel",
     "OrigamiOutput",

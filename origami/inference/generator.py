@@ -219,6 +219,7 @@ class OrigamiGenerator:
         path_ids: Tensor,
         path_lengths: Tensor,
         attention_mask: Tensor,
+        numeric_values: Tensor | None = None,
         stop_after_value: bool = False,
         max_tokens: int = 512,
         temperature: float = 1.0,
@@ -230,12 +231,17 @@ class OrigamiGenerator:
         This is the single implementation of the generation loop.
         All generation methods call this internally.
 
+        Uses dynamic batch compaction: completed sequences are removed from the
+        batch to avoid unnecessary computation on finished sequences.
+
         Args:
             input_ids: Pre-encoded sequences (batch, seq_len), may be left-padded
             path_types: Path type encoding (batch, seq_len, max_depth)
             path_ids: Path ID encoding (batch, seq_len, max_depth)
             path_lengths: Path lengths (batch, seq_len)
             attention_mask: True for real tokens, False for PAD
+            numeric_values: Optional numeric values for scaled fields (batch, seq_len).
+                           Required for conditioning on scaled numeric context (e.g., prediction).
             stop_after_value: If True, stop each sequence after one complete value
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
@@ -247,7 +253,7 @@ class OrigamiGenerator:
             Values can be dicts, lists, or primitives depending on what was generated.
         """
         vocab = self.tokenizer.vocab
-        batch_size = input_ids.size(0)
+        original_batch_size = input_ids.size(0)
         seq_len = input_ids.size(1)
 
         # Clone tensors for generation (we'll extend them)
@@ -258,14 +264,19 @@ class OrigamiGenerator:
         current_attention_mask = attention_mask.clone()
 
         # Track numeric values for continuous head
-        # Initialize with zeros for the prefix (no numeric values there unless provided)
-        current_numeric_values = torch.zeros(batch_size, seq_len, dtype=torch.float, device=self.device)
+        # Use provided numeric_values for conditioning, or zeros if not provided
+        if numeric_values is not None:
+            current_numeric_values = numeric_values.clone().to(self.device)
+        else:
+            current_numeric_values = torch.zeros(
+                original_batch_size, seq_len, dtype=torch.float, device=self.device
+            )
         # Track sampled numeric values for later decoding (list of lists)
-        sampled_numeric_values: list[list[float]] = [[] for _ in range(batch_size)]
+        sampled_numeric_values: list[list[float]] = [[] for _ in range(original_batch_size)]
 
         # Initialize path states for each sequence from their token prefixes
         path_states = []
-        for i in range(batch_size):
+        for i in range(original_batch_size):
             mask = current_attention_mask[i]
             seq_tokens = current_ids[i][mask].tolist()
             # Create single path state from prefix
@@ -277,7 +288,7 @@ class OrigamiGenerator:
         initial_depths = None
         if self._grammar_pda is not None:
             grammar_states = []
-            for i in range(batch_size):
+            for i in range(original_batch_size):
                 mask = current_attention_mask[i]
                 seq_tokens = current_ids[i][mask]
                 state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
@@ -286,18 +297,23 @@ class OrigamiGenerator:
             # Record initial depths for stop_after_value
             initial_depths = grammar_state[1].clone()
 
-        # Track completion
-        done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-
         # Track where each sequence's generated content starts
         gen_start_positions = current_ids.size(1) * torch.ones(
-            batch_size, dtype=torch.long, device=self.device
+            original_batch_size, dtype=torch.long, device=self.device
         )
+
+        # Track original indices for each active sequence (for reordering at end)
+        active_indices = list(range(original_batch_size))
+
+        # Store completed results: maps original index -> (seq_tokens, numeric_values)
+        completed_results: dict[int, tuple[list[int], list[float]]] = {}
 
         # Generation loop
         for _ in range(max_tokens):
-            if done.all():
+            if len(active_indices) == 0:
                 break
+
+            batch_size = current_ids.size(0)
 
             # Forward pass with numeric values for continuous head
             output = self.model(
@@ -325,9 +341,6 @@ class OrigamiGenerator:
                 next_logits, temperature=temperature, top_k=top_k, top_p=top_p
             )
 
-            # For completed sequences, use PAD token
-            next_tokens = torch.where(done, vocab.pad_token_id, next_tokens)
-
             # Sample numeric values for NUM tokens from continuous head
             new_numeric_values = torch.zeros(batch_size, 1, dtype=torch.float, device=self.device)
             is_num = next_tokens == vocab.num_token_id
@@ -346,42 +359,86 @@ class OrigamiGenerator:
 
             # Track sampled values for decoding
             for i in range(batch_size):
-                if is_num[i] and not done[i]:
-                    sampled_numeric_values[i].append(new_numeric_values[i, 0].item())
+                orig_idx = active_indices[i]
+                if is_num[i]:
+                    sampled_numeric_values[orig_idx].append(new_numeric_values[i, 0].item())
 
             # Check for completion
             if stop_after_value and initial_depths is not None:
                 # Stop when depth returns below initial (value is complete)
                 current_depths = grammar_state[1]  # depth is second element
-                value_complete = current_depths < initial_depths
-                done = done | value_complete
+                just_completed = current_depths < initial_depths
             else:
                 # Stop on END token
-                done = done | (next_tokens == vocab.end_id)
+                just_completed = next_tokens == vocab.end_id
 
             # Update path states and get new path tensors
             new_path_types, new_path_ids, new_path_lengths = self._update_paths(
-                next_tokens, path_states, done
+                next_tokens, path_states, just_completed
             )
 
-            # Extend tensors
+            # Extend tensors with new tokens
             current_ids = torch.cat([current_ids, next_tokens.unsqueeze(1)], dim=1)
             current_path_types = torch.cat([current_path_types, new_path_types], dim=1)
             current_path_ids = torch.cat([current_path_ids, new_path_ids], dim=1)
             current_path_lengths = torch.cat([current_path_lengths, new_path_lengths], dim=1)
             current_numeric_values = torch.cat([current_numeric_values, new_numeric_values], dim=1)
-            # New tokens are real (not PAD)
-            new_mask = (~done).unsqueeze(1)
+            new_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=self.device)
             current_attention_mask = torch.cat([current_attention_mask, new_mask], dim=1)
 
-        # Decode generated sequences
-        results = []
-        for i in range(batch_size):
-            # Get the generated portion (after input prefix)
-            start_pos = gen_start_positions[i].item()
+            # Store completed sequences and remove them from active batch
+            if just_completed.any():
+                completed_mask = just_completed.tolist()
+                keep_indices = []
+                new_active_indices = []
+                new_path_states = []
+
+                for i, (is_complete, orig_idx) in enumerate(
+                    zip(completed_mask, active_indices, strict=True)
+                ):
+                    if is_complete:
+                        # Store completed sequence
+                        mask = current_attention_mask[i]
+                        seq_tokens = current_ids[i][mask].tolist()
+                        completed_results[orig_idx] = (
+                            seq_tokens,
+                            sampled_numeric_values[orig_idx],
+                        )
+                    else:
+                        keep_indices.append(i)
+                        new_active_indices.append(orig_idx)
+                        new_path_states.append(path_states[i])
+
+                # Compact tensors to only keep active sequences
+                if keep_indices:
+                    keep_tensor = torch.tensor(keep_indices, device=self.device)
+                    current_ids = current_ids[keep_tensor]
+                    current_path_types = current_path_types[keep_tensor]
+                    current_path_ids = current_path_ids[keep_tensor]
+                    current_path_lengths = current_path_lengths[keep_tensor]
+                    current_numeric_values = current_numeric_values[keep_tensor]
+                    current_attention_mask = current_attention_mask[keep_tensor]
+
+                    # Compact grammar state
+                    if grammar_state is not None:
+                        grammar_state = tuple(s[keep_tensor] for s in grammar_state)
+                        if initial_depths is not None:
+                            initial_depths = initial_depths[keep_tensor]
+
+                active_indices = new_active_indices
+                path_states = new_path_states
+
+        # Store any remaining sequences that didn't complete
+        for i, orig_idx in enumerate(active_indices):
             mask = current_attention_mask[i]
-            seq = current_ids[i][mask].tolist()
-            numeric_vals = sampled_numeric_values[i]
+            seq_tokens = current_ids[i][mask].tolist()
+            completed_results[orig_idx] = (seq_tokens, sampled_numeric_values[orig_idx])
+
+        # Decode all sequences in original order
+        results = []
+        for orig_idx in range(original_batch_size):
+            seq, numeric_vals = completed_results[orig_idx]
+            start_pos = gen_start_positions[orig_idx].item()
 
             if stop_after_value:
                 # Decode just the generated value tokens
@@ -409,6 +466,79 @@ class OrigamiGenerator:
                     results.append({})
 
         return results
+
+    @torch.inference_mode()
+    def get_value_distribution(
+        self,
+        input_ids: Tensor,
+        path_types: Tensor,
+        path_ids: Tensor,
+        path_lengths: Tensor,
+        attention_mask: Tensor,
+        numeric_values: Tensor | None = None,
+    ) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor] | None]:
+        """Get grammar-constrained probability distribution for next token.
+
+        This is used by Predictor.predict_proba() to get the distribution over
+        possible values without actually sampling/generating.
+
+        Args:
+            input_ids: (batch, seq_len) token IDs ending at target key
+            path_types: (batch, seq_len, max_depth) path type encoding
+            path_ids: (batch, seq_len, max_depth) path element IDs
+            path_lengths: (batch, seq_len) path lengths
+            attention_mask: (batch, seq_len) attention mask
+            numeric_values: Optional numeric values for conditioning (batch, seq_len)
+
+        Returns:
+            probs: (batch, vocab_size) probabilities after grammar masking
+            continuous_params: Optional (weights, means, log_vars) for MoG head,
+                               each with shape (batch, n_components)
+        """
+        # 1. Forward pass
+        output = self.model(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            numeric_values=numeric_values,
+        )
+
+        # 2. Get logits at last position (predicts next token)
+        next_logits = output.logits[:, -1, :]  # (batch, vocab_size)
+
+        # 3. Apply grammar constraints
+        if self._grammar_pda is not None:
+            # Initialize grammar state from the full sequence
+            batch_size = input_ids.size(0)
+            grammar_states = []
+            for i in range(batch_size):
+                mask = attention_mask[i]
+                seq_tokens = input_ids[i][mask]
+                state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
+                grammar_states.append(state)
+            grammar_state = self._stack_grammar_states(grammar_states)
+
+            # Get valid next tokens based on grammar state
+            last_token = input_ids[:, -1]
+            valid_mask, _ = self._grammar_pda.get_next_token_mask(last_token, grammar_state)
+            next_logits = next_logits.masked_fill(~valid_mask, float("-inf"))
+
+        # 4. Convert to probabilities
+        probs = F.softmax(next_logits, dim=-1)
+
+        # 5. Get continuous params if available
+        continuous_params = None
+        if output.continuous_params is not None:
+            weights, means, log_vars = output.continuous_params
+            continuous_params = (
+                weights[:, -1, :],  # (batch, n_components)
+                means[:, -1, :],  # (batch, n_components)
+                log_vars[:, -1, :],  # (batch, n_components)
+            )
+
+        return probs, continuous_params
 
     def _stack_grammar_states(
         self,
@@ -631,6 +761,10 @@ class OrigamiGenerator:
         Returns:
             Tensor of sampled token IDs, shape (batch,)
         """
+        # Handle greedy decoding (temperature=0) with argmax
+        if temperature == 0.0:
+            return logits.argmax(dim=-1)
+
         # Apply temperature
         if temperature != 1.0:
             logits = logits / temperature

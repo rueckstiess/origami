@@ -283,3 +283,60 @@ class NumericDiscretizer:
             lines.append(f"    {path}")
 
         return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """Serialize discretizer state for checkpointing.
+
+        Returns:
+            Dictionary containing all state needed to reconstruct the discretizer.
+        """
+        if not self._fitted:
+            raise RuntimeError("Cannot serialize unfitted NumericDiscretizer")
+
+        return {
+            "cat_threshold": self.cat_threshold,
+            "n_bins": self.n_bins,
+            "strategy": self.strategy,
+            "discretized_fields": list(self.discretized_fields),
+            "passthrough_fields": list(self.passthrough_fields),
+            "discretizers": {
+                path: {
+                    "bin_edges": discretizer.bin_edges_[0].tolist(),
+                    "n_bins": int(discretizer.n_bins_[0]),
+                }
+                for path, discretizer in self.discretizers.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NumericDiscretizer":
+        """Reconstruct discretizer from serialized state.
+
+        Args:
+            data: Dictionary from to_dict()
+
+        Returns:
+            Reconstructed NumericDiscretizer instance.
+        """
+        discretizer = cls(
+            cat_threshold=data["cat_threshold"],
+            n_bins=data["n_bins"],
+            strategy=data["strategy"],
+        )
+        discretizer.discretized_fields = set(data["discretized_fields"])
+        discretizer.passthrough_fields = set(data["passthrough_fields"])
+        discretizer._fitted = True
+
+        for path, bin_data in data["discretizers"].items():
+            # Create a fitted KBinsDiscretizer by setting internal attributes
+            kbd = KBinsDiscretizer(
+                n_bins=bin_data["n_bins"],
+                encode="ordinal",
+                strategy=data["strategy"],
+            )
+            kbd.bin_edges_ = np.array([np.array(bin_data["bin_edges"])])
+            kbd.n_bins_ = np.array([bin_data["n_bins"]])
+            kbd.n_features_in_ = 1
+            discretizer.discretizers[path] = kbd
+
+        return discretizer

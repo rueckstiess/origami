@@ -290,3 +290,51 @@ class NumericScaler:
             lines.append(f"    {path}")
 
         return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """Serialize scaler state for checkpointing.
+
+        Returns:
+            Dictionary containing all state needed to reconstruct the scaler.
+        """
+        if not self._fitted:
+            raise RuntimeError("Cannot serialize unfitted NumericScaler")
+
+        return {
+            "cat_threshold": self.cat_threshold,
+            "scaled_fields": list(self.scaled_fields),
+            "passthrough_fields": list(self.passthrough_fields),
+            "scalers": {
+                path: {
+                    "mean": float(scaler.mean_[0]),
+                    "scale": float(scaler.scale_[0]),
+                }
+                for path, scaler in self.scalers.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NumericScaler":
+        """Reconstruct scaler from serialized state.
+
+        Args:
+            data: Dictionary from to_dict()
+
+        Returns:
+            Reconstructed NumericScaler instance.
+        """
+        scaler = cls(cat_threshold=data["cat_threshold"])
+        scaler.scaled_fields = set(data["scaled_fields"])
+        scaler.passthrough_fields = set(data["passthrough_fields"])
+        scaler._fitted = True
+
+        for path, stats in data["scalers"].items():
+            ss = StandardScaler()
+            ss.mean_ = np.array([stats["mean"]])
+            ss.scale_ = np.array([stats["scale"]])
+            ss.var_ = np.array([stats["scale"] ** 2])
+            ss.n_features_in_ = 1
+            ss.n_samples_seen_ = 1  # Dummy value
+            scaler.scalers[path] = ss
+
+        return scaler

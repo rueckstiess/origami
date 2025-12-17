@@ -46,6 +46,7 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "F541",   # f-string without placeholders
 ]
 
 [tool.ruff.format]

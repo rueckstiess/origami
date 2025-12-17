@@ -323,7 +323,7 @@ class TestEndToEndContinuousPipeline:
             numeric_mask=batch["numeric_mask"],
         )
 
-        initial_loss = output.loss.item()
+        _initial_loss = output.loss.item()  # noqa: F841
         output.loss.backward()
         optimizer.step()
 
