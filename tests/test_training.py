@@ -229,6 +229,251 @@ class TestOrigamiDataCollator:
         assert not torch.equal(batch["labels"], batch["input_ids"])
 
 
+class TestLeftPadding:
+    """Tests for left-padding behavior in OrigamiDataCollator.
+
+    Left-padding is critical for batched prediction: all sequences end at
+    the same position, so `logits[:, -1, :]` gives next-token predictions
+    for all sequences simultaneously.
+    """
+
+    @pytest.fixture
+    def lp_tokenizer(self):
+        """Create a tokenizer for left-padding tests."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([
+            {"a": 1},
+            {"a": 1, "b": 2},
+            {"a": 1, "b": 2, "c": 3, "d": 4},
+        ])
+        return tokenizer
+
+    def test_left_padding_structure(self, lp_tokenizer):
+        """Test that padding is on the LEFT (start) of sequences."""
+        short = {"a": 1}  # Short sequence
+        long = {"a": 1, "b": 2, "c": 3}  # Long sequence
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        short_inst = lp_tokenizer.tokenize(short)
+        long_inst = lp_tokenizer.tokenize(long)
+
+        batch = collator([short_inst, long_inst])
+
+        # Both sequences should have same length (padded to longest)
+        assert batch["input_ids"].shape[1] == len(long_inst.tokens)
+
+        # Short sequence: PAD tokens at START, real tokens at END
+        short_ids = batch["input_ids"][0]
+        short_mask = batch["attention_mask"][0]
+
+        # First tokens should be PAD (mask=False)
+        pad_count = (~short_mask).sum().item()
+        assert pad_count > 0, "Short sequence should have padding"
+
+        # Check PAD tokens are at the START
+        for i in range(pad_count):
+            assert short_ids[i] == lp_tokenizer.vocab.pad_token_id
+            assert not short_mask[i]
+
+        # Real tokens should be at the END
+        for i in range(pad_count, len(short_ids)):
+            assert short_ids[i] != lp_tokenizer.vocab.pad_token_id
+            assert short_mask[i]
+
+        # Long sequence should have no padding
+        assert batch["attention_mask"][1].all()
+
+    def test_all_sequences_end_at_same_position(self, lp_tokenizer):
+        """Test that all sequences end at the same position (critical for batched prediction)."""
+        objects = [
+            {"a": 1},  # Short
+            {"a": 1, "b": 2},  # Medium
+            {"a": 1, "b": 2, "c": 3, "d": 4},  # Long
+        ]
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        instances = [lp_tokenizer.tokenize(obj) for obj in objects]
+        batch = collator(instances)
+
+        # All sequences should have real (non-PAD) tokens at the last position
+        for i in range(len(objects)):
+            last_token = batch["input_ids"][i, -1]
+            assert last_token != lp_tokenizer.vocab.pad_token_id, f"Sequence {i} has PAD at last position"
+
+            # The last token should be END
+            assert last_token == lp_tokenizer.vocab.end_id, f"Sequence {i} should end with END token"
+
+            # Attention mask should be True at last position
+            assert batch["attention_mask"][i, -1]
+
+    def test_path_encoding_aligned_with_left_padding(self, lp_tokenizer):
+        """Test that path encoding is correctly aligned with left-padded sequences."""
+        short = {"a": 1}
+        long = {"a": 1, "b": 2}
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        short_inst = lp_tokenizer.tokenize(short)
+        long_inst = lp_tokenizer.tokenize(long)
+
+        batch = collator([short_inst, long_inst])
+
+        # For short sequence, path info should be at positions where real tokens are
+        short_mask = batch["attention_mask"][0]
+        pad_count = (~short_mask).sum().item()
+
+        # Padded positions should have zero path_lengths
+        for i in range(pad_count):
+            assert batch["path_lengths"][0, i] == 0
+
+        # Real token positions should have correct path_lengths (could be 0 for START/END)
+        # but should match the original tokenized instance
+        for i, path in enumerate(short_inst.paths):
+            pos = pad_count + i
+            expected_depth = min(len(path), lp_tokenizer.max_depth)
+            assert batch["path_lengths"][0, pos] == expected_depth
+
+    def test_lengths_tensor_correct(self, lp_tokenizer):
+        """Test that lengths tensor reflects original sequence lengths."""
+        objects = [
+            {"a": 1},  # Short
+            {"a": 1, "b": 2, "c": 3},  # Long
+        ]
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        instances = [lp_tokenizer.tokenize(obj) for obj in objects]
+        batch = collator(instances)
+
+        # lengths should match original token counts
+        assert batch["lengths"][0] == len(instances[0].tokens)
+        assert batch["lengths"][1] == len(instances[1].tokens)
+
+    def test_model_forward_with_left_padded_batch(self, lp_tokenizer):
+        """Test that model forward pass works correctly with left-padded batches."""
+        config = OrigamiConfig(
+            vocab_size=lp_tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=lp_tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=lp_tokenizer.vocab)
+        model.eval()
+
+        objects = [
+            {"a": 1},
+            {"a": 1, "b": 2, "c": 3, "d": 4},
+        ]
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        instances = [lp_tokenizer.tokenize(obj) for obj in objects]
+        batch = collator(instances)
+
+        with torch.no_grad():
+            output = model(
+                input_ids=batch["input_ids"],
+                path_types=batch["path_types"],
+                path_ids=batch["path_ids"],
+                path_lengths=batch["path_lengths"],
+                attention_mask=batch["attention_mask"],
+            )
+
+        # Output should have correct shape
+        batch_size, seq_len = batch["input_ids"].shape
+        assert output.logits.shape == (batch_size, seq_len, config.vocab_size)
+
+        # No NaN in outputs for real (non-PAD) positions
+        # PAD positions may have NaN due to all-masked attention (softmax of all -inf)
+        for b in range(batch_size):
+            mask = batch["attention_mask"][b]
+            real_logits = output.logits[b][mask]
+            assert not torch.isnan(real_logits).any(), f"NaN in real positions for batch {b}"
+
+    def test_training_loss_with_left_padded_batch(self, lp_tokenizer):
+        """Test that training loss computation works with left-padded batches."""
+        config = OrigamiConfig(
+            vocab_size=lp_tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=lp_tokenizer.max_depth,
+            use_grammar_constraints=True,
+        )
+        model = OrigamiModel(config, vocab=lp_tokenizer.vocab)
+
+        objects = [
+            {"a": 1},
+            {"a": 1, "b": 2, "c": 3, "d": 4},
+        ]
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        instances = [lp_tokenizer.tokenize(obj) for obj in objects]
+        batch = collator(instances)
+
+        output = model(
+            input_ids=batch["input_ids"],
+            path_types=batch["path_types"],
+            path_ids=batch["path_ids"],
+            path_lengths=batch["path_lengths"],
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+        )
+
+        # Loss should be computed and not be NaN or Inf
+        assert output.loss is not None
+        assert not torch.isnan(output.loss)
+        assert not torch.isinf(output.loss)
+
+        # Loss should be positive
+        assert output.loss > 0
+
+    def test_grammar_constraints_with_left_padding(self, lp_tokenizer):
+        """Test that grammar constraints work correctly with left-padded sequences."""
+        config = OrigamiConfig(
+            vocab_size=lp_tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=lp_tokenizer.max_depth,
+            use_grammar_constraints=True,
+        )
+        model = OrigamiModel(config, vocab=lp_tokenizer.vocab)
+
+        # Create batch with different length sequences
+        objects = [
+            {"a": 1},
+            {"a": 1, "b": 2},
+        ]
+
+        collator = OrigamiDataCollator(lp_tokenizer)
+        instances = [lp_tokenizer.tokenize(obj) for obj in objects]
+        batch = collator(instances)
+
+        # Training pass (grammar constraints applied)
+        output = model(
+            input_ids=batch["input_ids"],
+            path_types=batch["path_types"],
+            path_ids=batch["path_ids"],
+            path_lengths=batch["path_lengths"],
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+        )
+
+        # For positions where we predict real tokens, logits should have valid entries
+        # (some tokens masked to -inf, but not all)
+        for b in range(batch["input_ids"].shape[0]):
+            mask = batch["attention_mask"][b]
+            # For each real position (except the last which predicts nothing useful)
+            for t in range(mask.sum().item() - 1):
+                pos = (~mask).sum().item() + t  # Actual position in padded sequence
+                logits_at_pos = output.logits[b, pos]
+                # Should have some valid tokens (not all -inf)
+                valid_count = (logits_at_pos > float("-inf")).sum()
+                assert valid_count > 0, f"No valid tokens at position {pos} for batch {b}"
+
+
 class TestTrainState:
     """Tests for TrainState dataclass."""
 

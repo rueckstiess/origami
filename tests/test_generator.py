@@ -224,32 +224,76 @@ class TestOrigamiGenerator:
         assert len(results) == 1
         assert isinstance(results[0], dict)
 
-    def test_generate_from_prefix(self, simple_model, simple_tokenizer):
-        """Test generation from prefix."""
+    def test_generate_from_tensors(self, simple_model, simple_tokenizer):
+        """Test generation from pre-encoded tensors."""
         generator = OrigamiGenerator(simple_model, simple_tokenizer)
+        vocab = simple_tokenizer.vocab
 
-        prefix = {"name": "Alice"}
-        results = generator.generate_from_prefix(
-            prefix, num_samples=1, max_length=50
+        # Create input tensors for two sequences with different prefixes
+        # Sequence 1: START OBJ_START
+        # Sequence 2: START OBJ_START (same, but could be different in real use)
+        batch_size = 2
+        max_depth = simple_tokenizer.max_depth
+
+        input_ids = torch.tensor([
+            [vocab.start_id, vocab.obj_start_id],
+            [vocab.start_id, vocab.obj_start_id],
+        ], dtype=torch.long, device=generator.device)
+
+        path_types = torch.zeros(batch_size, 2, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(batch_size, 2, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(batch_size, 2, dtype=torch.long, device=generator.device)
+        attention_mask = torch.ones(batch_size, 2, dtype=torch.bool, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=False,
+            max_tokens=50,
         )
 
-        assert len(results) == 1
-        assert isinstance(results[0], dict)
-        # The result should contain the prefix key
-        # (may not have same value due to random generation, but key should be present)
-
-    def test_generate_from_prefix_batch(self, simple_model, simple_tokenizer):
-        """Test batch generation from prefix."""
-        generator = OrigamiGenerator(simple_model, simple_tokenizer)
-
-        prefix = {"name": "Alice", "age": 30}
-        results = generator.generate_from_prefix(
-            prefix, num_samples=3, max_length=50
-        )
-
-        assert len(results) == 3
+        assert len(results) == batch_size
         for result in results:
             assert isinstance(result, dict)
+
+    def test_generate_from_tensors_stop_after_value(self, simple_model, simple_tokenizer):
+        """Test generation with stop_after_value=True."""
+        generator = OrigamiGenerator(simple_model, simple_tokenizer)
+        vocab = simple_tokenizer.vocab
+        max_depth = simple_tokenizer.max_depth
+
+        # Create a minimal sequence: START OBJ_START key:
+        # When stop_after_value=True, should generate a single value then stop
+        # Encode a key token
+        from origami.tokenizer.vocabulary import KeyToken
+        key_token = KeyToken("name")
+        key_id = vocab.encode(key_token)
+
+        input_ids = torch.tensor([
+            [vocab.start_id, vocab.obj_start_id, key_id],
+        ], dtype=torch.long, device=generator.device)
+
+        path_types = torch.zeros(1, 3, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(1, 3, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(1, 3, dtype=torch.long, device=generator.device)
+        attention_mask = torch.ones(1, 3, dtype=torch.bool, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=True,
+            max_tokens=50,
+        )
+
+        # Should return a single value (could be primitive or complex)
+        assert len(results) == 1
+        # The value could be anything depending on model weights
 
     def test_always_uses_cpu(self, simple_tokenizer):
         """Test that generator always runs on CPU for performance."""
@@ -405,33 +449,8 @@ class TestGeneratorWithArrays:
             assert isinstance(result, dict)
 
 
-class TestGenerateValue:
-    """Tests for generate_value helper method."""
-
-    def test_generate_value_object(self, simple_model, simple_tokenizer):
-        """Test generating a complex object value."""
-        generator = OrigamiGenerator(simple_model, simple_tokenizer)
-        vocab = simple_tokenizer.vocab
-
-        # Create a minimal sequence: START OBJ_START key OBJ_START
-        # We're at the point where we need to generate a nested object value
-        input_ids = torch.tensor(
-            [[vocab.start_id, vocab.obj_start_id]], dtype=torch.long, device=generator.device
-        )
-        path_types = torch.zeros(1, 2, simple_tokenizer.max_depth, dtype=torch.long, device=generator.device)
-        path_ids = torch.zeros(1, 2, simple_tokenizer.max_depth, dtype=torch.long, device=generator.device)
-        path_lengths = torch.zeros(1, 2, dtype=torch.long, device=generator.device)
-
-        state = PathState()
-        state.push_object()
-
-        tokens, value = generator.generate_value(
-            input_ids, path_types, path_ids, path_lengths,
-            state, max_tokens=50
-        )
-
-        # Should return some tokens and a value (may be empty dict due to random weights)
-        assert isinstance(tokens, list)
+class TestDecodeValueTokens:
+    """Tests for value token decoding helper methods."""
 
     def test_decode_value_tokens_primitive(self, simple_model, simple_tokenizer):
         """Test decoding primitive value tokens."""
@@ -463,3 +482,334 @@ class TestGenerateValue:
         tokens = [vocab.array_start_id, vocab.array_end_id]
         result = generator._decode_value_tokens(tokens)
         assert result == []
+
+    def test_decode_value_tokens_number(self, simple_model, simple_tokenizer):
+        """Test decoding numeric value tokens."""
+        generator = OrigamiGenerator(simple_model, simple_tokenizer)
+        vocab = simple_tokenizer.vocab
+
+        from origami.tokenizer.vocabulary import ValueToken
+        value_token = ValueToken(30)
+        token_id = vocab.encode(value_token)
+
+        result = generator._decode_value_tokens([token_id])
+        assert result == 30
+
+    def test_decode_value_tokens_boolean(self):
+        """Test decoding boolean value tokens."""
+        # Need a tokenizer that has seen booleans
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"flag": True}, {"flag": False}])
+
+        config = OrigamiConfig(
+            vocab_size=tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        generator = OrigamiGenerator(model, tokenizer)
+
+        from origami.tokenizer.vocabulary import ValueToken
+        true_token = ValueToken(True)
+        token_id = tokenizer.vocab.encode(true_token)
+
+        result = generator._decode_value_tokens([token_id])
+        assert result is True
+
+
+class TestGenerateFromTensorsAdvanced:
+    """Advanced tests for generate_from_tensors with various scenarios."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        """Create a tokenizer for advanced tests."""
+        data = [
+            {"name": "Alice", "age": 30, "city": "NYC"},
+            {"name": "Bob", "age": 25, "city": "LA"},
+            {"nested": {"inner": "value"}},
+            {"list": [1, 2, 3]},
+        ]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        return tokenizer
+
+    @pytest.fixture
+    def model(self, tokenizer):
+        """Create model for advanced tests."""
+        config = OrigamiConfig(
+            vocab_size=tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        return OrigamiModel(config, vocab=tokenizer.vocab)
+
+    def test_generate_from_tensors_with_left_padding(self, model, tokenizer):
+        """Test generate_from_tensors handles left-padded inputs correctly."""
+        generator = OrigamiGenerator(model, tokenizer)
+        vocab = tokenizer.vocab
+        max_depth = tokenizer.max_depth
+
+        # Create two sequences of different lengths, left-padded
+        # Seq 1: [PAD, PAD, START, OBJ_START]
+        # Seq 2: [START, OBJ_START, key, value]
+        from origami.tokenizer.vocabulary import KeyToken, ValueToken
+        key_token = KeyToken("name")
+        key_id = vocab.encode(key_token)
+        value_token = ValueToken("Alice")
+        value_id = vocab.encode(value_token)
+
+        # Left-padded batch
+        input_ids = torch.tensor([
+            [vocab.pad_token_id, vocab.pad_token_id, vocab.start_id, vocab.obj_start_id],
+            [vocab.start_id, vocab.obj_start_id, key_id, value_id],
+        ], dtype=torch.long, device=generator.device)
+
+        path_types = torch.zeros(2, 4, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(2, 4, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(2, 4, dtype=torch.long, device=generator.device)
+
+        # Attention mask: False for PAD, True for real tokens
+        attention_mask = torch.tensor([
+            [False, False, True, True],
+            [True, True, True, True],
+        ], dtype=torch.bool, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=False,
+            max_tokens=50,
+        )
+
+        assert len(results) == 2
+        for result in results:
+            assert isinstance(result, dict)
+
+    def test_generate_from_tensors_batched_stop_after_value(self, model, tokenizer):
+        """Test stop_after_value works correctly for batched generation."""
+        generator = OrigamiGenerator(model, tokenizer)
+        vocab = tokenizer.vocab
+        max_depth = tokenizer.max_depth
+
+        from origami.tokenizer.vocabulary import KeyToken
+        key1 = KeyToken("name")
+        key1_id = vocab.encode(key1)
+        key2 = KeyToken("age")
+        key2_id = vocab.encode(key2)
+
+        # Two sequences, both waiting for a value
+        # Seq 1: START OBJ_START key:name (awaiting value)
+        # Seq 2: START OBJ_START key:age (awaiting value)
+        input_ids = torch.tensor([
+            [vocab.start_id, vocab.obj_start_id, key1_id],
+            [vocab.start_id, vocab.obj_start_id, key2_id],
+        ], dtype=torch.long, device=generator.device)
+
+        path_types = torch.zeros(2, 3, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(2, 3, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(2, 3, dtype=torch.long, device=generator.device)
+        attention_mask = torch.ones(2, 3, dtype=torch.bool, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=True,
+            max_tokens=50,
+        )
+
+        # Should return exactly 2 values (one per sequence)
+        assert len(results) == 2
+        # Each result should be a single value (not a full object)
+        # The value could be a primitive, object, or array depending on model
+
+    def test_generate_from_tensors_different_prefix_lengths(self, model, tokenizer):
+        """Test generation from sequences with different prefix lengths."""
+        generator = OrigamiGenerator(model, tokenizer)
+        vocab = tokenizer.vocab
+        max_depth = tokenizer.max_depth
+
+        from origami.tokenizer.vocabulary import KeyToken, ValueToken
+        key_token = KeyToken("name")
+        key_id = vocab.encode(key_token)
+        value_token = ValueToken("Alice")
+        value_id = vocab.encode(value_token)
+
+        # Seq 1: Very short prefix (just started)
+        # Seq 2: Longer prefix (has some content already)
+        # Seq 3: Even longer prefix
+        # All left-padded to same length
+        max_len = 6
+
+        input_ids = torch.full((3, max_len), vocab.pad_token_id, dtype=torch.long, device=generator.device)
+        attention_mask = torch.zeros(3, max_len, dtype=torch.bool, device=generator.device)
+
+        # Seq 1: [PAD, PAD, PAD, PAD, START, OBJ_START]
+        input_ids[0, -2:] = torch.tensor([vocab.start_id, vocab.obj_start_id])
+        attention_mask[0, -2:] = True
+
+        # Seq 2: [PAD, PAD, START, OBJ_START, key, value]
+        input_ids[1, -4:] = torch.tensor([vocab.start_id, vocab.obj_start_id, key_id, value_id])
+        attention_mask[1, -4:] = True
+
+        # Seq 3: [START, OBJ_START, key, value, key, ...] - full
+        input_ids[2, :] = torch.tensor([vocab.start_id, vocab.obj_start_id, key_id, value_id, key_id, value_id])
+        attention_mask[2, :] = True
+
+        path_types = torch.zeros(3, max_len, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(3, max_len, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(3, max_len, dtype=torch.long, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=False,
+            max_tokens=50,
+        )
+
+        assert len(results) == 3
+        for result in results:
+            assert isinstance(result, dict)
+
+
+class TestGeneratorGrammarConstraints:
+    """Tests for grammar constraint handling in generator."""
+
+    @pytest.fixture
+    def constrained_tokenizer(self):
+        """Create a tokenizer for grammar constraint tests."""
+        data = [
+            {"a": 1, "b": 2},
+            {"x": "hello", "y": "world"},
+        ]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        return tokenizer
+
+    @pytest.fixture
+    def constrained_model(self, constrained_tokenizer):
+        """Create model with grammar constraints enabled."""
+        config = OrigamiConfig(
+            vocab_size=constrained_tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=constrained_tokenizer.max_depth,
+            use_grammar_constraints=True,
+        )
+        return OrigamiModel(config, vocab=constrained_tokenizer.vocab)
+
+    def test_generate_respects_grammar(self, constrained_model, constrained_tokenizer):
+        """Test that generated objects follow JSON grammar."""
+        generator = OrigamiGenerator(constrained_model, constrained_tokenizer)
+
+        # Generate multiple samples
+        results = generator.generate(num_samples=5, max_length=100, seed=42)
+
+        assert len(results) == 5
+        for result in results:
+            # All results should be valid dicts (grammar enforced)
+            assert isinstance(result, dict)
+
+    def test_generate_from_tensors_with_grammar(self, constrained_model, constrained_tokenizer):
+        """Test generate_from_tensors uses incremental grammar correctly."""
+        generator = OrigamiGenerator(constrained_model, constrained_tokenizer)
+        vocab = constrained_tokenizer.vocab
+        max_depth = constrained_tokenizer.max_depth
+
+        # Start with just START token
+        input_ids = torch.tensor([
+            [vocab.start_id],
+        ], dtype=torch.long, device=generator.device)
+
+        path_types = torch.zeros(1, 1, max_depth, dtype=torch.long, device=generator.device)
+        path_ids = torch.zeros(1, 1, max_depth, dtype=torch.long, device=generator.device)
+        path_lengths = torch.zeros(1, 1, dtype=torch.long, device=generator.device)
+        attention_mask = torch.ones(1, 1, dtype=torch.bool, device=generator.device)
+
+        results = generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=False,
+            max_tokens=100,
+        )
+
+        assert len(results) == 1
+        assert isinstance(results[0], dict)
+
+
+class TestGeneratorEdgeCases:
+    """Edge case tests for generator."""
+
+    @pytest.fixture
+    def edge_tokenizer(self):
+        """Create tokenizer with edge case data."""
+        data = [
+            {},  # Empty object
+            {"single": "value"},
+            {"deep": {"nested": {"structure": "here"}}},
+        ]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        return tokenizer
+
+    @pytest.fixture
+    def edge_model(self, edge_tokenizer):
+        """Create model for edge case tests."""
+        config = OrigamiConfig(
+            vocab_size=edge_tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=edge_tokenizer.max_depth,
+        )
+        return OrigamiModel(config, vocab=edge_tokenizer.vocab)
+
+    def test_generate_handles_max_tokens_limit(self, edge_model, edge_tokenizer):
+        """Test generation stops at max_tokens limit."""
+        generator = OrigamiGenerator(edge_model, edge_tokenizer)
+
+        # Very short max_tokens - should still produce valid output
+        results = generator.generate(num_samples=1, max_length=10, seed=42)
+
+        assert len(results) == 1
+        # Result should be a dict (possibly incomplete but valid)
+        assert isinstance(results[0], dict)
+
+    def test_generate_single_sample(self, edge_model, edge_tokenizer):
+        """Test generating exactly one sample."""
+        generator = OrigamiGenerator(edge_model, edge_tokenizer)
+
+        results = generator.generate(num_samples=1, max_length=50, seed=42)
+
+        assert len(results) == 1
+        assert isinstance(results[0], dict)
+
+    def test_generate_many_samples(self, edge_model, edge_tokenizer):
+        """Test generating many samples at once."""
+        generator = OrigamiGenerator(edge_model, edge_tokenizer)
+
+        results = generator.generate(num_samples=10, max_length=50, seed=42)
+
+        assert len(results) == 10
+        for result in results:
+            assert isinstance(result, dict)

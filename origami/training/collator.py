@@ -17,7 +17,9 @@ class OrigamiDataCollator:
     """Collator for batching tokenized JSON instances.
 
     Takes a list of TokenizedInstance objects from the dataset and
-    creates batched tensors ready for model input.
+    creates batched tensors ready for model input. Uses LEFT-PADDING
+    so all sequences end at the same position, enabling easy batched
+    prediction where `logits[:, -1, :]` gives the next token for all.
 
     This separates the tokenization (with shuffling) from batching,
     allowing the dataset to control key-order permutations while
@@ -107,27 +109,31 @@ class OrigamiDataCollator:
         )
         path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
 
-        # Fill tensors
+        # Fill tensors with LEFT-PADDING
+        # Content is placed at the END of the sequence, PADs at the START
         for b, (token_ids, paths) in enumerate(
             zip(batch_token_ids, batch_paths, strict=True)
         ):
             seq_len = len(token_ids)
-            input_ids[b, :seq_len] = torch.tensor(token_ids, dtype=torch.long)
-            attention_mask[b, :seq_len] = True
+            # Left-pad: content goes at positions [max_seq_len - seq_len : max_seq_len]
+            start_pos = max_seq_len - seq_len
+            input_ids[b, start_pos:] = torch.tensor(token_ids, dtype=torch.long)
+            attention_mask[b, start_pos:] = True
 
-            # Encode paths
+            # Encode paths at the correct (left-padded) positions
             for t, path in enumerate(paths):
+                pos = start_pos + t  # Actual position in padded sequence
                 depth = min(len(path), max_depth)
-                path_lengths[b, t] = depth
+                path_lengths[b, pos] = depth
 
                 for d, element in enumerate(path[:depth]):
                     if isinstance(element, KeyElement):
-                        path_types[b, t, d] = PATH_TYPE_KEY
+                        path_types[b, pos, d] = PATH_TYPE_KEY
                         key_token = KeyToken(element.key)
-                        path_ids[b, t, d] = vocab.encode(key_token)
+                        path_ids[b, pos, d] = vocab.encode(key_token)
                     elif isinstance(element, IndexElement):
-                        path_types[b, t, d] = PATH_TYPE_INDEX
-                        path_ids[b, t, d] = min(
+                        path_types[b, pos, d] = PATH_TYPE_INDEX
+                        path_ids[b, pos, d] = min(
                             element.index, self.tokenizer.max_array_index - 1
                         )
 

@@ -177,14 +177,13 @@ class TestJSONGrammarPDA:
         tokens = torch.tensor([
             [vocab.start_id, vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id, vocab.end_id, vocab.pad_token_id, vocab.pad_token_id]
         ])
-        attention_mask = torch.tensor([[True, True, True, True, True, True, False, False]])
 
-        masks = pda.compute_valid_mask(tokens, attention_mask)
+        masks = pda.compute_valid_mask(tokens)
 
-        # Padding positions (6, 7) should only allow PAD
-        assert masks[0, 6, vocab.pad_token_id].item() is True
+        # After END, grammar state doesn't allow any valid token (ended=True)
+        # The PAD token at position 6 follows END, so grammar allows nothing meaningful
+        # Loss computation handles PAD via attention_mask separately
         assert masks[0, 6, vocab.start_id].item() is False
-        assert masks[0, 7, vocab.pad_token_id].item() is True
 
     def test_apply_constraints(self, vocab, pda):
         """Test logit masking with constraints."""

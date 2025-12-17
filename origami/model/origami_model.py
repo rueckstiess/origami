@@ -133,13 +133,10 @@ class OrigamiModel(nn.Module):
         # 3. Discrete head
         logits = self.discrete_head(hidden)
 
-        # 4. Apply grammar constraints (both training and inference)
-        # By masking invalid tokens, the model focuses probability mass on valid tokens only.
-        if self.config.use_grammar_constraints:
-            # In inference mode without labels, only compute mask for last position (faster)
-            # In training mode, compute masks for all positions
-            last_only = torch.is_inference_mode_enabled() and labels is None
-            logits = self._apply_grammar_mask(logits, input_ids, attention_mask, last_position_only=last_only)
+        # 4. Apply grammar constraints ONLY during training (when labels provided)
+        # During inference, the Generator handles grammar incrementally for O(n) total.
+        if self.config.use_grammar_constraints and labels is not None:
+            logits = self._apply_grammar_mask(logits, input_ids)
 
         # 5. Continuous head (if enabled)
         continuous_params = None
@@ -169,25 +166,19 @@ class OrigamiModel(nn.Module):
         self,
         logits: Tensor,
         input_ids: Tensor,
-        attention_mask: Tensor | None = None,
-        last_position_only: bool = False,
     ) -> Tensor:
-        """Apply grammar constraints to logits.
+        """Apply grammar constraints to logits for training.
 
-        Uses the PDA to compute which tokens are grammatically valid at each
-        position, then masks invalid tokens with -inf.
+        Computes which tokens are grammatically valid at each position
+        and masks invalid tokens with -inf. Only called during training.
 
-        Note: Grammar computation always runs on CPU for performance, as the
+        Note: Grammar computation runs on CPU for performance, as the
         PDA state updates involve many small tensor operations that cause
         excessive synchronization overhead on MPS/CUDA.
 
         Args:
             logits: Raw logits of shape (batch, seq_len, vocab_size)
             input_ids: Input token IDs for grammar state
-            attention_mask: Optional attention mask
-            last_position_only: If True, only compute mask for the last position.
-                Much faster for autoregressive generation where we only need
-                the last position's logits.
 
         Returns:
             Logits with invalid tokens masked to -inf
@@ -198,25 +189,13 @@ class OrigamiModel(nn.Module):
         # Run grammar computation on CPU for performance (avoids MPS/CUDA sync overhead)
         original_device = logits.device
         input_ids_cpu = input_ids.cpu()
-        attention_mask_cpu = attention_mask.cpu() if attention_mask is not None else None
 
-        if last_position_only:
-            # Fast path: only compute mask for last position (O(seq_len) vs O(seq_len^2))
-            valid_mask_cpu = self._grammar_pda.get_next_token_mask(input_ids_cpu)
-            # Ensure contiguous layout before device transfer
-            valid_mask = valid_mask_cpu.contiguous().to(original_device)
-            # Only mask the last position's logits
-            logits = logits.clone()
-            logits[:, -1] = logits[:, -1].masked_fill(~valid_mask, float("-inf"))
-            return logits
-        else:
-            # Full path: compute mask for all positions (needed for training)
-            valid_mask_cpu = self._grammar_pda.compute_valid_mask(input_ids_cpu, attention_mask_cpu)
-            # Clone and make contiguous before device transfer to avoid shared storage issues
-            valid_mask = valid_mask_cpu.clone().contiguous().to(original_device)
-            # Apply mask using masked_fill which is MPS-safe
-            # Clone logits first to avoid in-place modification
-            return logits.clone().masked_fill(~valid_mask, float("-inf"))
+        # Compute mask for all positions (training always needs full mask)
+        valid_mask_cpu = self._grammar_pda.compute_valid_mask(input_ids_cpu)
+        # Clone and make contiguous before device transfer to avoid shared storage issues
+        valid_mask = valid_mask_cpu.clone().contiguous().to(original_device)
+        # Apply mask using masked_fill which is MPS-safe
+        return logits.clone().masked_fill(~valid_mask, float("-inf"))
 
     def _compute_loss(
         self,

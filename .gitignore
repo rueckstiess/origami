@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test coverage
+.coverage
+
+# Local data and checkpoints
+datasets/
+checkpoints/

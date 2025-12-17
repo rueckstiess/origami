@@ -1,6 +1,12 @@
 """ORIGAMI JSON generator.
 
 Generates complete JSON objects by autoregressive sampling from a trained ORIGAMI model.
+
+The Generator provides two public methods:
+- `generate()`: Generate complete JSON objects from scratch
+- `generate_from_tensors()`: Core generation loop from pre-encoded sequences
+
+The Predictor uses `generate_from_tensors()` with `stop_after_value=True` for value prediction.
 """
 
 from dataclasses import dataclass, field
@@ -12,12 +18,6 @@ from torch import Tensor
 
 from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
 from origami.tokenizer.vocabulary import (
-    ARRAY_END,
-    ARRAY_START,
-    END,
-    OBJ_END,
-    OBJ_START,
-    START,
     KeyToken,
     ValueToken,
 )
@@ -117,8 +117,11 @@ class PathState:
 class OrigamiGenerator:
     """Generate JSON objects by autoregressive sampling from a trained model.
 
-    Supports various sampling strategies (greedy, temperature, top-k, top-p)
-    and can generate from scratch or continue from a partial object.
+    Supports various sampling strategies (greedy, temperature, top-k, top-p).
+
+    Public methods:
+    - `generate()`: Generate complete JSON objects from scratch
+    - `generate_from_tensors()`: Core generation loop from pre-encoded tensor sequences
 
     Example:
         ```python
@@ -126,10 +129,6 @@ class OrigamiGenerator:
 
         # Generate from scratch
         objects = generator.generate(num_samples=5, temperature=0.8)
-
-        # Continue from partial object
-        prefix = {"name": "Alice", "age": 30}
-        completions = generator.generate_from_prefix(prefix, num_samples=3)
         ```
     """
 
@@ -153,6 +152,9 @@ class OrigamiGenerator:
         self.device = torch.device("cpu")
         self.model.to(self.device)
         self.model.eval()
+
+        # Get grammar PDA reference from model for incremental constraint application
+        self._grammar_pda = model._grammar_pda
 
     @torch.inference_mode()
     def generate(
@@ -184,48 +186,139 @@ class OrigamiGenerator:
 
         max_length = max_length or 512
         vocab = self.tokenizer.vocab
+        max_depth = self.tokenizer.max_depth
 
         # Initialize with START token
         input_ids = torch.full(
             (num_samples, 1), vocab.start_id, dtype=torch.long, device=self.device
         )
 
-        # Initialize path tensors
+        # Initialize path tensors (START has empty path)
         path_types = torch.zeros(
-            num_samples, 1, self.tokenizer.max_depth, dtype=torch.long, device=self.device
+            num_samples, 1, max_depth, dtype=torch.long, device=self.device
         )
         path_ids = torch.zeros(
-            num_samples, 1, self.tokenizer.max_depth, dtype=torch.long, device=self.device
+            num_samples, 1, max_depth, dtype=torch.long, device=self.device
         )
-        path_lengths = torch.zeros(
-            num_samples, 1, dtype=torch.long, device=self.device
+        path_lengths = torch.zeros(num_samples, 1, dtype=torch.long, device=self.device)
+
+        # Attention mask: all ones since no padding yet
+        attention_mask = torch.ones(num_samples, 1, dtype=torch.bool, device=self.device)
+
+        # Delegate to core generation loop
+        return self.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=False,  # Generate until END
+            max_tokens=max_length,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
         )
 
-        # Track path state for each sequence
-        path_states = [PathState() for _ in range(num_samples)]
+    @torch.inference_mode()
+    def generate_from_tensors(
+        self,
+        input_ids: Tensor,
+        path_types: Tensor,
+        path_ids: Tensor,
+        path_lengths: Tensor,
+        attention_mask: Tensor,
+        stop_after_value: bool = False,
+        max_tokens: int = 512,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        top_p: float | None = None,
+    ) -> list[Any]:
+        """Core generation loop from pre-encoded sequences.
+
+        This is the single implementation of the generation loop.
+        All generation methods call this internally.
+
+        Args:
+            input_ids: Pre-encoded sequences (batch, seq_len), may be left-padded
+            path_types: Path type encoding (batch, seq_len, max_depth)
+            path_ids: Path ID encoding (batch, seq_len, max_depth)
+            path_lengths: Path lengths (batch, seq_len)
+            attention_mask: True for real tokens, False for PAD
+            stop_after_value: If True, stop each sequence after one complete value
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            top_k: Top-k filtering
+            top_p: Top-p (nucleus) filtering
+
+        Returns:
+            List of generated values (one per input sequence).
+            Values can be dicts, lists, or primitives depending on what was generated.
+        """
+        vocab = self.tokenizer.vocab
+        batch_size = input_ids.size(0)
+
+        # Clone tensors for generation (we'll extend them)
+        current_ids = input_ids.clone()
+        current_path_types = path_types.clone()
+        current_path_ids = path_ids.clone()
+        current_path_lengths = path_lengths.clone()
+        current_attention_mask = attention_mask.clone()
+
+        # Initialize path states for each sequence from their token prefixes
+        path_states = []
+        for i in range(batch_size):
+            mask = current_attention_mask[i]
+            seq_tokens = current_ids[i][mask].tolist()
+            # Create single path state from prefix
+            states = self._init_path_states_from_tokens(seq_tokens, num_samples=1)
+            path_states.append(states[0])
+
+        # Initialize grammar state for each sequence from their prefixes
+        grammar_state = None
+        initial_depths = None
+        if self._grammar_pda is not None:
+            grammar_states = []
+            for i in range(batch_size):
+                mask = current_attention_mask[i]
+                seq_tokens = current_ids[i][mask]
+                state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
+                grammar_states.append(state)
+            grammar_state = self._stack_grammar_states(grammar_states)
+            # Record initial depths for stop_after_value
+            initial_depths = grammar_state[1].clone()
 
         # Track completion
-        done = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
+        done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
 
-        # Generate tokens
-        for _ in range(max_length - 1):
+        # Track where each sequence's generated content starts
+        gen_start_positions = current_ids.size(1) * torch.ones(
+            batch_size, dtype=torch.long, device=self.device
+        )
+
+        # Generation loop
+        for _ in range(max_tokens):
             if done.all():
                 break
 
-            # Forward pass
-            attention_mask = torch.ones(
-                input_ids.shape, dtype=torch.bool, device=self.device
-            )
+            # Forward pass (no grammar masking in model - we do it here incrementally)
             output = self.model(
-                input_ids=input_ids,
-                path_types=path_types,
-                path_ids=path_ids,
-                path_lengths=path_lengths,
-                attention_mask=attention_mask,
+                input_ids=current_ids,
+                path_types=current_path_types,
+                path_ids=current_path_ids,
+                path_lengths=current_path_lengths,
+                attention_mask=current_attention_mask,
             )
 
             # Get logits for last position
             next_logits = output.logits[:, -1, :]  # (batch, vocab_size)
+
+            # Apply grammar constraints incrementally - O(1) per step
+            if self._grammar_pda is not None and grammar_state is not None:
+                last_token = current_ids[:, -1]
+                valid_mask, grammar_state = self._grammar_pda.get_next_token_mask(
+                    last_token, grammar_state
+                )
+                next_logits = next_logits.masked_fill(~valid_mask, float("-inf"))
 
             # Sample next token
             next_tokens = self._sample(
@@ -235,262 +328,85 @@ class OrigamiGenerator:
             # For completed sequences, use PAD token
             next_tokens = torch.where(done, vocab.pad_token_id, next_tokens)
 
-            # Check for END token
-            done = done | (next_tokens == vocab.end_id)
+            # Check for completion
+            if stop_after_value and initial_depths is not None:
+                # Stop when depth returns below initial (value is complete)
+                current_depths = grammar_state[1]  # depth is second element
+                value_complete = current_depths < initial_depths
+                done = done | value_complete
+            else:
+                # Stop on END token
+                done = done | (next_tokens == vocab.end_id)
 
             # Update path states and get new path tensors
             new_path_types, new_path_ids, new_path_lengths = self._update_paths(
                 next_tokens, path_states, done
             )
 
-            # Append new tokens and paths
-            input_ids = torch.cat(
-                [input_ids, next_tokens.unsqueeze(1)], dim=1
-            )
-            path_types = torch.cat([path_types, new_path_types], dim=1)
-            path_ids = torch.cat([path_ids, new_path_ids], dim=1)
-            path_lengths = torch.cat([path_lengths, new_path_lengths], dim=1)
-
-        # Decode generated sequences
-        results = []
-        for i in range(num_samples):
-            # Find END token position
-            seq = input_ids[i].tolist()
-            try:
-                end_pos = seq.index(vocab.end_id)
-                seq = seq[: end_pos + 1]
-            except ValueError:
-                # No END token, append it
-                seq.append(vocab.end_id)
-
-            try:
-                obj = self.tokenizer.decode(seq)
-                results.append(obj)
-            except Exception:
-                # Decoding failed, return empty dict
-                results.append({})
-
-        return results
-
-    @torch.inference_mode()
-    def generate_from_prefix(
-        self,
-        prefix: dict,
-        num_samples: int = 1,
-        max_length: int | None = None,
-        temperature: float = 1.0,
-        top_k: int | None = None,
-        top_p: float | None = None,
-    ) -> list[dict]:
-        """Continue generation from a partial JSON object.
-
-        Args:
-            prefix: Partial object to continue from
-            num_samples: Number of completions to generate
-            max_length: Maximum total sequence length (default: 512)
-            temperature: Sampling temperature
-            top_k: If set, only sample from top-k most likely tokens
-            top_p: If set, sample from smallest set with cumulative prob >= top_p
-
-        Returns:
-            List of completed JSON objects
-        """
-        max_length = max_length or 512
-
-        # Tokenize prefix (without END token)
-        prefix_batch = self.tokenizer.encode_batch([prefix], shuffle=False)
-
-        # Remove END token from prefix
-        # The tokenizer adds START ... END, we want START ...
-        prefix_len = prefix_batch.lengths[0].item() - 1  # Exclude END
-
-        # Replicate prefix for all samples
-        input_ids = prefix_batch.input_ids[:, :prefix_len].repeat(num_samples, 1)
-        path_types = prefix_batch.path_types[:, :prefix_len].repeat(num_samples, 1, 1)
-        path_ids = prefix_batch.path_ids[:, :prefix_len].repeat(num_samples, 1, 1)
-        path_lengths = prefix_batch.path_lengths[:, :prefix_len].repeat(num_samples, 1)
-
-        input_ids = input_ids.to(self.device)
-        path_types = path_types.to(self.device)
-        path_ids = path_ids.to(self.device)
-        path_lengths = path_lengths.to(self.device)
-
-        # Initialize path states from prefix
-        path_states = self._init_path_states_from_tokens(
-            input_ids[0].tolist(), num_samples
-        )
-
-        vocab = self.tokenizer.vocab
-        done = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
-
-        # Generate tokens
-        for _ in range(max_length - prefix_len):
-            if done.all():
-                break
-
-            attention_mask = torch.ones(
-                input_ids.shape, dtype=torch.bool, device=self.device
-            )
-            output = self.model(
-                input_ids=input_ids,
-                path_types=path_types,
-                path_ids=path_ids,
-                path_lengths=path_lengths,
-                attention_mask=attention_mask,
-            )
-
-            next_logits = output.logits[:, -1, :]
-            next_tokens = self._sample(
-                next_logits, temperature=temperature, top_k=top_k, top_p=top_p
-            )
-
-            next_tokens = torch.where(done, vocab.pad_token_id, next_tokens)
-            done = done | (next_tokens == vocab.end_id)
-
-            new_path_types, new_path_ids, new_path_lengths = self._update_paths(
-                next_tokens, path_states, done
-            )
-
-            input_ids = torch.cat([input_ids, next_tokens.unsqueeze(1)], dim=1)
-            path_types = torch.cat([path_types, new_path_types], dim=1)
-            path_ids = torch.cat([path_ids, new_path_ids], dim=1)
-            path_lengths = torch.cat([path_lengths, new_path_lengths], dim=1)
-
-        # Decode generated sequences
-        results = []
-        for i in range(num_samples):
-            seq = input_ids[i].tolist()
-            try:
-                end_pos = seq.index(vocab.end_id)
-                seq = seq[: end_pos + 1]
-            except ValueError:
-                seq.append(vocab.end_id)
-
-            try:
-                obj = self.tokenizer.decode(seq)
-                results.append(obj)
-            except Exception:
-                # Decoding failed, return empty dict
-                results.append({})
-
-        return results
-
-    def generate_value(
-        self,
-        input_ids: Tensor,
-        path_types: Tensor,
-        path_ids: Tensor,
-        path_lengths: Tensor,
-        path_state: PathState,
-        max_tokens: int = 100,
-        temperature: float = 1.0,
-        top_k: int | None = None,
-        top_p: float | None = None,
-    ) -> tuple[list[int], Any]:
-        """Generate a complete value starting from current position.
-
-        This is used by the Predictor to generate complex values (objects/arrays)
-        when the predicted token is OBJ_START or ARRAY_START.
-
-        Args:
-            input_ids: Current token sequence (1, seq_len)
-            path_types: Current path types (1, seq_len, max_depth)
-            path_ids: Current path IDs (1, seq_len, max_depth)
-            path_lengths: Current path lengths (1, seq_len)
-            path_state: Current path state
-            max_tokens: Maximum tokens to generate for the value
-            temperature: Sampling temperature
-            top_k: Top-k filtering
-            top_p: Top-p filtering
-
-        Returns:
-            Tuple of (generated_token_ids, decoded_value)
-        """
-        from origami.constraints.json_grammar import JSONGrammarPDA
-
-        vocab = self.tokenizer.vocab
-        generated_tokens: list[int] = []
-
-        # Clone tensors for generation
-        current_ids = input_ids.clone()
-        current_path_types = path_types.clone()
-        current_path_ids = path_ids.clone()
-        current_path_lengths = path_lengths.clone()
-        current_state = path_state.clone()
-
-        # Use PDA to track grammar state and determine when value is complete
-        pda = JSONGrammarPDA(vocab, max_depth=self.tokenizer.max_depth)
-
-        # Initialize PDA state by processing all tokens in input_ids
-        # This gives us the state AFTER the OBJ_START/ARRAY_START
-        batch_size = 1
-        stack = torch.zeros(batch_size, pda.max_depth, dtype=torch.long, device=self.device)
-        depth = torch.zeros(batch_size, dtype=torch.long, device=self.device)
-        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-        ended = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-
-        # Process existing tokens to get current PDA state
-        for t in range(current_ids.size(1)):
-            token = current_ids[:, t]
-            stack, depth, awaiting_value, seen_start, root_closed, ended = pda._update_state(
-                token, stack, depth, awaiting_value, seen_start, root_closed, ended
-            )
-
-        # Record initial depth (after OBJ_START/ARRAY_START)
-        initial_depth = depth.item()
-
-        for _ in range(max_tokens):
-            attention_mask = torch.ones(
-                current_ids.shape, dtype=torch.bool, device=self.device
-            )
-            output = self.model(
-                input_ids=current_ids,
-                path_types=current_path_types,
-                path_ids=current_path_ids,
-                path_lengths=current_path_lengths,
-                attention_mask=attention_mask,
-            )
-
-            next_logits = output.logits[:, -1, :]
-            next_token = self._sample(
-                next_logits, temperature=temperature, top_k=top_k, top_p=top_p
-            )
-
-            token_id = next_token.item()
-            generated_tokens.append(token_id)
-
-            # Update PDA state with generated token
-            stack, depth, awaiting_value, seen_start, root_closed, ended = pda._update_state(
-                next_token, stack, depth, awaiting_value, seen_start, root_closed, ended
-            )
-
-            # Value is complete when depth returns to initial_depth - 1
-            # (we've closed the container that was opened by the start token)
-            if depth.item() < initial_depth:
-                break
-
-            # Update path state for position encoding
-            done = torch.zeros(1, dtype=torch.bool, device=self.device)
-            new_path_types, new_path_ids, new_path_lengths = self._update_paths(
-                next_token, [current_state], done
-            )
-
-            current_ids = torch.cat([current_ids, next_token.unsqueeze(1)], dim=1)
+            # Extend tensors
+            current_ids = torch.cat([current_ids, next_tokens.unsqueeze(1)], dim=1)
             current_path_types = torch.cat([current_path_types, new_path_types], dim=1)
             current_path_ids = torch.cat([current_path_ids, new_path_ids], dim=1)
             current_path_lengths = torch.cat([current_path_lengths, new_path_lengths], dim=1)
+            # New tokens are real (not PAD)
+            new_mask = (~done).unsqueeze(1)
+            current_attention_mask = torch.cat([current_attention_mask, new_mask], dim=1)
 
-        # Decode the generated value
-        # We need to construct a minimal valid sequence to decode
-        # The generated tokens form a complete value
-        try:
-            value = self._decode_value_tokens(generated_tokens)
-        except Exception:
-            value = None
+        # Decode generated sequences
+        results = []
+        for i in range(batch_size):
+            # Get the generated portion (after input prefix)
+            start_pos = gen_start_positions[i].item()
+            mask = current_attention_mask[i]
+            seq = current_ids[i][mask].tolist()
 
-        return generated_tokens, value
+            if stop_after_value:
+                # Decode just the generated value tokens
+                value_tokens = seq[start_pos:]
+                try:
+                    value = self._decode_value_tokens(value_tokens)
+                    results.append(value)
+                except Exception:
+                    results.append(None)
+            else:
+                # Decode full sequence as JSON object
+                # Find END token position
+                try:
+                    end_pos = seq.index(vocab.end_id)
+                    seq = seq[: end_pos + 1]
+                except ValueError:
+                    # No END token, append it
+                    seq.append(vocab.end_id)
+
+                try:
+                    obj = self.tokenizer.decode(seq)
+                    results.append(obj)
+                except Exception:
+                    results.append({})
+
+        return results
+
+    def _stack_grammar_states(
+        self,
+        states: list[tuple[Tensor, ...]],
+    ) -> tuple[Tensor, ...]:
+        """Stack individual grammar states into a batched state.
+
+        Args:
+            states: List of state tuples, each from init_state_from_tokens
+                   with batch_size=1
+
+        Returns:
+            Single state tuple with concatenated batch dimension
+        """
+        # Each state is (stack, depth, awaiting_value, seen_start, root_closed, ended)
+        # Each tensor has shape (1, ...) - we concatenate along batch dimension
+        num_components = len(states[0])
+        stacked = []
+        for i in range(num_components):
+            component_tensors = [s[i] for s in states]
+            stacked.append(torch.cat(component_tensors, dim=0))
+        return tuple(stacked)
 
     def _decode_value_tokens(self, token_ids: list[int]) -> Any:
         """Decode a sequence of tokens representing a single value.

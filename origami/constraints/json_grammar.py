@@ -77,7 +77,6 @@ class JSONGrammarPDA:
     def compute_valid_mask(
         self,
         token_ids: Tensor,  # (batch, seq_len)
-        attention_mask: Tensor | None = None,  # (batch, seq_len)
     ) -> Tensor:
         """Compute grammar-valid next-token masks for each position.
 
@@ -85,10 +84,12 @@ class JSONGrammarPDA:
         This method returns mask[t] indicating which tokens are valid at
         position t+1, based on state after processing tokens 0..t.
 
+        Note: With left-padded sequences, PAD tokens at the start are handled
+        correctly by the grammar state (they don't update state). The loss
+        computation handles PAD positions via attention_mask separately.
+
         Args:
             token_ids: Input token IDs of shape (batch, seq_len)
-            attention_mask: Boolean mask where True = valid position.
-                If None, all positions are valid.
 
         Returns:
             Boolean mask of shape (batch, seq_len, vocab_size) where
@@ -131,6 +132,7 @@ class JSONGrammarPDA:
             current_token = token_ids[:, t]  # (batch,)
 
             # Update state with current token FIRST
+            # Note: PAD tokens don't match any grammar token, so state remains unchanged
             stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
                 current_token, stack, depth, awaiting_value, seen_start, root_closed, ended
             )
@@ -140,17 +142,6 @@ class JSONGrammarPDA:
                 stack, depth, awaiting_value, seen_start, root_closed, ended,
                 key_ids, value_ids, device
             )
-
-            # Apply attention mask: padding positions get PAD-only mask
-            if attention_mask is not None:
-                pad_mask = torch.zeros(vocab_size, dtype=torch.bool, device=device)
-                pad_mask[self.vocab.pad_token_id] = True
-                # Where attention_mask is False (padding), use pad-only mask
-                valid_mask = torch.where(
-                    attention_mask[:, t : t + 1],
-                    valid_mask,
-                    pad_mask.unsqueeze(0).expand(batch_size, -1),
-                )
 
             masks[:, t] = valid_mask
 
@@ -360,72 +351,32 @@ class JSONGrammarPDA:
 
     def get_next_token_mask(
         self,
-        token_ids: Tensor,  # (batch, seq_len)
-    ) -> Tensor:
-        """Get valid next-token mask efficiently for autoregressive generation.
-
-        Unlike compute_valid_mask which computes masks for ALL positions,
-        this method only returns the mask for the NEXT position after the
-        sequence. This is O(seq_len) instead of O(seq_len^2) for generation.
-
-        Args:
-            token_ids: Input token IDs of shape (batch, seq_len)
-
-        Returns:
-            Boolean mask of shape (batch, vocab_size) indicating valid
-            tokens for position seq_len (the next token to generate).
-        """
-        batch_size, seq_len = token_ids.shape
-        device = token_ids.device
-
-        # Initialize state tensors
-        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
-        depth = torch.zeros(batch_size, dtype=torch.long, device=device)
-        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
-
-        # Process all tokens to get final state
-        for t in range(seq_len):
-            token = token_ids[:, t]
-            stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
-                token, stack, depth, awaiting_value, seen_start, root_closed, ended
-            )
-
-        # Get valid tokens for next position based on final state
-        key_ids = self._key_ids.to(device)
-        value_ids = self._value_ids.to(device)
-
-        return self._get_valid_tokens(
-            stack, depth, awaiting_value, seen_start, root_closed, ended,
-            key_ids, value_ids, device
-        )
-
-    def get_next_token_mask_incremental(
-        self,
         last_token: Tensor,  # (batch,)
-        stack: Tensor,  # (batch, max_depth)
-        depth: Tensor,  # (batch,)
-        awaiting_value: Tensor,  # (batch,)
-        seen_start: Tensor,  # (batch,)
-        root_closed: Tensor,  # (batch,)
-        ended: Tensor,  # (batch,)
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        state: tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor],
+    ) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]]:
         """Update state with one token and return next-token mask.
 
         For incremental generation where we maintain state between steps.
         This is O(1) per token instead of O(seq_len).
 
+        The state tuple contains: (stack, depth, awaiting_value, seen_start, root_closed, ended)
+        - stack: (batch, max_depth) - container type at each depth
+        - depth: (batch,) - current nesting depth
+        - awaiting_value: (batch,) - whether we're expecting a value after a key
+        - seen_start: (batch,) - whether START token has been seen
+        - root_closed: (batch,) - whether root container has been closed
+        - ended: (batch,) - whether END token has been seen
+
         Args:
             last_token: The last generated token (batch,)
-            stack, depth, awaiting_value, seen_start, root_closed, ended:
-                Current PDA state tensors
+            state: Current PDA state tuple
 
         Returns:
-            Tuple of (valid_mask, stack, depth, awaiting_value, seen_start,
-                     root_closed, ended) - the mask and updated state.
+            Tuple of (valid_mask, updated_state) where:
+            - valid_mask: (batch, vocab_size) boolean mask for next valid tokens
+            - updated_state: Updated state tuple after processing last_token
         """
+        stack, depth, awaiting_value, seen_start, root_closed, ended = state
         device = last_token.device
 
         # Update state with the new token
@@ -442,7 +393,8 @@ class JSONGrammarPDA:
             key_ids, value_ids, device
         )
 
-        return valid_mask, stack, depth, awaiting_value, seen_start, root_closed, ended
+        new_state = (stack, depth, awaiting_value, seen_start, root_closed, ended)
+        return valid_mask, new_state
 
     def init_state(
         self,
@@ -460,4 +412,53 @@ class JSONGrammarPDA:
         seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
         root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
         ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        return stack, depth, awaiting_value, seen_start, root_closed, ended
+
+    def init_state_from_tokens(
+        self,
+        token_ids: Tensor,  # (seq_len,) single sequence
+        batch_size: int,
+        device: torch.device,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Initialize PDA state by replaying a token sequence.
+
+        Used when generating from a prefix - processes the prefix tokens
+        to get the PDA state, then replicates that state for batch generation.
+
+        Note: PAD tokens are skipped (for left-padded sequences).
+
+        Args:
+            token_ids: Single sequence of token IDs (seq_len,)
+            batch_size: Number of copies to create for batched generation
+            device: Device for output tensors
+
+        Returns:
+            Tuple of (stack, depth, awaiting_value, seen_start, root_closed, ended)
+            each with batch dimension.
+        """
+        # Initialize single-sequence state
+        stack = torch.zeros(1, self.max_depth, dtype=torch.long, device=device)
+        depth = torch.zeros(1, dtype=torch.long, device=device)
+        awaiting_value = torch.zeros(1, dtype=torch.bool, device=device)
+        seen_start = torch.zeros(1, dtype=torch.bool, device=device)
+        root_closed = torch.zeros(1, dtype=torch.bool, device=device)
+        ended = torch.zeros(1, dtype=torch.bool, device=device)
+
+        # Process each token (skip PAD tokens for left-padded sequences)
+        for t in range(token_ids.size(0)):
+            token = token_ids[t:t+1].to(device)  # (1,)
+            if token.item() == self.vocab.pad_token_id:
+                continue
+            stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
+                token, stack, depth, awaiting_value, seen_start, root_closed, ended
+            )
+
+        # Replicate state for batch
+        stack = stack.expand(batch_size, -1).contiguous()
+        depth = depth.expand(batch_size).contiguous()
+        awaiting_value = awaiting_value.expand(batch_size).contiguous()
+        seen_start = seen_start.expand(batch_size).contiguous()
+        root_closed = root_closed.expand(batch_size).contiguous()
+        ended = ended.expand(batch_size).contiguous()
+
         return stack, depth, awaiting_value, seen_start, root_closed, ended

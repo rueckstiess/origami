@@ -16,12 +16,17 @@ if TYPE_CHECKING:
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
+from .generator import OrigamiGenerator
+
 
 class OrigamiPredictor:
     """Predict values for target keys using a trained ORIGAMI model.
 
     The predictor uses the model's learned distribution to predict the most
     likely value for a specified key, given the rest of the document as context.
+
+    For primitive values (strings, numbers, bools, null), returns exact probabilities.
+    For complex values (objects, arrays), uses the Generator to complete the value.
 
     Example:
         ```python
@@ -61,6 +66,9 @@ class OrigamiPredictor:
         self.device = torch.device("cpu")
         self.model.to(self.device)
         self.model.eval()
+
+        # Create generator for complex value completion
+        self._generator = OrigamiGenerator(model, tokenizer)
 
     @torch.no_grad()
     def predict(
@@ -226,13 +234,6 @@ class OrigamiPredictor:
         Returns:
             The generated complex value (dict or list)
         """
-        from .generator import OrigamiGenerator
-
-        # Create generator (lazy initialization)
-        # Note: Generator always runs on CPU for performance
-        if not hasattr(self, "_generator"):
-            self._generator = OrigamiGenerator(self.model, self.tokenizer)
-
         # Extract the sequence up to and including the target key position
         # Then add the start token
         seq_len = target_pos + 1
@@ -255,23 +256,24 @@ class OrigamiPredictor:
         path_ids = torch.cat([path_ids, new_path_ids], dim=1)
         path_lengths = torch.cat([path_lengths, new_path_lengths], dim=1)
 
-        # Initialize path state from the token sequence
-        path_states = self._generator._init_path_states_from_tokens(
-            input_ids[0].tolist(), num_samples=1
+        # Create attention mask (all tokens are real, no padding)
+        attention_mask = torch.ones(
+            input_ids.shape, dtype=torch.bool, device=self.device
         )
-        path_state = path_states[0]
 
-        # Generate the rest of the complex value
-        _, value = self._generator.generate_value(
-            input_ids,
-            path_types,
-            path_ids,
-            path_lengths,
-            path_state,
+        # Use generate_from_tensors with stop_after_value=True
+        # This generates the complex value until the container is closed
+        results = self._generator.generate_from_tensors(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            stop_after_value=True,
             max_tokens=100,
         )
 
-        return value
+        return results[0] if results else None
 
     def predict_proba(
         self,
