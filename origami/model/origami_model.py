@@ -123,8 +123,10 @@ class OrigamiModel(nn.Module):
         Returns:
             OrigamiOutput with logits, optional loss, and hidden states
         """
-        # 1. Embeddings
-        hidden = self.embeddings(input_ids, path_types, path_ids, path_lengths)
+        # 1. Embeddings (with numeric values for continuous head)
+        hidden = self.embeddings(
+            input_ids, path_types, path_ids, path_lengths, numeric_values
+        )
 
         # 2. Backbone
         hidden = self.backbone(hidden, attention_mask)
@@ -242,7 +244,7 @@ class OrigamiModel(nn.Module):
             reduction="mean",
         )
 
-        # Add continuous loss if enabled (Phase 6)
+        # Add continuous loss if enabled
         if continuous_params is not None and numeric_values is not None:
             weights, means, log_vars = continuous_params
             # Shift continuous params and values too
@@ -260,7 +262,17 @@ class OrigamiModel(nn.Module):
                     shift_numeric_values,
                     shift_numeric_mask,
                 )
-                loss = loss + continuous_loss
+
+                # Calculate loss weight
+                if self.config.continuous_loss_weight < 0:
+                    # Auto-calculate: proportion of NUM tokens in the batch
+                    num_tokens = shift_numeric_mask.sum().float()
+                    total_tokens = shift_numeric_mask.numel()
+                    weight = max(num_tokens / total_tokens, 0.001)
+                else:
+                    weight = self.config.continuous_loss_weight
+
+                loss = loss + weight * continuous_loss
 
         return loss
 

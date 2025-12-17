@@ -59,6 +59,7 @@ class OrigamiConfig:
     # Continuous head (optional, Phase 6)
     use_continuous_head: bool = False
     num_mixture_components: int = 5
+    continuous_loss_weight: float = -1.0  # -1 = auto-calculate from NUM token proportion
 
     # Sequence limits
     max_seq_length: int = 512

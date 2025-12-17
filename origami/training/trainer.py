@@ -299,7 +299,7 @@ class OrigamiTrainer:
         """
         self.optimizer.zero_grad()
 
-        # Forward pass
+        # Forward pass (include numeric values for continuous head if present)
         output = self.model(
             input_ids=batch["input_ids"],
             path_types=batch["path_types"],
@@ -307,6 +307,8 @@ class OrigamiTrainer:
             path_lengths=batch["path_lengths"],
             attention_mask=batch["attention_mask"],
             labels=batch["labels"],
+            numeric_values=batch.get("numeric_values"),
+            numeric_mask=batch.get("numeric_mask"),
         )
         loss = output.loss
 
@@ -357,6 +359,8 @@ class OrigamiTrainer:
                 path_lengths=batch["path_lengths"],
                 attention_mask=batch["attention_mask"],
                 labels=batch["labels"],
+                numeric_values=batch.get("numeric_values"),
+                numeric_mask=batch.get("numeric_mask"),
             )
 
             total_loss += output.loss.item()

@@ -64,6 +64,12 @@ class OrigamiDataCollator:
                 - path_lengths: (batch, seq_len)
                 - attention_mask: (batch, seq_len)
                 - labels: (batch, seq_len) - same as input_ids for autoregressive
+                - numeric_values: (batch, seq_len) - scaled values at NUM positions
+                - numeric_mask: (batch, seq_len) - True at NUM positions
+                - lengths: (batch,) - original sequence lengths
+
+            Note: The model handles shift internally for both discrete labels
+            and numeric values during loss computation.
         """
         from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
         from origami.tokenizer.path import IndexElement, KeyElement
@@ -98,14 +104,27 @@ class OrigamiDataCollator:
         path_ids = torch.zeros(batch_size, max_seq_len, max_depth, dtype=torch.long)
         path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
 
+        # Numeric values for continuous head
+        numeric_values = torch.zeros(batch_size, max_seq_len, dtype=torch.float)
+        numeric_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+
         # Fill tensors with LEFT-PADDING
         # Content is placed at the END of the sequence, PADs at the START
-        for b, (token_ids, paths) in enumerate(zip(batch_token_ids, batch_paths, strict=True)):
+        for b, (token_ids, paths, inst) in enumerate(
+            zip(batch_token_ids, batch_paths, instances, strict=True)
+        ):
             seq_len = len(token_ids)
             # Left-pad: content goes at positions [max_seq_len - seq_len : max_seq_len]
             start_pos = max_seq_len - seq_len
             input_ids[b, start_pos:] = torch.tensor(token_ids, dtype=torch.long)
             attention_mask[b, start_pos:] = True
+
+            # Fill numeric values at the correct left-padded positions
+            for t, num_val in enumerate(inst.numeric_values[:seq_len]):
+                if num_val is not None:
+                    pos = start_pos + t
+                    numeric_values[b, pos] = num_val
+                    numeric_mask[b, pos] = True
 
             # Encode paths at the correct (left-padded) positions
             for t, path in enumerate(paths):
@@ -129,6 +148,8 @@ class OrigamiDataCollator:
             path_ids = path_ids.to(self.device)
             path_lengths = path_lengths.to(self.device)
             attention_mask = attention_mask.to(self.device)
+            numeric_values = numeric_values.to(self.device)
+            numeric_mask = numeric_mask.to(self.device)
             lengths = lengths.to(self.device)
 
         return {
@@ -138,5 +159,7 @@ class OrigamiDataCollator:
             "path_lengths": path_lengths,
             "attention_mask": attention_mask,
             "labels": input_ids.clone(),  # For autoregressive training
+            "numeric_values": numeric_values,  # Scaled values at NUM positions
+            "numeric_mask": numeric_mask,  # Mask for NUM token positions
             "lengths": lengths,
         }

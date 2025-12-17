@@ -14,12 +14,15 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from origami.preprocessing.numeric_scaler import ScaledNumeric
+
 from .errors import DecodeError
 from .path import IndexElement, KeyElement, Path
 from .vocabulary import (
     ARRAY_END,
     ARRAY_START,
     END,
+    NUM,
     OBJ_END,
     OBJ_START,
     START,
@@ -158,6 +161,9 @@ class JSONTokenizer:
         elif isinstance(value, list):
             for item in value:
                 self._fit_value(item)
+        elif isinstance(value, ScaledNumeric):
+            # ScaledNumeric uses the built-in NUM token, no need to add to vocab
+            pass
         else:
             # Add primitive values (str, int, float, bool, None)
             # None maps to JSON null
@@ -244,6 +250,12 @@ class JSONTokenizer:
             tokens.append(ARRAY_END)
             paths.append(path)
             numeric_values.append(None)
+
+        elif isinstance(value, ScaledNumeric):
+            # Scaled numeric value - emit NUM token with the scaled value
+            tokens.append(NUM)
+            paths.append(path)
+            numeric_values.append(value.value)
 
         else:
             # Primitive value (str, int, float, bool, None)
@@ -418,15 +430,23 @@ class JSONTokenizer:
         path_ids = torch.zeros(batch_size, max_seq_len, self.max_depth, dtype=torch.long)
         path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
 
-        # Numeric values (placeholder for Phase 6)
+        # Numeric values for continuous head
         numeric_values = torch.zeros(batch_size, max_seq_len, dtype=torch.float)
         numeric_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
 
         # Fill tensors
-        for b, (token_ids, paths) in enumerate(zip(batch_token_ids, batch_paths, strict=True)):
+        for b, (token_ids, paths, inst) in enumerate(
+            zip(batch_token_ids, batch_paths, instances, strict=True)
+        ):
             seq_len = len(token_ids)
             input_ids[b, :seq_len] = torch.tensor(token_ids, dtype=torch.long)
             attention_mask[b, :seq_len] = True
+
+            # Fill numeric values from tokenized instance
+            for t, num_val in enumerate(inst.numeric_values):
+                if num_val is not None:
+                    numeric_values[b, t] = num_val
+                    numeric_mask[b, t] = True
 
             # Encode paths
             for t, path in enumerate(paths):

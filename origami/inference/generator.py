@@ -248,6 +248,7 @@ class OrigamiGenerator:
         """
         vocab = self.tokenizer.vocab
         batch_size = input_ids.size(0)
+        seq_len = input_ids.size(1)
 
         # Clone tensors for generation (we'll extend them)
         current_ids = input_ids.clone()
@@ -255,6 +256,12 @@ class OrigamiGenerator:
         current_path_ids = path_ids.clone()
         current_path_lengths = path_lengths.clone()
         current_attention_mask = attention_mask.clone()
+
+        # Track numeric values for continuous head
+        # Initialize with zeros for the prefix (no numeric values there unless provided)
+        current_numeric_values = torch.zeros(batch_size, seq_len, dtype=torch.float, device=self.device)
+        # Track sampled numeric values for later decoding (list of lists)
+        sampled_numeric_values: list[list[float]] = [[] for _ in range(batch_size)]
 
         # Initialize path states for each sequence from their token prefixes
         path_states = []
@@ -292,13 +299,14 @@ class OrigamiGenerator:
             if done.all():
                 break
 
-            # Forward pass (no grammar masking in model - we do it here incrementally)
+            # Forward pass with numeric values for continuous head
             output = self.model(
                 input_ids=current_ids,
                 path_types=current_path_types,
                 path_ids=current_path_ids,
                 path_lengths=current_path_lengths,
                 attention_mask=current_attention_mask,
+                numeric_values=current_numeric_values if self.model.continuous_head is not None else None,
             )
 
             # Get logits for last position
@@ -320,6 +328,27 @@ class OrigamiGenerator:
             # For completed sequences, use PAD token
             next_tokens = torch.where(done, vocab.pad_token_id, next_tokens)
 
+            # Sample numeric values for NUM tokens from continuous head
+            new_numeric_values = torch.zeros(batch_size, 1, dtype=torch.float, device=self.device)
+            is_num = next_tokens == vocab.num_token_id
+            if is_num.any() and output.continuous_params is not None:
+                weights, means, log_vars = output.continuous_params
+                # Get params for last position only
+                w = weights[:, -1, :]  # (batch, n_components)
+                m = means[:, -1, :]
+                lv = log_vars[:, -1, :]
+                # Sample from MoG for all sequences (even if they didn't generate NUM)
+                sampled = self.model.continuous_head.sample(
+                    w.unsqueeze(1), m.unsqueeze(1), lv.unsqueeze(1)
+                ).squeeze(1)  # (batch,)
+                # Only use sampled value where NUM was generated
+                new_numeric_values[:, 0] = torch.where(is_num, sampled, new_numeric_values[:, 0])
+
+            # Track sampled values for decoding
+            for i in range(batch_size):
+                if is_num[i] and not done[i]:
+                    sampled_numeric_values[i].append(new_numeric_values[i, 0].item())
+
             # Check for completion
             if stop_after_value and initial_depths is not None:
                 # Stop when depth returns below initial (value is complete)
@@ -340,6 +369,7 @@ class OrigamiGenerator:
             current_path_types = torch.cat([current_path_types, new_path_types], dim=1)
             current_path_ids = torch.cat([current_path_ids, new_path_ids], dim=1)
             current_path_lengths = torch.cat([current_path_lengths, new_path_lengths], dim=1)
+            current_numeric_values = torch.cat([current_numeric_values, new_numeric_values], dim=1)
             # New tokens are real (not PAD)
             new_mask = (~done).unsqueeze(1)
             current_attention_mask = torch.cat([current_attention_mask, new_mask], dim=1)
@@ -351,12 +381,13 @@ class OrigamiGenerator:
             start_pos = gen_start_positions[i].item()
             mask = current_attention_mask[i]
             seq = current_ids[i][mask].tolist()
+            numeric_vals = sampled_numeric_values[i]
 
             if stop_after_value:
                 # Decode just the generated value tokens
                 value_tokens = seq[start_pos:]
                 try:
-                    value = self._decode_value_tokens(value_tokens)
+                    value = self._decode_value_tokens(value_tokens, numeric_vals)
                     results.append(value)
                 except Exception:
                     results.append(None)
@@ -371,7 +402,8 @@ class OrigamiGenerator:
                     seq.append(vocab.end_id)
 
                 try:
-                    obj = self.tokenizer.decode(seq)
+                    # For full object decoding with NUM tokens, use our parser
+                    obj = self._decode_with_numerics(seq, numeric_vals)
                     results.append(obj)
                 except Exception:
                     results.append({})
@@ -400,11 +432,16 @@ class OrigamiGenerator:
             stacked.append(torch.cat(component_tensors, dim=0))
         return tuple(stacked)
 
-    def _decode_value_tokens(self, token_ids: list[int]) -> Any:
+    def _decode_value_tokens(
+        self,
+        token_ids: list[int],
+        numeric_values: list[float] | None = None,
+    ) -> Any:
         """Decode a sequence of tokens representing a single value.
 
         Args:
             token_ids: Token IDs for a value (may be OBJ_START...OBJ_END or primitive)
+            numeric_values: List of sampled numeric values for NUM tokens
 
         Returns:
             The decoded Python value
@@ -418,10 +455,17 @@ class OrigamiGenerator:
 
         if first_token == vocab.obj_start_id:
             # Parse object
-            return self._parse_object_tokens(token_ids)
+            num_idx = [0]  # Mutable counter for tracking NUM position
+            return self._parse_object_tokens(token_ids, numeric_values, num_idx)
         elif first_token == vocab.array_start_id:
             # Parse array
-            return self._parse_array_tokens(token_ids)
+            num_idx = [0]
+            return self._parse_array_tokens(token_ids, numeric_values, num_idx)
+        elif first_token == vocab.num_token_id:
+            # NUM token - use sampled value
+            if numeric_values:
+                return numeric_values[0]
+            return 0.0  # Fallback
         else:
             # Primitive value
             token = vocab.decode(first_token)
@@ -429,7 +473,44 @@ class OrigamiGenerator:
                 return token.value
             return None
 
-    def _parse_object_tokens(self, token_ids: list[int]) -> dict:
+    def _decode_with_numerics(
+        self,
+        token_ids: list[int],
+        numeric_values: list[float],
+    ) -> dict:
+        """Decode a full sequence with NUM token support.
+
+        Args:
+            token_ids: Full token sequence (START...END)
+            numeric_values: List of sampled numeric values for NUM tokens
+
+        Returns:
+            Decoded JSON object
+        """
+        vocab = self.tokenizer.vocab
+
+        if not token_ids:
+            return {}
+
+        # Skip START token
+        pos = 0
+        if token_ids[pos] == vocab.start_id:
+            pos += 1
+
+        # Expect OBJ_START
+        if pos >= len(token_ids) or token_ids[pos] != vocab.obj_start_id:
+            return {}
+
+        # Parse object with numeric values
+        num_idx = [0]  # Mutable counter
+        return self._parse_object_tokens(token_ids[pos:], numeric_values, num_idx)
+
+    def _parse_object_tokens(
+        self,
+        token_ids: list[int],
+        numeric_values: list[float] | None = None,
+        num_idx: list[int] | None = None,
+    ) -> dict:
         """Parse object tokens into a dictionary."""
         vocab = self.tokenizer.vocab
         result: dict[str, Any] = {}
@@ -449,12 +530,17 @@ class OrigamiGenerator:
             pos += 1
 
             # Parse value
-            value, pos = self._parse_value_at(token_ids, pos)
+            value, pos = self._parse_value_at(token_ids, pos, numeric_values, num_idx)
             result[key] = value
 
         return result
 
-    def _parse_array_tokens(self, token_ids: list[int]) -> list:
+    def _parse_array_tokens(
+        self,
+        token_ids: list[int],
+        numeric_values: list[float] | None = None,
+        num_idx: list[int] | None = None,
+    ) -> list:
         """Parse array tokens into a list."""
         vocab = self.tokenizer.vocab
         result: list[Any] = []
@@ -466,12 +552,18 @@ class OrigamiGenerator:
             if token_id == vocab.array_end_id:
                 break
 
-            value, pos = self._parse_value_at(token_ids, pos)
+            value, pos = self._parse_value_at(token_ids, pos, numeric_values, num_idx)
             result.append(value)
 
         return result
 
-    def _parse_value_at(self, token_ids: list[int], pos: int) -> tuple[Any, int]:
+    def _parse_value_at(
+        self,
+        token_ids: list[int],
+        pos: int,
+        numeric_values: list[float] | None = None,
+        num_idx: list[int] | None = None,
+    ) -> tuple[Any, int]:
         """Parse a value starting at position pos."""
         vocab = self.tokenizer.vocab
 
@@ -490,7 +582,7 @@ class OrigamiGenerator:
                 elif token_ids[end_pos] == vocab.obj_end_id:
                     depth -= 1
                 end_pos += 1
-            obj = self._parse_object_tokens(token_ids[pos:end_pos])
+            obj = self._parse_object_tokens(token_ids[pos:end_pos], numeric_values, num_idx)
             return obj, end_pos
 
         elif token_id == vocab.array_start_id:
@@ -503,8 +595,16 @@ class OrigamiGenerator:
                 elif token_ids[end_pos] == vocab.array_end_id:
                     depth -= 1
                 end_pos += 1
-            arr = self._parse_array_tokens(token_ids[pos:end_pos])
+            arr = self._parse_array_tokens(token_ids[pos:end_pos], numeric_values, num_idx)
             return arr, end_pos
+
+        elif token_id == vocab.num_token_id:
+            # NUM token - use sampled value
+            value = 0.0  # Default fallback
+            if numeric_values and num_idx is not None and num_idx[0] < len(numeric_values):
+                value = numeric_values[num_idx[0]]
+                num_idx[0] += 1
+            return value, pos + 1
 
         else:
             # Primitive value

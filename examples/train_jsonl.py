@@ -29,7 +29,7 @@ import torch
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from origami.inference import OrigamiPredictor
+from origami.inference import OrigamiGenerator, OrigamiPredictor
 from origami.model import OrigamiConfig, OrigamiModel, TrainingConfig
 from origami.preprocessing import NumericDiscretizer
 from origami.tokenizer import JSONTokenizer
@@ -86,7 +86,7 @@ def parse_args():
         help="Load model from checkpoint (for continuing training or evaluation)",
     )
     parser.add_argument(
-        "--no-shuffle", action="store_true", help="Disable key-order shuffling during training"
+        "--shuffle", action="store_true", help="Enable key-order shuffling during training"
     )
 
     return parser.parse_args()
@@ -208,7 +208,7 @@ def main():
     )
 
     # Create trainer
-    shuffle = not args.no_shuffle
+    shuffle = args.shuffle
     print("\nInitializing trainer...")
     print(f"  Key-order shuffling: {'enabled' if shuffle else 'disabled'}")
     trainer = OrigamiTrainer(
@@ -302,6 +302,20 @@ def main():
         for value, prob in predictions:
             marker = "*" if value == actual else " "
             print(f"    {marker} {value}: {prob:.1%}")
+
+    # =========================================================================
+    # Generation: Sample from learned distribution
+    # =========================================================================
+    print("\n" + "=" * 60)
+    print("Generated Samples from Learned Distribution")
+    print("=" * 60)
+
+    generator = OrigamiGenerator(model, tokenizer)
+    samples = generator.generate(num_samples=5, max_length=256, seed=args.seed)
+
+    for i, sample in enumerate(samples):
+        print(f"\nSample {i + 1}:")
+        print(f"  {json.dumps(sample)}")
 
     print("\n" + "=" * 60)
     print("Done!")
