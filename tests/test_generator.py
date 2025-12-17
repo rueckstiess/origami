@@ -179,36 +179,28 @@ class TestOrigamiGenerator:
         """Test that different seeds produce different output."""
         generator = OrigamiGenerator(simple_model, simple_tokenizer)
 
-        results1 = generator.generate(num_samples=1, max_length=50, seed=1)
-        results2 = generator.generate(num_samples=1, max_length=50, seed=2)
-
-        # With very high probability, different seeds should produce different results
-        # (could be same by chance, but extremely unlikely)
-        # We mainly test that it doesn't crash
+        # Generate with different seeds - mainly test that it doesn't crash
+        # Results could be same by chance, but extremely unlikely
+        generator.generate(num_samples=1, max_length=50, seed=1)
+        generator.generate(num_samples=1, max_length=50, seed=2)
 
     def test_generate_with_temperature(self, simple_model, simple_tokenizer):
         """Test generation with temperature."""
         generator = OrigamiGenerator(simple_model, simple_tokenizer)
 
         # Low temperature (more greedy)
-        results_low = generator.generate(
-            num_samples=1, max_length=50, temperature=0.1, seed=42
-        )
+        results_low = generator.generate(num_samples=1, max_length=50, temperature=0.1, seed=42)
         assert len(results_low) == 1
 
         # High temperature (more random)
-        results_high = generator.generate(
-            num_samples=1, max_length=50, temperature=2.0, seed=42
-        )
+        results_high = generator.generate(num_samples=1, max_length=50, temperature=2.0, seed=42)
         assert len(results_high) == 1
 
     def test_generate_with_top_k(self, simple_model, simple_tokenizer):
         """Test generation with top-k sampling."""
         generator = OrigamiGenerator(simple_model, simple_tokenizer)
 
-        results = generator.generate(
-            num_samples=1, max_length=50, top_k=5, seed=42
-        )
+        results = generator.generate(num_samples=1, max_length=50, top_k=5, seed=42)
 
         assert len(results) == 1
         assert isinstance(results[0], dict)
@@ -217,9 +209,7 @@ class TestOrigamiGenerator:
         """Test generation with nucleus (top-p) sampling."""
         generator = OrigamiGenerator(simple_model, simple_tokenizer)
 
-        results = generator.generate(
-            num_samples=1, max_length=50, top_p=0.9, seed=42
-        )
+        results = generator.generate(num_samples=1, max_length=50, top_p=0.9, seed=42)
 
         assert len(results) == 1
         assert isinstance(results[0], dict)
@@ -235,12 +225,18 @@ class TestOrigamiGenerator:
         batch_size = 2
         max_depth = simple_tokenizer.max_depth
 
-        input_ids = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id],
-            [vocab.start_id, vocab.obj_start_id],
-        ], dtype=torch.long, device=generator.device)
+        input_ids = torch.tensor(
+            [
+                [vocab.start_id, vocab.obj_start_id],
+                [vocab.start_id, vocab.obj_start_id],
+            ],
+            dtype=torch.long,
+            device=generator.device,
+        )
 
-        path_types = torch.zeros(batch_size, 2, max_depth, dtype=torch.long, device=generator.device)
+        path_types = torch.zeros(
+            batch_size, 2, max_depth, dtype=torch.long, device=generator.device
+        )
         path_ids = torch.zeros(batch_size, 2, max_depth, dtype=torch.long, device=generator.device)
         path_lengths = torch.zeros(batch_size, 2, dtype=torch.long, device=generator.device)
         attention_mask = torch.ones(batch_size, 2, dtype=torch.bool, device=generator.device)
@@ -269,12 +265,17 @@ class TestOrigamiGenerator:
         # When stop_after_value=True, should generate a single value then stop
         # Encode a key token
         from origami.tokenizer.vocabulary import KeyToken
+
         key_token = KeyToken("name")
         key_id = vocab.encode(key_token)
 
-        input_ids = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, key_id],
-        ], dtype=torch.long, device=generator.device)
+        input_ids = torch.tensor(
+            [
+                [vocab.start_id, vocab.obj_start_id, key_id],
+            ],
+            dtype=torch.long,
+            device=generator.device,
+        )
 
         path_types = torch.zeros(1, 3, max_depth, dtype=torch.long, device=generator.device)
         path_ids = torch.zeros(1, 3, max_depth, dtype=torch.long, device=generator.device)
@@ -459,6 +460,7 @@ class TestDecodeValueTokens:
 
         # Get token ID for a value
         from origami.tokenizer.vocabulary import ValueToken
+
         value_token = ValueToken("Alice")
         token_id = vocab.encode(value_token)
 
@@ -489,6 +491,7 @@ class TestDecodeValueTokens:
         vocab = simple_tokenizer.vocab
 
         from origami.tokenizer.vocabulary import ValueToken
+
         value_token = ValueToken(30)
         token_id = vocab.encode(value_token)
 
@@ -513,6 +516,7 @@ class TestDecodeValueTokens:
         generator = OrigamiGenerator(model, tokenizer)
 
         from origami.tokenizer.vocabulary import ValueToken
+
         true_token = ValueToken(True)
         token_id = tokenizer.vocab.encode(true_token)
 
@@ -559,26 +563,35 @@ class TestGenerateFromTensorsAdvanced:
         # Seq 1: [PAD, PAD, START, OBJ_START]
         # Seq 2: [START, OBJ_START, key, value]
         from origami.tokenizer.vocabulary import KeyToken, ValueToken
+
         key_token = KeyToken("name")
         key_id = vocab.encode(key_token)
         value_token = ValueToken("Alice")
         value_id = vocab.encode(value_token)
 
         # Left-padded batch
-        input_ids = torch.tensor([
-            [vocab.pad_token_id, vocab.pad_token_id, vocab.start_id, vocab.obj_start_id],
-            [vocab.start_id, vocab.obj_start_id, key_id, value_id],
-        ], dtype=torch.long, device=generator.device)
+        input_ids = torch.tensor(
+            [
+                [vocab.pad_token_id, vocab.pad_token_id, vocab.start_id, vocab.obj_start_id],
+                [vocab.start_id, vocab.obj_start_id, key_id, value_id],
+            ],
+            dtype=torch.long,
+            device=generator.device,
+        )
 
         path_types = torch.zeros(2, 4, max_depth, dtype=torch.long, device=generator.device)
         path_ids = torch.zeros(2, 4, max_depth, dtype=torch.long, device=generator.device)
         path_lengths = torch.zeros(2, 4, dtype=torch.long, device=generator.device)
 
         # Attention mask: False for PAD, True for real tokens
-        attention_mask = torch.tensor([
-            [False, False, True, True],
-            [True, True, True, True],
-        ], dtype=torch.bool, device=generator.device)
+        attention_mask = torch.tensor(
+            [
+                [False, False, True, True],
+                [True, True, True, True],
+            ],
+            dtype=torch.bool,
+            device=generator.device,
+        )
 
         results = generator.generate_from_tensors(
             input_ids=input_ids,
@@ -601,6 +614,7 @@ class TestGenerateFromTensorsAdvanced:
         max_depth = tokenizer.max_depth
 
         from origami.tokenizer.vocabulary import KeyToken
+
         key1 = KeyToken("name")
         key1_id = vocab.encode(key1)
         key2 = KeyToken("age")
@@ -609,10 +623,14 @@ class TestGenerateFromTensorsAdvanced:
         # Two sequences, both waiting for a value
         # Seq 1: START OBJ_START key:name (awaiting value)
         # Seq 2: START OBJ_START key:age (awaiting value)
-        input_ids = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, key1_id],
-            [vocab.start_id, vocab.obj_start_id, key2_id],
-        ], dtype=torch.long, device=generator.device)
+        input_ids = torch.tensor(
+            [
+                [vocab.start_id, vocab.obj_start_id, key1_id],
+                [vocab.start_id, vocab.obj_start_id, key2_id],
+            ],
+            dtype=torch.long,
+            device=generator.device,
+        )
 
         path_types = torch.zeros(2, 3, max_depth, dtype=torch.long, device=generator.device)
         path_ids = torch.zeros(2, 3, max_depth, dtype=torch.long, device=generator.device)
@@ -641,6 +659,7 @@ class TestGenerateFromTensorsAdvanced:
         max_depth = tokenizer.max_depth
 
         from origami.tokenizer.vocabulary import KeyToken, ValueToken
+
         key_token = KeyToken("name")
         key_id = vocab.encode(key_token)
         value_token = ValueToken("Alice")
@@ -652,7 +671,9 @@ class TestGenerateFromTensorsAdvanced:
         # All left-padded to same length
         max_len = 6
 
-        input_ids = torch.full((3, max_len), vocab.pad_token_id, dtype=torch.long, device=generator.device)
+        input_ids = torch.full(
+            (3, max_len), vocab.pad_token_id, dtype=torch.long, device=generator.device
+        )
         attention_mask = torch.zeros(3, max_len, dtype=torch.bool, device=generator.device)
 
         # Seq 1: [PAD, PAD, PAD, PAD, START, OBJ_START]
@@ -664,7 +685,9 @@ class TestGenerateFromTensorsAdvanced:
         attention_mask[1, -4:] = True
 
         # Seq 3: [START, OBJ_START, key, value, key, ...] - full
-        input_ids[2, :] = torch.tensor([vocab.start_id, vocab.obj_start_id, key_id, value_id, key_id, value_id])
+        input_ids[2, :] = torch.tensor(
+            [vocab.start_id, vocab.obj_start_id, key_id, value_id, key_id, value_id]
+        )
         attention_mask[2, :] = True
 
         path_types = torch.zeros(3, max_len, max_depth, dtype=torch.long, device=generator.device)
@@ -733,9 +756,13 @@ class TestGeneratorGrammarConstraints:
         max_depth = constrained_tokenizer.max_depth
 
         # Start with just START token
-        input_ids = torch.tensor([
-            [vocab.start_id],
-        ], dtype=torch.long, device=generator.device)
+        input_ids = torch.tensor(
+            [
+                [vocab.start_id],
+            ],
+            dtype=torch.long,
+            device=generator.device,
+        )
 
         path_types = torch.zeros(1, 1, max_depth, dtype=torch.long, device=generator.device)
         path_ids = torch.zeros(1, 1, max_depth, dtype=torch.long, device=generator.device)

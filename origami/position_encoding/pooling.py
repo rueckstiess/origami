@@ -358,8 +358,7 @@ def create_pooling(
     """
     if pooling_type not in POOLING_CLASSES:
         raise ValueError(
-            f"Unknown pooling type: {pooling_type}. "
-            f"Available: {list(POOLING_CLASSES.keys())}"
+            f"Unknown pooling type: {pooling_type}. Available: {list(POOLING_CLASSES.keys())}"
         )
 
     cls = POOLING_CLASSES[pooling_type]

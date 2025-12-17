@@ -1393,85 +1393,110 @@ HuggingFace integration is optional.
 
 ---
 
-## Implementation Order
+## Implementation Status
 
-### Phase 1: Core Tokenization
-1. `vocabulary.py` - Token types (GrammarToken, KeyToken, ValueToken) and vocabulary management
-2. `json_tokenizer.py` - JSON to token conversion with unified path tracking (keys + indices)
-3. Tests: tokenization round-trip, path correctness for nested structures
+### Phase 1: Core Tokenization ✅ COMPLETE
+1. ✅ `vocabulary.py` - Token types (GrammarToken, KeyToken, ValueToken) and vocabulary management
+2. ✅ `json_tokenizer.py` - JSON to token conversion with unified path tracking (keys + indices)
+3. ✅ Tests: tokenization round-trip, path correctness for nested structures
 
-### Phase 2: Position Encoding  
-4. `kvpe.py` - Key-Value Position Encoding with both pooling options:
-   - Rotary depth encoding (default)
-   - GRU sequential encoding (optional)
-5. Tests: verify non-commutativity (a.b ≠ b.a), array index ordering
+### Phase 2: Position Encoding ✅ COMPLETE
+4. ✅ `kvpe.py` - Key-Value Position Encoding with **all 5 pooling strategies**:
+   - `sum` - Commutative baseline (original paper)
+   - `weighted` - Learned depth weights
+   - `rotary` - Rotation by depth, parallelizable
+   - `gru` - Sequential processing, fully non-commutative
+   - `transformer` - Self-attention over path elements
+5. ✅ Tests: verify non-commutativity (a.b ≠ b.a), array index ordering
 
-### Phase 3: Model Core
-6. `config.py` - Configuration dataclass with all options
-7. `embeddings.py` - Token embeddings + KVPE (shared key embeddings)
-8. `backbone.py` - TransformerBackbone using PyTorch built-in layers
-9. `heads.py` - DiscreteHead only initially
-10. `origami_model.py` - Assemble components, basic forward pass (grammar mask as no-op placeholder)
-11. Add `encode_batch()` to JSONTokenizer - converts TokenizedInstance to tensors
+### Phase 3: Model Core ✅ COMPLETE
+6. ✅ `config.py` - Configuration dataclass with all options
+7. ✅ `embeddings.py` - Token embeddings + KVPE (shared key embeddings)
+8. ✅ `backbone.py` - TransformerBackbone using PyTorch built-in layers
+9. ✅ `heads.py` - DiscreteHead and ContinuousHead (MoG)
+10. ✅ `origami_model.py` - Assemble components, forward pass with grammar constraints
+11. ✅ `encode_batch()` in JSONTokenizer - converts TokenizedInstance to tensors
 
-### Phase 4: Grammar Constraints
-12. `json_grammar.py` - Stack-based grammar state machine
-13. `constrained_loss.py` - Masked cross-entropy loss
-14. Integration tests: verify only valid sequences can be generated
+### Phase 4: Grammar Constraints ✅ COMPLETE
+12. ✅ `json_grammar.py` - Stack-based PDA with batch-parallel state updates
+13. ✅ Grammar masking integrated into model (no separate `constrained_loss.py` needed)
+14. ✅ Integration tests: verify only valid sequences can be generated
 
-### Phase 5: Training Infrastructure
-15. `collator.py` - Batching with key-order shuffling (note: encode_batch already in tokenizer)
-16. `trainer.py` - Training loop with upscaling support
-17. End-to-end test on synthetic dataset (dungeons-style)
+**Implementation notes:**
+- Grammar constraints applied during training only (when `labels` provided)
+- Incremental O(1) per-step grammar for inference via `get_next_token_mask()`
+- `init_state_from_tokens()` for initializing state from prefix (handles left-padding)
 
-### Phase 6: Extensions
-18. `numeric_scaler.py` - sklearn-based preprocessing for continuous values
-19. `ContinuousHead` in `heads.py` - Mixture of Gaussians output
-20. NUM token scaling in embeddings layer
-21. `tabular_tokenizer.py` - Simplified fixed-schema mode
-22. `LSTMBackbone` in `backbone.py`
-23. HuggingFace integration (optional)
+### Phase 5: Training & Inference ✅ COMPLETE
+15. ✅ `collator.py` - **Left-padding** for batched prediction (all sequences end at same position)
+16. ✅ `trainer.py` - Training loop with LR warmup, checkpointing, upscaling support
+17. ✅ `dataset.py` - UpscaledDataset for key-order permutation augmentation
+18. ✅ End-to-end training script (`examples/train_jsonl.py`)
 
-### Phase 7: Validation
-24. Reproduce JSONified dataset results (Section 4.1)
-25. Reproduce DDXPlus results (Section 4.2)
-26. Reproduce CodeNet results (Section 4.3)
+**Inference modules:**
+19. ✅ `generator.py` - Autoregressive JSON generation with incremental grammar (O(n) total)
+20. ✅ `predictor.py` - Field value prediction using Generator
+21. ✅ `embedder.py` - Extract hidden state representations
+
+**Architecture decisions:**
+- Left-padding enables `logits[:, -1, :]` for batched next-token prediction
+- Generator owns all inference grammar logic (model only masks during training)
+- Generator API: `generate()` and `generate_from_tensors(stop_after_value=True/False)`
+- Predictor uses Generator internally for complex value completion
+
+### Phase 6: Extensions ⏳ PARTIAL
+22. ✅ `numeric_discretizer.py` - Bins high-cardinality numerics to categorical tokens
+23. ✅ `ContinuousHead` in `heads.py` - Mixture of Gaussians output (implemented)
+24. ❌ `numeric_scaler.py` - sklearn-based scaling for continuous head input
+25. ❌ NUM token scaling in embeddings layer
+26. ❌ `tabular_tokenizer.py` - Simplified fixed-schema mode
+27. ❌ `LSTMBackbone` in `backbone.py` (stub exists, raises NotImplementedError)
+28. ❌ `MambaBackbone` in `backbone.py` (stub exists, raises NotImplementedError)
+29. ❌ HuggingFace integration (`hf_model.py` with PreTrainedModel)
+
+### Phase 7: Validation ❌ NOT STARTED
+30. ❌ Reproduce JSONified dataset results (Section 4.1)
+31. ❌ Reproduce DDXPlus results (Section 4.2)
+32. ❌ Reproduce CodeNet results (Section 4.3)
 
 ---
 
-## Open Design Questions
+## Design Questions (Resolved)
 
-1. **KVPE pooling default**: Which should be the default?
-   - `sum`: Matches original paper (for reproducibility), but commutative
-   - `rotary`: Good balance of efficiency and order-awareness
-   - `gru`: Most expressive, but sequential
-   - **Decision**: Default to `sum` for MVP (matches original paper), easy to switch to rotary/gru
+1. **KVPE pooling default**: ✅ RESOLVED
+   - **Decision**: Default to `sum` (matches original paper)
+   - All 5 strategies implemented and switchable via config
 
-2. **Continuous head scaler integration**:
-   - Currently: Separate `NumericScaler` preprocessing step
-   - Question: Should scaler state be saved with tokenizer or model?
-   - **Suggestion**: Save with tokenizer (preprocessing concern)
+2. **Continuous head scaler integration**: ⏳ DEFERRED
+   - NumericDiscretizer implemented for discrete mode
+   - NumericScaler for continuous head still needed
 
-3. **Backbone abstraction**:
-   - How much should LSTM/Mamba share with Transformer?
-   - Should attention mask handling differ by backbone?
-   - **Suggestion**: Minimal interface (`forward(hidden, mask) -> hidden`)
+3. **Backbone abstraction**: ✅ RESOLVED
+   - **Decision**: Minimal interface `forward(hidden, mask) -> hidden`
+   - TransformerBackbone implemented, LSTM/Mamba stubs ready
 
-4. **HuggingFace integration depth**: 
-   - **Decision**: Start minimal (PreTrainedModel for save/load)
-   - Add Trainer compatibility later if needed
+4. **HuggingFace integration**: ⏳ DEFERRED
+   - Custom save/load implemented via `OrigamiModel.save()` / `OrigamiModel.load()`
+   - Saves model config, weights, and tokenizer state together
 
-5. **Test coverage priorities**:
-   - Tokenization round-trip
-   - KVPE non-commutativity (for non-sum pooling)
-   - Grammar constraint correctness
-   - Shuffling produces valid permutations
-   - End-to-end on synthetic data
+5. **Test coverage**: ✅ RESOLVED
+   - 364 tests covering all core functionality
+   - Tokenization, KVPE, grammar, training, inference all tested
+   - Left-padding tests added for batched prediction
 
-6. **Vocabulary edge cases**:
-   - Very long strings as values: truncate or hash?
-   - Unicode normalization?
-   - **Suggestion**: Keep simple initially, document limitations
+6. **Vocabulary edge cases**: ✅ RESOLVED (for MVP)
+   - Keep simple: no truncation/hashing, store values as-is
+   - Unicode handled naturally by Python strings
+
+7. **Padding direction**: ✅ RESOLVED (added during implementation)
+   - **Decision**: Left-padding for all batches
+   - Enables `logits[:, -1, :]` for batched next-token prediction
+   - Critical for efficient Predictor implementation
+
+8. **Grammar during inference**: ✅ RESOLVED (added during implementation)
+   - **Decision**: Model applies grammar only during training (when labels provided)
+   - Generator maintains incremental grammar state for O(n) total inference
+   - Avoids O(n²) from replaying all tokens each step
 
 ---
 

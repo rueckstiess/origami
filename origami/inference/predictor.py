@@ -243,9 +243,7 @@ class OrigamiPredictor:
         path_lengths = batch.path_lengths[batch_idx : batch_idx + 1, :seq_len]
 
         # Append the start token
-        start_token = torch.tensor(
-            [[start_token_id]], dtype=torch.long, device=self.device
-        )
+        start_token = torch.tensor([[start_token_id]], dtype=torch.long, device=self.device)
         input_ids = torch.cat([input_ids, start_token], dim=1)
 
         # Append path for the start token (same as target key's path)
@@ -257,9 +255,7 @@ class OrigamiPredictor:
         path_lengths = torch.cat([path_lengths, new_path_lengths], dim=1)
 
         # Create attention mask (all tokens are real, no padding)
-        attention_mask = torch.ones(
-            input_ids.shape, dtype=torch.bool, device=self.device
-        )
+        attention_mask = torch.ones(input_ids.shape, dtype=torch.bool, device=self.device)
 
         # Use generate_from_tensors with stop_after_value=True
         # This generates the complex value until the container is closed

@@ -18,7 +18,6 @@ from origami.training import (
 )
 from origami.utils import available_devices as get_available_devices
 
-
 AVAILABLE_DEVICES = get_available_devices()
 
 
@@ -26,11 +25,13 @@ AVAILABLE_DEVICES = get_available_devices()
 def tokenizer():
     """Create a tokenizer fitted on sample data."""
     tokenizer = JSONTokenizer()
-    tokenizer.fit([
-        {"name": "Alice", "age": 30, "scores": [90, 85]},
-        {"name": "Bob", "age": 25, "active": True},
-        {"name": "Charlie", "age": 35, "city": "NYC"},
-    ])
+    tokenizer.fit(
+        [
+            {"name": "Alice", "age": 30, "scores": [90, 85]},
+            {"name": "Bob", "age": 25, "active": True},
+            {"name": "Charlie", "age": 35, "city": "NYC"},
+        ]
+    )
     return tokenizer
 
 
@@ -171,7 +172,14 @@ class TestOrigamiDataCollator:
 
         assert batch["input_ids"].shape[0] == len(sample_data)
         # All tensors should have same batch size
-        for key in ["input_ids", "attention_mask", "path_types", "path_ids", "path_lengths", "labels"]:
+        for key in [
+            "input_ids",
+            "attention_mask",
+            "path_types",
+            "path_ids",
+            "path_lengths",
+            "labels",
+        ]:
             assert batch[key].shape[0] == len(sample_data)
 
     def test_collate_with_max_length(self, tokenizer, sample_data):
@@ -213,7 +221,14 @@ class TestOrigamiDataCollator:
 
         batch = collator(instances)
 
-        for key in ["input_ids", "attention_mask", "path_types", "path_ids", "path_lengths", "labels"]:
+        for key in [
+            "input_ids",
+            "attention_mask",
+            "path_types",
+            "path_ids",
+            "path_lengths",
+            "labels",
+        ]:
             assert batch[key].device.type == device.type
 
     def test_labels_are_copy_of_input_ids(self, tokenizer, sample_data):
@@ -241,11 +256,13 @@ class TestLeftPadding:
     def lp_tokenizer(self):
         """Create a tokenizer for left-padding tests."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"a": 1},
-            {"a": 1, "b": 2},
-            {"a": 1, "b": 2, "c": 3, "d": 4},
-        ])
+        tokenizer.fit(
+            [
+                {"a": 1},
+                {"a": 1, "b": 2},
+                {"a": 1, "b": 2, "c": 3, "d": 4},
+            ]
+        )
         return tokenizer
 
     def test_left_padding_structure(self, lp_tokenizer):
@@ -298,10 +315,14 @@ class TestLeftPadding:
         # All sequences should have real (non-PAD) tokens at the last position
         for i in range(len(objects)):
             last_token = batch["input_ids"][i, -1]
-            assert last_token != lp_tokenizer.vocab.pad_token_id, f"Sequence {i} has PAD at last position"
+            assert last_token != lp_tokenizer.vocab.pad_token_id, (
+                f"Sequence {i} has PAD at last position"
+            )
 
             # The last token should be END
-            assert last_token == lp_tokenizer.vocab.end_id, f"Sequence {i} should end with END token"
+            assert last_token == lp_tokenizer.vocab.end_id, (
+                f"Sequence {i} should end with END token"
+            )
 
             # Attention mask should be True at last position
             assert batch["attention_mask"][i, -1]
@@ -527,10 +548,12 @@ class TestOrigamiTrainer:
     def model_and_tokenizer(self):
         """Create a small model and tokenizer for testing."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"name": "Alice", "age": 30},
-            {"name": "Bob", "age": 25},
-        ])
+        tokenizer.fit(
+            [
+                {"name": "Alice", "age": 30},
+                {"name": "Bob", "age": 25},
+            ]
+        )
 
         config = OrigamiConfig(
             vocab_size=tokenizer.vocab.size,
@@ -860,19 +883,23 @@ class TestEndToEndTraining:
 
         train_data = []
         for _ in range(20):
-            train_data.append({
-                "name": random.choice(names),
-                "age": random.randint(20, 60),
-                "city": random.choice(cities),
-            })
+            train_data.append(
+                {
+                    "name": random.choice(names),
+                    "age": random.randint(20, 60),
+                    "city": random.choice(cities),
+                }
+            )
 
         eval_data = []
         for _ in range(5):
-            eval_data.append({
-                "name": random.choice(names),
-                "age": random.randint(20, 60),
-                "city": random.choice(cities),
-            })
+            eval_data.append(
+                {
+                    "name": random.choice(names),
+                    "age": random.randint(20, 60),
+                    "city": random.choice(cities),
+                }
+            )
 
         # Create tokenizer and fit on all data
         tokenizer = JSONTokenizer()
@@ -949,11 +976,13 @@ class TestEndToEndTraining:
         # Data with arrays (small for fast tests)
         train_data = []
         for i in range(10):
-            train_data.append({
-                "id": i,
-                "scores": [random.randint(0, 100) for _ in range(2)],
-                "tags": ["a", "b"] if i % 2 == 0 else ["x"],
-            })
+            train_data.append(
+                {
+                    "id": i,
+                    "scores": [random.randint(0, 100) for _ in range(2)],
+                    "tags": ["a", "b"] if i % 2 == 0 else ["x"],
+                }
+            )
 
         tokenizer = JSONTokenizer()
         tokenizer.fit(train_data)
@@ -1008,10 +1037,7 @@ class TestEndToEndTraining:
         torch.manual_seed(456)
 
         # Generate diverse data (small for fast tests)
-        train_data = [
-            {"x": random.random() * 100, "y": random.random() * 100}
-            for _ in range(20)
-        ]
+        train_data = [{"x": random.random() * 100, "y": random.random() * 100} for _ in range(20)]
 
         tokenizer = JSONTokenizer()
         tokenizer.fit(train_data)
@@ -1039,7 +1065,7 @@ class TestEndToEndTraining:
         )
 
         # Train for multiple epochs
-        state = trainer.train()
+        trainer.train()
 
         # Verify no NaN in parameters
         for name, param in model.named_parameters():

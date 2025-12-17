@@ -44,9 +44,20 @@ def parse_args():
 
     # Numeric discretization
     parser.add_argument("--discretize", action="store_true", help="Enable numeric discretization")
-    parser.add_argument("--cat-threshold", type=int, default=100, help="Max unique values for categorical (discretize fields with more)")
+    parser.add_argument(
+        "--cat-threshold",
+        type=int,
+        default=100,
+        help="Max unique values for categorical (discretize fields with more)",
+    )
     parser.add_argument("--n-bins", type=int, default=20, help="Number of bins for discretization")
-    parser.add_argument("--bin-strategy", type=str, default="quantile", choices=["quantile", "uniform", "kmeans"], help="Binning strategy")
+    parser.add_argument(
+        "--bin-strategy",
+        type=str,
+        default="quantile",
+        choices=["quantile", "uniform", "kmeans"],
+        help="Binning strategy",
+    )
 
     # Model architecture
     parser.add_argument("--d-model", type=int, default=64, help="Model dimension")
@@ -59,13 +70,24 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size")
     parser.add_argument("--epochs", type=int, default=20, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--upscale", type=int, default=4, help="Upscale factor for data augmentation")
+    parser.add_argument(
+        "--upscale", type=int, default=4, help="Upscale factor for data augmentation"
+    )
     parser.add_argument("--warmup-steps", type=int, default=1000, help="Warmup steps")
 
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Checkpoint directory for saving")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Load model from checkpoint (for continuing training or evaluation)")
-    parser.add_argument("--no-shuffle", action="store_true", help="Disable key-order shuffling during training")
+    parser.add_argument(
+        "--checkpoint-dir", type=str, default="checkpoints", help="Checkpoint directory for saving"
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Load model from checkpoint (for continuing training or evaluation)",
+    )
+    parser.add_argument(
+        "--no-shuffle", action="store_true", help="Disable key-order shuffling during training"
+    )
 
     return parser.parse_args()
 
@@ -100,6 +122,7 @@ def main():
 
     # Check target distribution
     from collections import Counter
+
     targets = [obj[args.target_key] for obj in all_data]
     target_dist = Counter(targets)
     print(f"  Target distribution: {dict(target_dist)}")
@@ -275,7 +298,7 @@ def main():
         predictions = predictor.predict(obj, target_key=args.target_key, top_k=4)
         print(f"\nExample {i + 1}:")
         print(f"  Actual: {actual}")
-        print(f"  Top predictions:")
+        print("  Top predictions:")
         for value, prob in predictions:
             marker = "*" if value == actual else " "
             print(f"    {marker} {value}: {prob:.1%}")

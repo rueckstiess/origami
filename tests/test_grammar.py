@@ -53,9 +53,19 @@ class TestJSONGrammarPDA:
         name_id = vocab.encode(vocab._id_to_token[10])  # First key
         alice_id = vocab.encode(vocab._id_to_token[13])  # First value
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id, vocab.end_id, vocab.pad_token_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                    vocab.pad_token_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -92,9 +102,18 @@ class TestJSONGrammarPDA:
         alice_id = vocab.encode(vocab._id_to_token[13])  # First value
         val_42 = vocab.encode(vocab._id_to_token[14])  # 42
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.array_start_id, alice_id, val_42, vocab.array_end_id, vocab.end_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.array_start_id,
+                    alice_id,
+                    val_42,
+                    vocab.array_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -120,10 +139,21 @@ class TestJSONGrammarPDA:
         items_id = vocab.encode(vocab._id_to_token[12])  # "items" key
 
         # START OBJ_START "name" "Alice" "items" OBJ_START OBJ_END OBJ_END END
-        tokens = torch.tensor([[
-            vocab.start_id, vocab.obj_start_id, name_id, alice_id,
-            items_id, vocab.obj_start_id, vocab.obj_end_id, vocab.obj_end_id, vocab.end_id
-        ]])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    items_id,
+                    vocab.obj_start_id,
+                    vocab.obj_end_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -150,10 +180,28 @@ class TestJSONGrammarPDA:
         # Two sequences with different structures
         # Seq 0: object
         # Seq 1: array
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id, vocab.end_id, vocab.pad_token_id],
-            [vocab.start_id, vocab.array_start_id, alice_id, alice_id, vocab.array_end_id, vocab.end_id, vocab.pad_token_id],
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                    vocab.pad_token_id,
+                ],
+                [
+                    vocab.start_id,
+                    vocab.array_start_id,
+                    alice_id,
+                    alice_id,
+                    vocab.array_end_id,
+                    vocab.end_id,
+                    vocab.pad_token_id,
+                ],
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -174,9 +222,20 @@ class TestJSONGrammarPDA:
         name_id = vocab.encode(vocab._id_to_token[10])
         alice_id = vocab.encode(vocab._id_to_token[13])
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id, vocab.end_id, vocab.pad_token_id, vocab.pad_token_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                    vocab.pad_token_id,
+                    vocab.pad_token_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -208,7 +267,9 @@ class TestJSONGrammarPDA:
 
     def test_empty_object(self, vocab, pda):
         """Test empty object: START OBJ_START OBJ_END END"""
-        tokens = torch.tensor([[vocab.start_id, vocab.obj_start_id, vocab.obj_end_id, vocab.end_id]])
+        tokens = torch.tensor(
+            [[vocab.start_id, vocab.obj_start_id, vocab.obj_end_id, vocab.end_id]]
+        )
         masks = pda.compute_valid_mask(tokens)
 
         # mask[1]: After OBJ_START, OBJ_END should be valid (empty object)
@@ -219,7 +280,9 @@ class TestJSONGrammarPDA:
 
     def test_empty_array(self, vocab, pda):
         """Test empty array: START ARRAY_START ARRAY_END END"""
-        tokens = torch.tensor([[vocab.start_id, vocab.array_start_id, vocab.array_end_id, vocab.end_id]])
+        tokens = torch.tensor(
+            [[vocab.start_id, vocab.array_start_id, vocab.array_end_id, vocab.end_id]]
+        )
         masks = pda.compute_valid_mask(tokens)
 
         # mask[1]: After ARRAY_START, ARRAY_END should be valid (empty array)
@@ -234,12 +297,22 @@ class TestJSONGrammarPDA:
         alice_id = vocab.encode(vocab._id_to_token[13])
 
         # START ARRAY_START OBJ_START "name" "Alice" OBJ_END OBJ_START OBJ_END ARRAY_END END
-        tokens = torch.tensor([[
-            vocab.start_id, vocab.array_start_id,
-            vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id,
-            vocab.obj_start_id, vocab.obj_end_id,
-            vocab.array_end_id, vocab.end_id
-        ]])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.array_start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.obj_start_id,
+                    vocab.obj_end_id,
+                    vocab.array_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -257,9 +330,18 @@ class TestJSONGrammarPDA:
         """Test that NUM token is valid in value positions."""
         name_id = vocab.encode(vocab._id_to_token[10])
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, name_id, vocab.num_token_id, vocab.obj_end_id, vocab.end_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    vocab.num_token_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -270,9 +352,18 @@ class TestJSONGrammarPDA:
         """Test that UNK_KEY is valid in key positions."""
         alice_id = vocab.encode(vocab._id_to_token[13])
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, vocab.unk_key_id, alice_id, vocab.obj_end_id, vocab.end_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    vocab.unk_key_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 
@@ -283,9 +374,18 @@ class TestJSONGrammarPDA:
         """Test that UNK_VALUE is valid in value positions."""
         name_id = vocab.encode(vocab._id_to_token[10])
 
-        tokens = torch.tensor([
-            [vocab.start_id, vocab.obj_start_id, name_id, vocab.unk_value_id, vocab.obj_end_id, vocab.end_id]
-        ])
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    vocab.unk_value_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
 
         masks = pda.compute_valid_mask(tokens)
 

@@ -153,16 +153,14 @@ class ContinuousHead(nn.Module):
         batch_size, seq_len, n_components = weights.shape
 
         # Sample component indices
-        indices = torch.multinomial(
-            weights.view(-1, n_components), num_samples=1
-        ).view(batch_size, seq_len)
+        indices = torch.multinomial(weights.view(-1, n_components), num_samples=1).view(
+            batch_size, seq_len
+        )
 
         # Gather means and stds for selected components
         indices_expanded = indices.unsqueeze(-1)
         selected_means = torch.gather(means, dim=-1, index=indices_expanded).squeeze(-1)
-        selected_log_vars = torch.gather(
-            log_vars, dim=-1, index=indices_expanded
-        ).squeeze(-1)
+        selected_log_vars = torch.gather(log_vars, dim=-1, index=indices_expanded).squeeze(-1)
         selected_stds = torch.exp(0.5 * selected_log_vars)
 
         # Sample from Gaussian

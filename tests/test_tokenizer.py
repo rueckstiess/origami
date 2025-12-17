@@ -335,7 +335,6 @@ class TestTokenizerShuffle:
         tokenizer.fit([obj])
 
         outer_orders = []
-        inner1_orders = []
 
         for _ in range(50):
             instance = tokenizer.tokenize(obj, shuffle=True)

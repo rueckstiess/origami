@@ -148,7 +148,9 @@ class OrigamiEmbedder:
             embeddings = self._last_pool(hidden_states, batch.attention_mask)
         elif self.pooling == "target":
             embeddings = self._target_pool(
-                hidden_states, batch.input_ids, target_key  # type: ignore
+                hidden_states,
+                batch.input_ids,
+                target_key,  # type: ignore
             )
         else:
             raise ValueError(f"Unknown pooling strategy: {self.pooling}")
@@ -254,9 +256,7 @@ class OrigamiEmbedder:
             # Find all positions where this key appears
             matches = (input_ids[i] == key_id).nonzero(as_tuple=True)[0]
             if len(matches) == 0:
-                raise ValueError(
-                    f"Target key '{leaf_key}' not found in sequence {i}"
-                )
+                raise ValueError(f"Target key '{leaf_key}' not found in sequence {i}")
             # Use the last occurrence (after move_target_last, target is last)
             target_positions[i] = matches[-1]
 

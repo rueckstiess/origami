@@ -9,9 +9,10 @@ Provides training utilities with support for:
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
@@ -134,9 +135,7 @@ class OrigamiTrainer:
             upscale_factor=self.config.upscale_factor,
             shuffle=shuffle,
         )
-        self.eval_dataset = (
-            EvalDataset(eval_data, tokenizer) if eval_data else None
-        )
+        self.eval_dataset = EvalDataset(eval_data, tokenizer) if eval_data else None
 
         # Create collator
         self.collator = OrigamiDataCollator(
@@ -184,7 +183,9 @@ class OrigamiTrainer:
             Final training state
         """
         print(f"Training on {self.device}")
-        print(f"Train samples: {len(self.train_dataset)} (base: {self.train_dataset.base_size}, upscale: {self.config.upscale_factor}x)")
+        print(
+            f"Train samples: {len(self.train_dataset)} (base: {self.train_dataset.base_size}, upscale: {self.config.upscale_factor}x)"
+        )
         if self.eval_dataset:
             print(f"Eval samples: {len(self.eval_dataset)}")
         print(f"Batch size: {self.config.batch_size}")
@@ -214,7 +215,10 @@ class OrigamiTrainer:
                     self.on_eval_end(epoch, eval_metrics)
 
                 # Save best model (skip if loss is nan)
-                if not math.isnan(eval_metrics.loss) and eval_metrics.loss < self.state.best_eval_loss:
+                if (
+                    not math.isnan(eval_metrics.loss)
+                    and eval_metrics.loss < self.state.best_eval_loss
+                ):
                     self.state.best_eval_loss = eval_metrics.loss
                     if self.checkpoint_dir:
                         self.save_checkpoint("best")
@@ -229,7 +233,10 @@ class OrigamiTrainer:
             if not last_epoch_had_eval:
                 eval_metrics = self.evaluate()
                 print(f"  Final Eval Loss: {eval_metrics.loss:.4f}")
-                if not math.isnan(eval_metrics.loss) and eval_metrics.loss < self.state.best_eval_loss:
+                if (
+                    not math.isnan(eval_metrics.loss)
+                    and eval_metrics.loss < self.state.best_eval_loss
+                ):
                     self.state.best_eval_loss = eval_metrics.loss
                     if self.checkpoint_dir:
                         self.save_checkpoint("best")

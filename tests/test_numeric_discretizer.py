@@ -71,10 +71,7 @@ class TestNumericDiscretizerFit:
 
     def test_fit_nested_fields(self):
         """Test fitting handles nested fields."""
-        data = [
-            {"stats": {"score": i, "level": i % 5}, "name": "item"}
-            for i in range(200)
-        ]
+        data = [{"stats": {"score": i, "level": i % 5}, "name": "item"} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=50, n_bins=10)
         d.fit(data)
@@ -86,10 +83,7 @@ class TestNumericDiscretizerFit:
 
     def test_fit_array_fields(self):
         """Test fitting handles array fields."""
-        data = [
-            {"items": [{"price": i * 10 + j} for j in range(3)]}
-            for i in range(100)
-        ]
+        data = [{"items": [{"price": i * 10 + j} for j in range(3)]} for i in range(100)]
 
         d = NumericDiscretizer(cat_threshold=50, n_bins=10)
         d.fit(data)
@@ -164,10 +158,7 @@ class TestNumericDiscretizerTransform:
 
     def test_transform_preserves_non_numeric(self):
         """Test transform preserves non-numeric fields."""
-        data = [
-            {"name": f"item_{i}", "value": float(i), "active": True}
-            for i in range(200)
-        ]
+        data = [{"name": f"item_{i}", "value": float(i), "active": True} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
@@ -178,10 +169,7 @@ class TestNumericDiscretizerTransform:
 
     def test_transform_nested_fields(self):
         """Test transform handles nested fields."""
-        data = [
-            {"outer": {"inner": float(i)}}
-            for i in range(200)
-        ]
+        data = [{"outer": {"inner": float(i)}} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
@@ -192,10 +180,7 @@ class TestNumericDiscretizerTransform:
 
     def test_transform_arrays(self):
         """Test transform handles arrays."""
-        data = [
-            {"items": [float(i), float(i + 100), float(i + 200)]}
-            for i in range(200)
-        ]
+        data = [{"items": [float(i), float(i + 100), float(i + 200)]} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
@@ -283,7 +268,7 @@ class TestNumericDiscretizerStrategies:
     def test_quantile_strategy(self):
         """Test quantile strategy creates equal-frequency bins."""
         # Skewed distribution
-        data = [{"value": float(i ** 2)} for i in range(200)]
+        data = [{"value": float(i**2)} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10, strategy="quantile")
         transformed = d.fit_transform(data)
@@ -334,10 +319,7 @@ class TestNumericDiscretizerSummary:
 
     def test_summary_fitted(self):
         """Test summary after fitting."""
-        data = [
-            {"high_card": float(i), "low_card": i % 5}
-            for i in range(200)
-        ]
+        data = [{"high_card": float(i), "low_card": i % 5} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         d.fit(data)
@@ -413,7 +395,7 @@ class TestNumericDiscretizerEdgeCases:
         data = [{"value": float(i - 100)} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
-        transformed = d.fit_transform(data)
+        d.fit_transform(data)
 
         edges = d.get_bin_edges("value")
         assert edges[0] <= -100  # Should include negative values

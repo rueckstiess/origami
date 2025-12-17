@@ -89,10 +89,9 @@ class OrigamiModel(nn.Module):
         self._grammar_pda = None
         if config.use_grammar_constraints:
             if vocab is None:
-                raise ValueError(
-                    "vocab is required when use_grammar_constraints=True"
-                )
+                raise ValueError("vocab is required when use_grammar_constraints=True")
             from origami.constraints.json_grammar import JSONGrammarPDA
+
             self._grammar_pda = JSONGrammarPDA(vocab, max_depth=config.max_depth)
 
     def forward(

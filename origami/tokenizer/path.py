@@ -5,7 +5,6 @@ of KeyElement (for object keys) and IndexElement (for array indices).
 """
 
 from dataclasses import dataclass
-from typing import Union
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ class IndexElement:
 
 
 # Type alias for a path through a JSON structure
-PathElement = Union[KeyElement, IndexElement]
+PathElement = KeyElement | IndexElement
 Path = tuple[PathElement, ...]
 
 

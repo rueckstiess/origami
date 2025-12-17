@@ -79,7 +79,7 @@ class TestOrigamiPredictor:
         # Should be list of (value, probability) tuples
         assert isinstance(results, list)
         assert len(results) == 3
-        for value, prob in results:
+        for _value, prob in results:
             assert 0.0 <= prob <= 1.0
 
     def test_predict_batch(self, simple_model, simple_tokenizer):
@@ -119,9 +119,7 @@ class TestOrigamiPredictor:
         predictor = OrigamiPredictor(simple_model, simple_tokenizer)
 
         obj = {"name": "Alice", "age": 30, "city": None}
-        result = predictor.predict_proba(
-            obj, target_key="city", values=["NYC", "LA", "SF"]
-        )
+        result = predictor.predict_proba(obj, target_key="city", values=["NYC", "LA", "SF"])
 
         assert isinstance(result, dict)
         assert "NYC" in result
@@ -139,18 +137,15 @@ class TestOrigamiPredictor:
 
         assert isinstance(result, dict)
         # Should have some values with non-zero probability
-        total_prob = sum(result.values())
-        # Probabilities should be reasonable (not all zero)
         # Note: with random weights, distribution is random
+        assert sum(result.values()) >= 0  # Basic sanity check
 
     def test_predict_unknown_value_prob(self, simple_model, simple_tokenizer):
         """Test probability for unknown value is zero."""
         predictor = OrigamiPredictor(simple_model, simple_tokenizer)
 
         obj = {"name": "Alice", "age": 30, "city": None}
-        result = predictor.predict_proba(
-            obj, target_key="city", values=["UnknownCity123"]
-        )
+        result = predictor.predict_proba(obj, target_key="city", values=["UnknownCity123"])
 
         assert "UnknownCity123" in result
         assert result["UnknownCity123"] == 0.0
@@ -183,8 +178,7 @@ class TestOrigamiPredictor:
         assert next(predictor.model.parameters()).device == torch.device("cpu")
 
         obj = {"name": "Alice", "age": 30, "city": None}
-        result = predictor.predict(obj, target_key="city")
-        # Should not raise
+        predictor.predict(obj, target_key="city")  # Should not raise
 
 
 class TestPredictorWithNestedData:
@@ -300,9 +294,7 @@ class TestPredictorDeterminism:
         # Results should be identical
         assert result1 == result2
 
-    def test_different_objects_can_have_different_predictions(
-        self, simple_model, simple_tokenizer
-    ):
+    def test_different_objects_can_have_different_predictions(self, simple_model, simple_tokenizer):
         """Test that different objects can produce different predictions."""
         predictor = OrigamiPredictor(simple_model, simple_tokenizer)
 
@@ -514,7 +506,7 @@ class TestPredictorRobustness:
         probs = predictor.predict_proba(obj, target_key="str_field")
 
         # All probabilities should be valid
-        for value, prob in probs.items():
+        for _value, prob in probs.items():
             assert 0.0 <= prob <= 1.0
 
     def test_predict_multiple_calls_stable(self, robust_model, robust_tokenizer):

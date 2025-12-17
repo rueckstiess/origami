@@ -23,7 +23,6 @@ from origami.model import (
 from origami.tokenizer import JSONTokenizer
 from origami.utils import available_devices as get_available_devices
 
-
 AVAILABLE_DEVICES = get_available_devices()
 
 
@@ -128,8 +127,12 @@ class TestOrigamiEmbeddings:
 
         batch_size, seq_len = 2, 10
         input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device=device)
-        path_types = torch.zeros(batch_size, seq_len, config.max_depth, dtype=torch.long, device=device)
-        path_ids = torch.zeros(batch_size, seq_len, config.max_depth, dtype=torch.long, device=device)
+        path_types = torch.zeros(
+            batch_size, seq_len, config.max_depth, dtype=torch.long, device=device
+        )
+        path_ids = torch.zeros(
+            batch_size, seq_len, config.max_depth, dtype=torch.long, device=device
+        )
         path_lengths = torch.zeros(batch_size, seq_len, dtype=torch.long, device=device)
 
         output = embeddings(input_ids, path_types, path_ids, path_lengths)
@@ -143,9 +146,7 @@ class TestTransformerBackbone:
 
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(
-            vocab_size=100, d_model=64, n_heads=4, n_layers=2, d_ff=128
-        )
+        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4, n_layers=2, d_ff=128)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct output shape."""
@@ -237,9 +238,7 @@ class TestContinuousHead:
 
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(
-            vocab_size=100, d_model=64, n_heads=4, num_mixture_components=5
-        )
+        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4, num_mixture_components=5)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct MoG parameter shapes."""
@@ -360,10 +359,12 @@ class TestOrigamiModel:
     def tokenizer(self):
         """Create a simple tokenizer for testing."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"name": "Alice", "age": 30, "scores": [90, 85]},
-            {"name": "Bob", "age": 25, "active": True},
-        ])
+        tokenizer.fit(
+            [
+                {"name": "Alice", "age": 30, "scores": [90, 85]},
+                {"name": "Bob", "age": 25, "active": True},
+            ]
+        )
         return tokenizer
 
     @pytest.fixture
@@ -566,7 +567,7 @@ class TestOrigamiModel:
         # Note: some parameters like index_embeddings may have zero gradients
         # if the batch doesn't contain arrays, but they should still have grads
         has_any_grad = False
-        for name, param in model.named_parameters():
+        for _name, param in model.named_parameters():
             if param.requires_grad and param.grad is not None:
                 has_any_grad = True
                 # Gradient should exist and be on same device
@@ -618,7 +619,7 @@ class TestOrigamiModel:
 
         # Check that at least some gradients exist and are on the correct device
         has_any_grad = False
-        for name, param in model.named_parameters():
+        for _name, param in model.named_parameters():
             if param.requires_grad and param.grad is not None:
                 has_any_grad = True
                 assert param.grad.device.type == device.type
@@ -715,10 +716,12 @@ class TestEncodeBatch:
     def tokenizer(self):
         """Create a tokenizer fitted on sample data."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"name": "Alice", "age": 30, "scores": [90, 85]},
-            {"name": "Bob", "active": True},
-        ])
+        tokenizer.fit(
+            [
+                {"name": "Alice", "age": 30, "scores": [90, 85]},
+                {"name": "Bob", "active": True},
+            ]
+        )
         return tokenizer
 
     def test_encode_batch_single(self, tokenizer):

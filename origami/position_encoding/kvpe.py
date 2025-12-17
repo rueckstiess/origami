@@ -101,18 +101,14 @@ class KeyValuePositionEncoding(nn.Module):
             AssertionError: If share_key_embeddings=False was set in __init__
         """
         if not self.share_key_embeddings:
-            raise ValueError(
-                "Cannot set shared embeddings when share_key_embeddings=False"
-            )
+            raise ValueError("Cannot set shared embeddings when share_key_embeddings=False")
         self._shared_key_embeddings = key_embeddings
 
     def _get_key_embeddings(self) -> nn.Embedding:
         """Get the key embedding layer (shared or separate)."""
         if self.share_key_embeddings:
             if self._shared_key_embeddings is None:
-                raise RuntimeError(
-                    "Key embeddings not set. Call set_key_embeddings() first."
-                )
+                raise RuntimeError("Key embeddings not set. Call set_key_embeddings() first.")
             return self._shared_key_embeddings
         else:
             return self.key_embeddings

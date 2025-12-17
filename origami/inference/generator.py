@@ -37,9 +37,7 @@ class PathState:
 
     # Stack of (context_type, path_elements) where context_type is 'object' or 'array'
     # path_elements is tuple of (type, id) pairs
-    context_stack: list[tuple[str, list[tuple[int, int]]]] = field(
-        default_factory=list
-    )
+    context_stack: list[tuple[str, list[tuple[int, int]]]] = field(default_factory=list)
 
     # Current key for object context (set after seeing KeyToken)
     current_key: tuple[int, int] | None = None
@@ -106,9 +104,7 @@ class PathState:
     def clone(self) -> "PathState":
         """Create a deep copy of the path state."""
         new_state = PathState()
-        new_state.context_stack = [
-            (ctx_type, list(path)) for ctx_type, path in self.context_stack
-        ]
+        new_state.context_stack = [(ctx_type, list(path)) for ctx_type, path in self.context_stack]
         new_state.current_key = self.current_key
         new_state.array_index = self.array_index
         return new_state
@@ -194,12 +190,8 @@ class OrigamiGenerator:
         )
 
         # Initialize path tensors (START has empty path)
-        path_types = torch.zeros(
-            num_samples, 1, max_depth, dtype=torch.long, device=self.device
-        )
-        path_ids = torch.zeros(
-            num_samples, 1, max_depth, dtype=torch.long, device=self.device
-        )
+        path_types = torch.zeros(num_samples, 1, max_depth, dtype=torch.long, device=self.device)
+        path_ids = torch.zeros(num_samples, 1, max_depth, dtype=torch.long, device=self.device)
         path_lengths = torch.zeros(num_samples, 1, dtype=torch.long, device=self.device)
 
         # Attention mask: all ones since no padding yet
@@ -594,18 +586,12 @@ class OrigamiGenerator:
         max_depth = self.tokenizer.max_depth
 
         # Initialize output tensors
-        new_path_types = torch.zeros(
-            batch_size, 1, max_depth, dtype=torch.long, device=self.device
-        )
-        new_path_ids = torch.zeros(
-            batch_size, 1, max_depth, dtype=torch.long, device=self.device
-        )
-        new_path_lengths = torch.zeros(
-            batch_size, 1, dtype=torch.long, device=self.device
-        )
+        new_path_types = torch.zeros(batch_size, 1, max_depth, dtype=torch.long, device=self.device)
+        new_path_ids = torch.zeros(batch_size, 1, max_depth, dtype=torch.long, device=self.device)
+        new_path_lengths = torch.zeros(batch_size, 1, dtype=torch.long, device=self.device)
 
         for i, (token_id, state, is_done) in enumerate(
-            zip(next_tokens.tolist(), path_states, done.tolist())
+            zip(next_tokens.tolist(), path_states, done.tolist(), strict=True)
         ):
             if is_done:
                 continue

@@ -270,16 +270,12 @@ class JSONTokenizer:
 
         # Expect START
         if token_ids[pos] != self.vocab.start_id:
-            raise DecodeError(
-                f"Expected START token, got {token_ids[pos]}", token_ids, pos
-            )
+            raise DecodeError(f"Expected START token, got {token_ids[pos]}", token_ids, pos)
         pos += 1
 
         # Expect OBJ_START for root object
         if pos >= len(token_ids) or token_ids[pos] != self.vocab.obj_start_id:
-            raise DecodeError(
-                "Expected OBJ_START token after START", token_ids, pos
-            )
+            raise DecodeError("Expected OBJ_START token after START", token_ids, pos)
 
         # Decode root value
         result, pos = self._decode_value(token_ids, pos)
@@ -315,9 +311,7 @@ class JSONTokenizer:
             if isinstance(token, ValueToken):
                 return token.value, pos + 1
             else:
-                raise DecodeError(
-                    f"Expected value token, got {token}", token_ids, pos
-                )
+                raise DecodeError(f"Expected value token, got {token}", token_ids, pos)
 
     def _decode_object(self, token_ids: list[int], pos: int) -> tuple[dict, int]:
         """Decode an object starting at OBJ_START."""
@@ -336,9 +330,7 @@ class JSONTokenizer:
             # Expect a key
             token = self.vocab.decode(token_id)
             if not isinstance(token, KeyToken):
-                raise DecodeError(
-                    f"Expected key token, got {token}", token_ids, pos
-                )
+                raise DecodeError(f"Expected key token, got {token}", token_ids, pos)
             key = token.key
             pos += 1
 
@@ -420,16 +412,10 @@ class JSONTokenizer:
         lengths = torch.tensor([len(ids) for ids in batch_token_ids], dtype=torch.long)
 
         # Initialize tensors
-        input_ids = torch.full(
-            (batch_size, max_seq_len), self.vocab.pad_token_id, dtype=torch.long
-        )
+        input_ids = torch.full((batch_size, max_seq_len), self.vocab.pad_token_id, dtype=torch.long)
         attention_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
-        path_types = torch.zeros(
-            batch_size, max_seq_len, self.max_depth, dtype=torch.long
-        )
-        path_ids = torch.zeros(
-            batch_size, max_seq_len, self.max_depth, dtype=torch.long
-        )
+        path_types = torch.zeros(batch_size, max_seq_len, self.max_depth, dtype=torch.long)
+        path_ids = torch.zeros(batch_size, max_seq_len, self.max_depth, dtype=torch.long)
         path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
 
         # Numeric values (placeholder for Phase 6)
@@ -456,9 +442,7 @@ class JSONTokenizer:
                     elif isinstance(element, IndexElement):
                         path_types[b, t, d] = PATH_TYPE_INDEX
                         # Clamp index to valid range
-                        path_ids[b, t, d] = min(
-                            element.index, self.max_array_index - 1
-                        )
+                        path_ids[b, t, d] = min(element.index, self.max_array_index - 1)
 
         # Move to device if specified
         if device is not None:

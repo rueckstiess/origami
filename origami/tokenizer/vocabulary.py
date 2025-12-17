@@ -85,7 +85,18 @@ UNK_VALUE = GrammarToken("UNK_VALUE")  # ID: 8
 NUM = GrammarToken("NUM")  # ID: 9
 
 # Ordered list of grammar tokens (their index is their ID)
-GRAMMAR_TOKENS = [START, END, OBJ_START, OBJ_END, ARRAY_START, ARRAY_END, PAD, UNK_KEY, UNK_VALUE, NUM]
+GRAMMAR_TOKENS = [
+    START,
+    END,
+    OBJ_START,
+    OBJ_END,
+    ARRAY_START,
+    ARRAY_END,
+    PAD,
+    UNK_KEY,
+    UNK_VALUE,
+    NUM,
+]
 
 # First ID for dynamic tokens (keys and values)
 DYNAMIC_TOKEN_START_ID = len(GRAMMAR_TOKENS)  # 10
@@ -104,12 +115,8 @@ class Vocabulary:
 
     def __init__(self):
         # Grammar tokens have fixed IDs
-        self._token_to_id: dict[Token, int] = {
-            token: i for i, token in enumerate(GRAMMAR_TOKENS)
-        }
-        self._id_to_token: dict[int, Token] = {
-            i: token for i, token in enumerate(GRAMMAR_TOKENS)
-        }
+        self._token_to_id: dict[Token, int] = {token: i for i, token in enumerate(GRAMMAR_TOKENS)}
+        self._id_to_token: dict[int, Token] = {i: token for i, token in enumerate(GRAMMAR_TOKENS)}
 
         # Track key and value IDs separately for type queries
         self._key_ids: set[int] = set()

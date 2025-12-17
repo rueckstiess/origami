@@ -101,9 +101,7 @@ class JSONGrammarPDA:
 
         # Initialize state tensors (batch-parallel)
         # Stack stores container type at each depth level
-        stack = torch.zeros(
-            batch_size, self.max_depth, dtype=torch.long, device=device
-        )
+        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
         # Current depth (0 = at root level)
         depth = torch.zeros(batch_size, dtype=torch.long, device=device)
         # Whether we're awaiting a value (after key in object)
@@ -116,9 +114,7 @@ class JSONGrammarPDA:
         ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
         # Output mask: valid tokens for position t
-        masks = torch.zeros(
-            batch_size, seq_len, vocab_size, dtype=torch.bool, device=device
-        )
+        masks = torch.zeros(batch_size, seq_len, vocab_size, dtype=torch.bool, device=device)
 
         # Move pre-computed ID tensors to device
         key_ids = self._key_ids.to(device)
@@ -139,8 +135,15 @@ class JSONGrammarPDA:
 
             # Compute valid tokens for NEXT position (t+1) based on state after 0..t
             valid_mask = self._get_valid_tokens(
-                stack, depth, awaiting_value, seen_start, root_closed, ended,
-                key_ids, value_ids, device
+                stack,
+                depth,
+                awaiting_value,
+                seen_start,
+                root_closed,
+                ended,
+                key_ids,
+                value_ids,
+                device,
             )
 
             masks[:, t] = valid_mask
@@ -183,7 +186,9 @@ class JSONGrammarPDA:
         # Get current container type (0 if depth=0)
         depth_idx = (depth - 1).clamp(min=0).unsqueeze(1)  # (batch, 1)
         current_container = torch.gather(stack, 1, depth_idx).squeeze(1)  # (batch,)
-        current_container = torch.where(depth == 0, torch.zeros_like(current_container), current_container)
+        current_container = torch.where(
+            depth == 0, torch.zeros_like(current_container), current_container
+        )
 
         # Get cached device-specific masks (avoids repeated .to() calls)
         if device not in self._device_masks:
@@ -285,14 +290,18 @@ class JSONGrammarPDA:
             new_stack,
         )
         new_depth = torch.where(push_obj, new_depth + 1, new_depth)
-        new_awaiting_value = torch.where(push_obj, torch.zeros_like(new_awaiting_value), new_awaiting_value)
+        new_awaiting_value = torch.where(
+            push_obj, torch.zeros_like(new_awaiting_value), new_awaiting_value
+        )
 
         # ARRAY_START: push array onto stack
         push_array = is_array_start & (new_depth < self.max_depth)
         array_values = torch.full((batch_size, 1), STACK_ARRAY, dtype=torch.long, device=device)
         new_stack = torch.where(
             push_array.unsqueeze(1).expand(-1, self.max_depth),
-            new_stack.scatter(1, new_depth.unsqueeze(1).clamp(max=self.max_depth - 1), array_values),
+            new_stack.scatter(
+                1, new_depth.unsqueeze(1).clamp(max=self.max_depth - 1), array_values
+            ),
             new_stack,
         )
         new_depth = torch.where(push_array, new_depth + 1, new_depth)
@@ -312,10 +321,14 @@ class JSONGrammarPDA:
         new_root_closed = new_root_closed | closing_root_obj | closing_root_array
 
         # Key: set awaiting_value = True
-        new_awaiting_value = torch.where(is_key, torch.ones_like(new_awaiting_value), new_awaiting_value)
+        new_awaiting_value = torch.where(
+            is_key, torch.ones_like(new_awaiting_value), new_awaiting_value
+        )
 
         # Value (primitive): set awaiting_value = False
-        new_awaiting_value = torch.where(is_value, torch.zeros_like(new_awaiting_value), new_awaiting_value)
+        new_awaiting_value = torch.where(
+            is_value, torch.zeros_like(new_awaiting_value), new_awaiting_value
+        )
 
         # After OBJ_END or ARRAY_END, if we're back in an object context,
         # the closed container was the value, so awaiting_value = False
@@ -389,8 +402,7 @@ class JSONGrammarPDA:
         value_ids = self._value_ids.to(device)
 
         valid_mask = self._get_valid_tokens(
-            stack, depth, awaiting_value, seen_start, root_closed, ended,
-            key_ids, value_ids, device
+            stack, depth, awaiting_value, seen_start, root_closed, ended, key_ids, value_ids, device
         )
 
         new_state = (stack, depth, awaiting_value, seen_start, root_closed, ended)
@@ -446,7 +458,7 @@ class JSONGrammarPDA:
 
         # Process each token (skip PAD tokens for left-padded sequences)
         for t in range(token_ids.size(0)):
-            token = token_ids[t:t+1].to(device)  # (1,)
+            token = token_ids[t : t + 1].to(device)  # (1,)
             if token.item() == self.vocab.pad_token_id:
                 continue
             stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(

@@ -10,7 +10,6 @@ from torch import Tensor
 
 if TYPE_CHECKING:
     from origami.tokenizer.json_tokenizer import JSONTokenizer, TokenizedInstance
-    from origami.tokenizer.path import KeyElement
 
 
 class OrigamiDataCollator:
@@ -74,9 +73,7 @@ class OrigamiDataCollator:
             raise ValueError("Cannot collate empty batch")
 
         # Convert tokens to IDs
-        batch_token_ids = [
-            self.tokenizer.encode_tokens(inst) for inst in instances
-        ]
+        batch_token_ids = [self.tokenizer.encode_tokens(inst) for inst in instances]
         batch_paths = [inst.paths for inst in instances]
 
         # Determine dimensions
@@ -89,31 +86,21 @@ class OrigamiDataCollator:
             batch_token_ids = [ids[:max_seq_len] for ids in batch_token_ids]
             batch_paths = [paths[:max_seq_len] for paths in batch_paths]
 
-        lengths = torch.tensor(
-            [len(ids) for ids in batch_token_ids], dtype=torch.long
-        )
+        lengths = torch.tensor([len(ids) for ids in batch_token_ids], dtype=torch.long)
 
         # Initialize tensors
         vocab = self.tokenizer.vocab
         max_depth = self.tokenizer.max_depth
 
-        input_ids = torch.full(
-            (batch_size, max_seq_len), vocab.pad_token_id, dtype=torch.long
-        )
+        input_ids = torch.full((batch_size, max_seq_len), vocab.pad_token_id, dtype=torch.long)
         attention_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
-        path_types = torch.zeros(
-            batch_size, max_seq_len, max_depth, dtype=torch.long
-        )
-        path_ids = torch.zeros(
-            batch_size, max_seq_len, max_depth, dtype=torch.long
-        )
+        path_types = torch.zeros(batch_size, max_seq_len, max_depth, dtype=torch.long)
+        path_ids = torch.zeros(batch_size, max_seq_len, max_depth, dtype=torch.long)
         path_lengths = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
 
         # Fill tensors with LEFT-PADDING
         # Content is placed at the END of the sequence, PADs at the START
-        for b, (token_ids, paths) in enumerate(
-            zip(batch_token_ids, batch_paths, strict=True)
-        ):
+        for b, (token_ids, paths) in enumerate(zip(batch_token_ids, batch_paths, strict=True)):
             seq_len = len(token_ids)
             # Left-pad: content goes at positions [max_seq_len - seq_len : max_seq_len]
             start_pos = max_seq_len - seq_len
@@ -133,9 +120,7 @@ class OrigamiDataCollator:
                         path_ids[b, pos, d] = vocab.encode(key_token)
                     elif isinstance(element, IndexElement):
                         path_types[b, pos, d] = PATH_TYPE_INDEX
-                        path_ids[b, pos, d] = min(
-                            element.index, self.tokenizer.max_array_index - 1
-                        )
+                        path_ids[b, pos, d] = min(element.index, self.tokenizer.max_array_index - 1)
 
         # Move to device if specified
         if self.device is not None:
