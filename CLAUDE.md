@@ -88,6 +88,117 @@ JSON object keys have no inherent order, so we randomly shuffle key order during
 
 This is controlled by `UpscaledDataset` with `upscale_factor` parameter.
 
+### 5. Continuous Numeric Handling (MoG Head)
+High-cardinality numeric fields can be handled in two ways:
+- **Discretize**: Bin into categories (e.g., 20 bins) - treated as categorical
+- **Scale**: Normalize with StandardScaler, use Mixture of Gaussians (MoG) output head
+
+With `numeric_mode="scale"`:
+1. `NumericScaler` transforms high-cardinality numerics to mean=0, std=1
+2. Values are wrapped in `ScaledNumeric(value)` objects
+3. Tokenizer emits `NUM` token (ID 9) with the scaled value in `numeric_values` tensor
+4. Model's continuous head outputs MoG parameters (weights, means, log_vars)
+5. At inference, sample from MoG when `NUM` token is generated
+6. Pipeline inverse-transforms predictions back to original scale
+
+```python
+# Flow through the system:
+{"price": 50000}  # Original
+{"price": ScaledNumeric(1.23)}  # After NumericScaler.transform()
+[..., KEY("price"), NUM, ...]  # Tokenized (NUM token)
+numeric_values = [..., 0, 1.23, ...]  # Scaled value stored separately
+# Model forward pass uses numeric_values for conditioning
+# MoG head predicts distribution for next NUM value
+```
+
+## Inference Architecture
+
+### Generator Contains ALL Generation Logic
+The `OrigamiGenerator` is the single source of truth for generation:
+- Applies grammar constraints incrementally via PDA
+- Handles token sampling (temperature, top-k, top-p)
+- Samples from MoG head when NUM token is generated
+- Manages path state tracking for KVPE
+
+```
+Generator
+├── generate()              # Generate full objects from scratch
+├── generate_from_tensors() # Core loop - ALL generation goes through here
+├── get_value_distribution() # Get grammar-constrained probabilities (no sampling)
+└── _sample()               # Token sampling with temperature/top-k/top-p
+```
+
+### Predictor Delegates to Generator
+The `OrigamiPredictor` does NOT contain generation logic. It:
+1. Prepares input tensors (reorder keys, tokenize, truncate at target)
+2. Calls Generator's methods
+3. Formats results
+
+```python
+# Predictor.predict_batch() internally does:
+truncated = self._truncate_at_target_key(batch, target_key)
+values = self._generator.generate_from_tensors(
+    ...,
+    numeric_values=truncated.numeric_values,  # MUST pass for conditioning!
+    stop_after_value=True,
+    temperature=0.0,  # Greedy decoding
+)
+```
+
+**Critical**: `numeric_values` must be passed to Generator for conditioning on numeric context. Without it, the model ignores numeric field values when predicting.
+
+### Prediction API
+```python
+# Simple prediction - returns the value directly
+value = predictor.predict(obj, target_key)  # Returns: Any
+
+# Batch prediction - returns list of values
+values = predictor.predict_batch(objects, target_key)  # Returns: list[Any]
+
+# Probability distribution - returns grammar-constrained probabilities
+probs = predictor.predict_proba(obj, target_key)  # Returns: dict[Any, float]
+top_k = predictor.predict_proba(obj, target_key, top_k=5)  # Returns: list[(Any, float)]
+```
+
+## Pipeline API (OrigamiPipeline)
+
+The `OrigamiPipeline` provides an end-to-end API for training and inference:
+
+```python
+from origami import OrigamiPipeline, PipelineConfig
+
+# Configure
+config = PipelineConfig(
+    d_model=64,
+    n_layers=4,
+    numeric_mode="scale",  # or "discretize" or "none"
+    cat_threshold=100,     # Fields with >100 unique values get preprocessed
+)
+
+# Train
+pipeline = OrigamiPipeline(config)
+pipeline.fit(train_data, eval_data=eval_data, epochs=20)
+
+# Predict
+value = pipeline.predict({"a": 1, "b": None}, target_key="b")
+values = pipeline.predict_batch(objects, target_key="b")
+probs = pipeline.predict_proba(obj, target_key="b", top_k=5)
+
+# Generate
+samples = pipeline.generate(num_samples=10, temperature=0.8)
+
+# Save/Load (preserves all state: model, tokenizer, preprocessor)
+pipeline.save("model.pt")
+loaded = OrigamiPipeline.load("model.pt")
+```
+
+The pipeline handles:
+- Automatic preprocessing (NumericScaler or NumericDiscretizer)
+- Tokenizer fitting
+- Model creation with appropriate config
+- Training loop
+- Inverse transformation of predictions back to original scale
+
 ## Project Structure
 
 ```
@@ -104,20 +215,24 @@ origami/
 │   ├── config.py          # Configuration
 │   ├── embeddings.py      # Embedding layer
 │   ├── backbone.py        # Transformer backbone
-│   └── heads.py           # Output heads
+│   └── heads.py           # Output heads (discrete + continuous MoG)
 ├── constraints/         # Grammar constraints
 │   └── json_grammar.py    # PDA implementation
 ├── inference/           # Inference components
-│   ├── generator.py       # JSON generation
-│   ├── predictor.py       # Field prediction
+│   ├── generator.py       # JSON generation (ALL generation logic here)
+│   ├── predictor.py       # Field prediction (delegates to Generator)
 │   └── embedder.py        # Embedding extraction
+├── pipeline/            # High-level API
+│   ├── pipeline.py        # OrigamiPipeline end-to-end API
+│   └── config.py          # PipelineConfig
 ├── training/            # Training components
 │   ├── trainer.py         # Training loop
 │   ├── dataset.py         # Dataset classes
 │   └── collator.py        # Batch collation
 ├── preprocessing/       # Data preprocessing
-│   ├── numeric_discretizer.py  # Binning high-cardinality numerics
-│   └── target_field.py    # Target field utilities
+│   ├── numeric_scaler.py      # StandardScaler for continuous numerics
+│   ├── numeric_discretizer.py # Binning high-cardinality numerics
+│   └── target_field.py        # Target field utilities
 └── utils/               # Utilities
     └── device.py          # Device management
 ```
@@ -244,20 +359,51 @@ attention_mask = torch.tensor([
 ])
 ```
 
+### 9. Numeric Values Must Be Passed for Conditioning
+When predicting with continuous mode, `numeric_values` MUST be passed to Generator:
+
+```python
+# WRONG: Model ignores numeric context, predicts unconditional mean
+values = generator.generate_from_tensors(input_ids, ..., numeric_values=None)
+
+# RIGHT: Model conditions on numeric values in context
+values = generator.generate_from_tensors(input_ids, ..., numeric_values=batch.numeric_values)
+```
+
+Without `numeric_values`, the model predicts the marginal distribution (mean) instead of the conditional distribution given the context.
+
+### 10. Predictor API Changed
+The prediction API was simplified:
+
+```python
+# OLD (removed):
+predictions = predictor.predict_batch(objects, target_key, top_k=1)  # Returned list[list[tuple]]
+prediction = predictor.predict(obj, target_key, top_k=1, return_probs=True)
+
+# NEW:
+predictions = predictor.predict_batch(objects, target_key)  # Returns list[Any]
+prediction = predictor.predict(obj, target_key)  # Returns Any
+probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, float)]
+```
+
 ## Key Classes and Their Responsibilities
 
 | Class | Responsibility |
 |-------|---------------|
+| `OrigamiPipeline` | End-to-end API: preprocessing, training, inference, save/load |
+| `PipelineConfig` | Unified configuration for pipeline |
 | `JSONTokenizer` | Tokenize JSON objects, manage vocabulary |
 | `OrigamiModel` | Main model with embeddings, backbone, heads |
 | `KeyValuePositionEncoding` | Encode paths through JSON structure |
 | `JSONGrammarPDA` | Enforce valid JSON syntax |
-| `OrigamiGenerator` | Generate complete JSON objects |
-| `OrigamiPredictor` | Predict field values |
+| `OrigamiGenerator` | ALL generation logic: grammar, sampling, MoG, path tracking |
+| `OrigamiPredictor` | Prepare tensors, delegate to Generator, format results |
 | `OrigamiEmbedder` | Extract embeddings for downstream tasks |
 | `OrigamiTrainer` | Training loop with LR warmup, checkpointing |
 | `OrigamiDataCollator` | Batch sequences with left-padding |
 | `UpscaledDataset` | Data augmentation via key-order shuffling |
+| `NumericScaler` | StandardScaler for continuous numeric fields |
+| `NumericDiscretizer` | Bin numeric fields into categories |
 
 ## Configuration
 
@@ -289,7 +435,7 @@ TrainingConfig(
 
 ## Implementation Status
 
-### Complete (Phases 1-5)
+### Complete (Phases 1-6)
 - Tokenization with path tracking
 - KVPE with 5 pooling strategies
 - Transformer backbone with causal attention
@@ -297,9 +443,11 @@ TrainingConfig(
 - Training loop with key-order shuffling
 - Inference: Generator, Predictor, Embedder
 - NumericDiscretizer for high-cardinality fields
+- NumericScaler + ContinuousHead (MoG) for continuous numerics
+- OrigamiPipeline end-to-end API
+- Unified prediction API with predict/predict_batch/predict_proba
 
-### Partial (Phase 6)
-- ContinuousHead for numeric prediction (done)
+### Partial
 - LSTM/Mamba backbones (stubs only)
 - TabularTokenizer (not implemented)
 - HuggingFace integration (not implemented)
