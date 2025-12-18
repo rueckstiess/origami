@@ -140,17 +140,21 @@ class OrigamiGenerator:
             tokenizer: JSONTokenizer with fitted vocabulary
 
         Note:
-            Generator always runs on CPU as benchmarking shows it's faster
-            for the model sizes typically used with ORIGAMI.
+            The Generator uses the model's current device dynamically.
+            Move the model to your desired device before calling generate().
+            For standalone use, CPU is typically fastest for ORIGAMI model sizes.
         """
         self.model = model
         self.tokenizer = tokenizer
-        self.device = torch.device("cpu")
-        self.model.to(self.device)
         self.model.eval()
 
         # Get grammar PDA reference from model for incremental constraint application
         self._grammar_pda = model._grammar_pda
+
+    @property
+    def device(self) -> torch.device:
+        """Get the model's current device dynamically."""
+        return next(self.model.parameters()).device
 
     @torch.inference_mode()
     def generate(
@@ -298,9 +302,9 @@ class OrigamiGenerator:
             initial_depths = grammar_state[1].clone()
 
         # Track where each sequence's generated content starts
-        gen_start_positions = current_ids.size(1) * torch.ones(
-            original_batch_size, dtype=torch.long, device=self.device
-        )
+        # Use sum of attention mask (count of real tokens) since we extract only
+        # non-padded tokens when storing completed sequences
+        gen_start_positions = attention_mask.sum(dim=1).long()
 
         # Track original indices for each active sequence (for reordering at end)
         active_indices = list(range(original_batch_size))
@@ -365,9 +369,18 @@ class OrigamiGenerator:
 
             # Check for completion
             if stop_after_value and initial_depths is not None:
-                # Stop when depth returns below initial (value is complete)
+                # Stop when a complete value has been generated:
+                # - For objects/arrays: depth returns to initial after OBJ_END/ARRAY_END
+                # - For primitives: depth stays at initial, check if we just generated a value token
                 current_depths = grammar_state[1]  # depth is second element
-                just_completed = current_depths < initial_depths
+                depth_returned = current_depths <= initial_depths
+
+                # Check if we generated a primitive value token (not OBJ_START/ARRAY_START)
+                is_container_start = (next_tokens == vocab.obj_start_id) | (
+                    next_tokens == vocab.array_start_id
+                )
+                # Value is complete if depth returned to initial AND we didn't just start a new container
+                just_completed = depth_returned & ~is_container_start
             else:
                 # Stop on END token
                 just_completed = next_tokens == vocab.end_id

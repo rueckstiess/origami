@@ -63,17 +63,21 @@ class OrigamiPredictor:
             tokenizer: JSONTokenizer with fitted vocabulary
 
         Note:
-            Predictor always runs on CPU as benchmarking shows it's faster
-            for the model sizes typically used with ORIGAMI.
+            The Predictor uses the model's current device dynamically.
+            Move the model to your desired device before calling predict().
+            For standalone use, CPU is typically fastest for ORIGAMI model sizes.
         """
         self.model = model
         self.tokenizer = tokenizer
-        self.device = torch.device("cpu")
-        self.model.to(self.device)
         self.model.eval()
 
         # Create generator for value generation (handles grammar + continuous values)
         self._generator = OrigamiGenerator(model, tokenizer)
+
+    @property
+    def device(self) -> torch.device:
+        """Get the model's current device dynamically."""
+        return next(self.model.parameters()).device
 
     @torch.no_grad()
     def predict(

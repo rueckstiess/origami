@@ -306,12 +306,17 @@ When working with left-padded batches, path encoding must align with tokens:
 ```
 
 ### 3. Device Management
-Inference components (Generator, Predictor, Embedder) always use CPU:
+Inference components (Generator, Predictor) use the model's current device dynamically:
 
 ```python
-# Model may be on GPU, but inference happens on CPU
+# Predictor/Generator adapt to whatever device the model is on
+model.to("cpu")  # Move to CPU for faster inference
 predictor = OrigamiPredictor(model, tokenizer)
 assert predictor.device == torch.device("cpu")
+
+# For training with MetricsCallback, device management is automatic:
+# - Moves model to CPU for prediction (faster)
+# - Restores model to training device (MPS/CUDA) afterwards
 ```
 
 ### 4. Ruff Linting Rules

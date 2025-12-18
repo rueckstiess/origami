@@ -5,11 +5,11 @@ Provides training utilities with support for:
 - Key-order shuffling / upscaling
 - Mixed discrete + continuous loss
 - Learning rate scheduling with warmup
+- Callback system for monitoring and customization
 """
 
 import math
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,10 +19,10 @@ from torch import Tensor
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from origami.utils import get_device
 
+from .callbacks import CallbackHandler, TrainerCallback
 from .collator import OrigamiDataCollator
 from .dataset import EvalDataset, UpscaledDataset
 
@@ -39,6 +39,10 @@ class TrainState:
     epoch: int = 0
     global_step: int = 0
     best_eval_loss: float = float("inf")
+    # Batch-level tracking (updated during training)
+    epoch_step: int = 0
+    current_batch_loss: float = 0.0
+    current_lr: float = 0.0
 
 
 @dataclass
@@ -99,6 +103,8 @@ class OrigamiTrainer:
         device: torch.device | None = None,
         checkpoint_dir: str | Path | None = None,
         shuffle: bool = True,
+        callbacks: list[TrainerCallback] | None = None,
+        log_every_n_batches: int = 1,
     ):
         """Initialize trainer.
 
@@ -112,6 +118,9 @@ class OrigamiTrainer:
             checkpoint_dir: Directory for saving checkpoints
             shuffle: Whether to shuffle key order during training (default True).
                      If False, upscaling is disabled since it would just duplicate samples.
+            callbacks: List of TrainerCallback instances for monitoring/customization.
+                     Use ProgressCallback for progress bars and MetricsCallback for metrics.
+            log_every_n_batches: Fire batch callbacks every N batches (default=1).
         """
         from origami.model.config import TrainingConfig
 
@@ -161,9 +170,10 @@ class OrigamiTrainer:
         # Training state
         self.state = TrainState()
 
-        # Callbacks (optional)
-        self.on_epoch_end: Callable[[int, TrainMetrics], None] | None = None
-        self.on_eval_end: Callable[[int, TrainMetrics], None] | None = None
+        # Callback handler
+        self.callback_handler = CallbackHandler(
+            callbacks or [], log_every_n_batches=log_every_n_batches
+        )
 
     def _create_scheduler(self) -> LambdaLR:
         """Create learning rate scheduler with linear warmup."""
@@ -182,37 +192,18 @@ class OrigamiTrainer:
         Returns:
             Final training state
         """
-        print(f"Training on {self.device}")
-        print(
-            f"Train samples: {len(self.train_dataset)} (base: {self.train_dataset.base_size}, upscale: {self.config.upscale_factor}x)"
-        )
-        if self.eval_dataset:
-            print(f"Eval samples: {len(self.eval_dataset)}")
-        print(f"Batch size: {self.config.batch_size}")
-        print(f"Epochs: {self.config.num_epochs}")
-        print(f"Total steps: {self.total_steps}")
-        print()
+        self.callback_handler.fire_event("on_train_begin", self, self.state, None)
 
         for epoch in range(self.config.num_epochs):
             self.state.epoch = epoch
             metrics = self._train_epoch()
 
-            print(
-                f"Epoch {epoch + 1}/{self.config.num_epochs} - "
-                f"Loss: {metrics.loss:.4f} - "
-                f"Tokens/sec: {metrics.tokens_per_second:.0f}"
-            )
-
-            if self.on_epoch_end:
-                self.on_epoch_end(epoch, metrics)
+            self.callback_handler.fire_event("on_epoch_end", self, self.state, metrics)
 
             # Evaluation
             if self.eval_dataset and (epoch + 1) % max(1, self.config.save_every_n_epochs) == 0:
                 eval_metrics = self.evaluate()
-                print(f"  Eval Loss: {eval_metrics.loss:.4f}")
-
-                if self.on_eval_end:
-                    self.on_eval_end(epoch, eval_metrics)
+                self.callback_handler.fire_event("on_evaluate", self, self.state, eval_metrics)
 
                 # Save best model (skip if loss is nan)
                 if (
@@ -232,7 +223,7 @@ class OrigamiTrainer:
             last_epoch_had_eval = self.config.num_epochs % self.config.save_every_n_epochs == 0
             if not last_epoch_had_eval:
                 eval_metrics = self.evaluate()
-                print(f"  Final Eval Loss: {eval_metrics.loss:.4f}")
+                self.callback_handler.fire_event("on_evaluate", self, self.state, eval_metrics)
                 if (
                     not math.isnan(eval_metrics.loss)
                     and eval_metrics.loss < self.state.best_eval_loss
@@ -240,6 +231,8 @@ class OrigamiTrainer:
                     self.state.best_eval_loss = eval_metrics.loss
                     if self.checkpoint_dir:
                         self.save_checkpoint("best")
+
+        self.callback_handler.fire_event("on_train_end", self, self.state, None)
 
         return self.state
 
@@ -264,20 +257,27 @@ class OrigamiTrainer:
         num_batches = 0
         start_time = time.time()
 
-        pbar = tqdm(train_loader, desc=f"Epoch {self.state.epoch + 1}", leave=False)
-        for batch in pbar:
+        # Reset epoch step counter
+        self.state.epoch_step = 0
+
+        self.callback_handler.fire_event("on_epoch_begin", self, self.state, None)
+
+        for batch in train_loader:
+            self.callback_handler.fire_event("on_batch_begin", self, self.state, None)
+
             loss, num_tokens = self._train_step(batch)
 
             total_loss += loss
             total_tokens += num_tokens
             num_batches += 1
             self.state.global_step += 1
+            self.state.epoch_step += 1
 
-            # Update progress bar
-            pbar.set_postfix(
-                loss=f"{loss:.4f}",
-                lr=f"{self.scheduler.get_last_lr()[0]:.2e}",
-            )
+            # Update state with batch-level info for callbacks
+            self.state.current_batch_loss = loss
+            self.state.current_lr = self.scheduler.get_last_lr()[0]
+
+            self.callback_handler.fire_event("on_batch_end", self, self.state, None)
 
         duration = time.time() - start_time
 

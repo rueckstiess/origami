@@ -101,7 +101,8 @@ class OrigamiPipeline:
         data: list[dict],
         eval_data: list[dict] | None = None,
         epochs: int | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
+        callbacks: list | None = None,
     ) -> "OrigamiPipeline":
         """Fit the pipeline on training data.
 
@@ -116,12 +117,14 @@ class OrigamiPipeline:
             data: Training data as list of JSON-like dictionaries
             eval_data: Optional evaluation data for validation during training
             epochs: Number of training epochs. Overrides config if provided.
-            verbose: Whether to print training progress
+            verbose: Whether to print training progress (adds ProgressCallback)
+            callbacks: List of TrainerCallback instances for custom monitoring.
+                Use MetricsCallback to track prediction accuracy during training.
 
         Returns:
             self (for method chaining)
         """
-        from origami.training import OrigamiTrainer
+        from origami.training import OrigamiTrainer, ProgressCallback
 
         if not data:
             raise ValueError("Training data cannot be empty")
@@ -159,6 +162,14 @@ class OrigamiPipeline:
             save_every_n_epochs=self.config.save_every_n_epochs,
         )
 
+        # Build callbacks list
+        all_callbacks = list(callbacks) if callbacks else []
+        if verbose:
+            # Add progress callback if verbose and not already provided
+            has_progress = any(isinstance(cb, ProgressCallback) for cb in all_callbacks)
+            if not has_progress:
+                all_callbacks.insert(0, ProgressCallback())
+
         trainer = OrigamiTrainer(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -166,6 +177,7 @@ class OrigamiPipeline:
             eval_data=eval_processed,
             config=train_config,
             shuffle=self.config.shuffle_keys,
+            callbacks=all_callbacks if all_callbacks else None,
         )
 
         # Run training
@@ -486,9 +498,7 @@ class OrigamiPipeline:
         embedder = self._get_embedder(pooling)
 
         # Get embeddings
-        embeddings = embedder.embed_batch(
-            processed, target_key=target_key, normalize=normalize
-        )
+        embeddings = embedder.embed_batch(processed, target_key=target_key, normalize=normalize)
 
         return embeddings.numpy()
 
@@ -496,8 +506,7 @@ class OrigamiPipeline:
         """Raise error if pipeline hasn't been fitted."""
         if not self._fitted:
             raise RuntimeError(
-                "Pipeline must be fitted before use. "
-                "Call fit() or load a checkpoint with load()."
+                "Pipeline must be fitted before use. Call fit() or load a checkpoint with load()."
             )
 
     def _preprocess_for_inference(self, objects: list[dict]) -> list[dict]:
@@ -562,9 +571,7 @@ class OrigamiPipeline:
 
         if isinstance(value, dict):
             return {
-                key: self._inverse_transform_value(
-                    val, f"{path}.{key}" if path else key
-                )
+                key: self._inverse_transform_value(val, f"{path}.{key}" if path else key)
                 for key, val in value.items()
             }
         elif isinstance(value, list):
@@ -597,15 +604,11 @@ class OrigamiPipeline:
             self._predictor = OrigamiPredictor(self._model, self._tokenizer)
         return self._predictor
 
-    def _get_embedder(
-        self, pooling: Literal["mean", "max", "last", "target"]
-    ) -> OrigamiEmbedder:
+    def _get_embedder(self, pooling: Literal["mean", "max", "last", "target"]) -> OrigamiEmbedder:
         """Get or create an embedder with the specified pooling."""
         # Always create a new embedder if pooling strategy differs
         if self._embedder is None or self._embedder.pooling != pooling:
-            self._embedder = OrigamiEmbedder(
-                self._model, self._tokenizer, pooling=pooling
-            )
+            self._embedder = OrigamiEmbedder(self._model, self._tokenizer, pooling=pooling)
         return self._embedder
 
     # Serialization helpers

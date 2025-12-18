@@ -39,6 +39,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from origami import OrigamiPipeline, PipelineConfig
+from origami.training import TableLogCallback, MetricsCallback, exact_match
 
 
 def parse_args():
@@ -108,6 +109,14 @@ def parse_args():
         type=str,
         default=None,
         help="Load pipeline from checkpoint (for continuing training or evaluation)",
+    )
+
+    # Logging
+    parser.add_argument(
+        "--print-every", type=int, default=100, help="Print log line every N batches"
+    )
+    parser.add_argument(
+        "--eval-every", type=int, default=1000, help="Compute metrics every N batches"
     )
 
     return parser.parse_args()
@@ -218,7 +227,17 @@ def main():
         print("Starting training...")
         print("=" * 60 + "\n")
 
-        pipeline.fit(train_data, eval_data=eval_data, epochs=args.epochs)
+        # Create callback for table-format logging
+        callbacks = [
+            # TableLogCallback(
+            #     print_every=args.print_every,
+            #     eval_every=args.eval_every,
+            #     target_key=args.target_key,
+            # )
+            MetricsCallback(args.target_key)
+        ]
+
+        pipeline.fit(train_data, eval_data=eval_data, epochs=args.epochs, callbacks=callbacks, verbose=True)
 
         print("\n" + "=" * 60)
         print("Training complete!")

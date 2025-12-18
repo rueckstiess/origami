@@ -56,7 +56,7 @@ class OrigamiConfig:
     kvpe_pooling: Literal["sum", "weighted", "rotary", "gru", "transformer"] = "sum"
     kvpe_pooling_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    # Continuous head (optional, Phase 6)
+    # Continuous head (optional)
     use_continuous_head: bool = False
     num_mixture_components: int = 5
     continuous_loss_weight: float = -1.0  # -1 = auto-calculate from NUM token proportion

@@ -771,13 +771,22 @@ class TestOrigamiTrainer:
             config=config,
         )
 
-        # Track callback invocations
+        # Track callback invocations using new callback API
+        from origami.training import TrainerCallback
+
         callback_epochs = []
 
-        def on_epoch_end(epoch, metrics):
-            callback_epochs.append(epoch)
+        class TestCallback(TrainerCallback):
+            def on_epoch_end(self, trainer, state, metrics):
+                callback_epochs.append(state.epoch)
 
-        trainer.on_epoch_end = on_epoch_end
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=train_data,
+            config=config,
+            callbacks=[TestCallback()],
+        )
         trainer.train()
 
         assert callback_epochs == [0, 1]
@@ -935,18 +944,28 @@ class TestEndToEndTraining:
                 checkpoint_dir=tmpdir,
             )
 
-            # Track metrics
+            # Track metrics using new callback API
+            from origami.training import TrainerCallback
+
             train_losses = []
             eval_losses = []
 
-            def on_epoch_end(epoch, metrics):
-                train_losses.append(metrics.loss)
+            class MetricsTracker(TrainerCallback):
+                def on_epoch_end(self, trainer, state, metrics):
+                    train_losses.append(metrics.loss)
 
-            def on_eval_end(epoch, metrics):
-                eval_losses.append(metrics.loss)
+                def on_evaluate(self, trainer, state, metrics):
+                    eval_losses.append(metrics.loss)
 
-            trainer.on_epoch_end = on_epoch_end
-            trainer.on_eval_end = on_eval_end
+            trainer = OrigamiTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_data=train_data,
+                eval_data=eval_data,
+                config=train_config,
+                checkpoint_dir=tmpdir,
+                callbacks=[MetricsTracker()],
+            )
 
             # Train
             state = trainer.train()
