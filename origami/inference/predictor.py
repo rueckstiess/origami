@@ -99,17 +99,23 @@ class OrigamiPredictor:
         self,
         obj: dict,
         target_key: str,
+        allow_complex_values: bool = False,
     ) -> Any:
         """Predict value for a single object.
 
         Args:
             obj: JSON object (target_key's current value is ignored)
             target_key: Key to predict (dot notation for nested)
+            allow_complex_values: If False (default), restrict to primitive values
+                only (strings, numbers, booleans, null). If True, allow objects
+                and arrays which may require multiple tokens to generate.
 
         Returns:
             Predicted value (inverse transformed if scaler configured)
         """
-        return self.predict_batch([obj], target_key)[0]
+        return self.predict_batch(
+            [obj], target_key, allow_complex_values=allow_complex_values
+        )[0]
 
     @torch.no_grad()
     def predict_batch(
@@ -117,6 +123,7 @@ class OrigamiPredictor:
         objects: list[dict],
         target_key: str,
         batch_size: int = 32,
+        allow_complex_values: bool = False,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
@@ -126,6 +133,9 @@ class OrigamiPredictor:
             objects: List of JSON objects
             target_key: Key to predict (same for all objects)
             batch_size: Number of objects to process in parallel
+            allow_complex_values: If False (default), restrict to primitive values
+                only (strings, numbers, booleans, null). If True, allow objects
+                and arrays which may require multiple tokens to generate.
 
         Returns:
             List of predicted values
@@ -149,8 +159,9 @@ class OrigamiPredictor:
             values = self._generator.generate_from_batch(
                 truncated,
                 stop_after_value=True,
-                max_tokens=100,
+                max_tokens=200 if allow_complex_values else 1,
                 temperature=0.0,  # Greedy for deterministic predictions
+                allow_complex_values=allow_complex_values,
             )
 
             # 5. Inverse transform if configured
@@ -167,6 +178,7 @@ class OrigamiPredictor:
         target_key: str,
         values: list[Any] | None = None,
         top_k: int | None = None,
+        allow_complex_values: bool = False,
     ) -> dict[Any, float] | list[tuple[Any, float]]:
         """Get probability distribution for a single object.
 
@@ -175,12 +187,17 @@ class OrigamiPredictor:
             target_key: Key to predict
             values: If provided, only return probabilities for these values
             top_k: If set, return only top-k values
+            allow_complex_values: If False (default), exclude OBJ_START/ARRAY_START
+                from the probability distribution.
 
         Returns:
             If top_k=None: dict mapping values to probabilities
             If top_k set: list of (value, prob) tuples sorted by prob
         """
-        return self.predict_proba_batch([obj], target_key, values=values, top_k=top_k)[0]
+        return self.predict_proba_batch(
+            [obj], target_key, values=values, top_k=top_k,
+            allow_complex_values=allow_complex_values
+        )[0]
 
     @torch.no_grad()
     def predict_proba_batch(
@@ -190,6 +207,7 @@ class OrigamiPredictor:
         values: list[Any] | None = None,
         top_k: int | None = None,
         batch_size: int = 32,
+        allow_complex_values: bool = False,
     ) -> list[dict[Any, float] | list[tuple[Any, float]]]:
         """Get probability distributions for a batch of objects.
 
@@ -201,6 +219,8 @@ class OrigamiPredictor:
             values: If provided, only return probabilities for these values
             top_k: If set, return only top-k values per object
             batch_size: Number of objects to process in parallel
+            allow_complex_values: If False (default), exclude OBJ_START/ARRAY_START
+                from the probability distribution.
 
         Returns:
             List of distributions (one per object).
@@ -218,7 +238,9 @@ class OrigamiPredictor:
             truncated = self._truncate_at_target_key(batch, target_key)
 
             # 2. Get distributions from Generator
-            probs, _continuous_params = self._generator.get_next_token_distribution(truncated)
+            probs, _continuous_params = self._generator.get_next_token_distribution(
+                truncated, allow_complex_values=allow_complex_values
+            )
 
             # 3. Map token probabilities to values for each item
             for i in range(len(batch_objects)):

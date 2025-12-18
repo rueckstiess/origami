@@ -181,6 +181,7 @@ class OrigamiGenerator:
         top_p: float | None = None,
         seed: int | None = None,
         profile: bool = False,
+        allow_complex_values: bool = True,
     ) -> list[dict] | tuple[list[dict], Any]:
         """Generate complete JSON objects from scratch.
 
@@ -196,6 +197,8 @@ class OrigamiGenerator:
             top_p: If set, sample from smallest set with cumulative prob >= top_p
             seed: Random seed for reproducibility
             profile: If True, profile the generation and return (results, stats)
+            allow_complex_values: If False, restrict field values to primitives only
+                (no nested objects or arrays). Useful for untrained models. Default True.
 
         Returns:
             List of generated JSON objects, or tuple of (results, pstats.Stats) if profile=True
@@ -224,6 +227,7 @@ class OrigamiGenerator:
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
+                allow_complex_values=allow_complex_values,
             )
             results.extend(batch_results)
 
@@ -311,6 +315,7 @@ class OrigamiGenerator:
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
+        allow_complex_values: bool = True,
     ) -> list[Any]:
         """Core generation loop from EncodedBatch prefix.
 
@@ -329,10 +334,13 @@ class OrigamiGenerator:
             temperature: Sampling temperature (0.0 for greedy)
             top_k: Top-k filtering
             top_p: Top-p (nucleus) filtering
+            allow_complex_values: If False, disallow OBJ_START/ARRAY_START tokens,
+                forcing primitive values only (single token). Default True.
 
         Returns:
             List of generated values (one per batch item).
-            - If stop_after_value=True: primitives, lists, or dicts
+            - If stop_after_value=True and allow_complex_values=True: primitives, lists, or dicts
+            - If stop_after_value=True and allow_complex_values=False: primitives only
             - If stop_after_value=False: complete JSON objects (dicts)
 
         Raises:
@@ -431,6 +439,11 @@ class OrigamiGenerator:
             # Apply grammar constraints using pre-computed valid mask
             if next_valid_mask is not None:
                 next_logits = next_logits.masked_fill(~next_valid_mask, float("-inf"))
+
+            # Disallow complex values (objects/arrays) if requested
+            if not allow_complex_values:
+                next_logits[:, vocab.obj_start_id] = float("-inf")
+                next_logits[:, vocab.array_start_id] = float("-inf")
 
             # Sample next token
             next_tokens = self._sample(
@@ -541,11 +554,13 @@ class OrigamiGenerator:
                 active_indices = new_active_indices
                 path_states = new_path_states
 
-        # Store any remaining sequences that didn't complete
+        # Store any remaining sequences that didn't complete (hit max_tokens)
+        incomplete_indices = set()
         for i, orig_idx in enumerate(active_indices):
             mask = current_attention_mask[i]
             seq_tokens = current_ids[i][mask].tolist()
             completed_results[orig_idx] = (seq_tokens, sampled_numeric_values[orig_idx])
+            incomplete_indices.add(orig_idx)
 
         # Decode all sequences in original order
         results = []
@@ -554,6 +569,16 @@ class OrigamiGenerator:
             start_pos = gen_start_positions[orig_idx].item()
 
             if stop_after_value:
+                # Check if this sequence completed properly
+                if orig_idx in incomplete_indices:
+                    raise GenerationError(
+                        f"Sequence {orig_idx} did not complete value within max_tokens. "
+                        f"The model generated {len(seq) - start_pos} value tokens without completing. "
+                        f"Try increasing max_tokens or using a trained model.",
+                        token_ids=seq,
+                        position=len(seq),
+                        vocab=vocab,
+                    )
                 # Decode just the generated value tokens
                 value_tokens = seq[start_pos:]
                 value = self._decode_value_tokens(value_tokens, numeric_vals)
@@ -565,8 +590,15 @@ class OrigamiGenerator:
                     end_pos = seq.index(vocab.end_id)
                     seq = seq[: end_pos + 1]
                 except ValueError:
-                    # No END token, append it
-                    seq.append(vocab.end_id)
+                    # No END token - sequence didn't complete within max_tokens
+                    # This happens when the model never generates proper closing tokens
+                    raise GenerationError(
+                        f"Sequence {orig_idx} did not complete within max_tokens. "
+                        f"The model generated {len(seq)} tokens without producing END. "
+                        f"Try increasing max_length or using a lower temperature.",
+                        token_ids=seq,
+                        vocab=vocab,
+                    ) from None
 
                 obj = self._decode_with_numerics(seq, numeric_vals)
                 results.append(obj)
@@ -577,6 +609,7 @@ class OrigamiGenerator:
     def get_next_token_distribution(
         self,
         batch: "EncodedBatch",
+        allow_complex_values: bool = True,
     ) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor] | None]:
         """Get grammar-constrained probability distribution for next token.
 
@@ -585,6 +618,8 @@ class OrigamiGenerator:
 
         Args:
             batch: EncodedBatch ending at position to predict
+            allow_complex_values: If False, zero out OBJ_START/ARRAY_START
+                probabilities and re-normalize. Default True.
 
         Returns:
             probs: (batch, vocab_size) probabilities after grammar masking
@@ -627,7 +662,14 @@ class OrigamiGenerator:
         # 4. Convert to probabilities
         probs = F.softmax(next_logits, dim=-1)
 
-        # 5. Get continuous params if available
+        # 5. Zero out complex value tokens if requested and re-normalize
+        if not allow_complex_values:
+            vocab = self.tokenizer.vocab
+            probs[:, vocab.obj_start_id] = 0.0
+            probs[:, vocab.array_start_id] = 0.0
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+
+        # 6. Get continuous params if available
         continuous_params = None
         if output.continuous_params is not None:
             weights, means, log_vars = output.continuous_params
@@ -681,23 +723,44 @@ class OrigamiGenerator:
         vocab = self.tokenizer.vocab
 
         if not token_ids:
-            raise GenerationError("Empty token sequence cannot be decoded")
+            raise GenerationError(
+                "Empty token sequence cannot be decoded",
+                token_ids=token_ids,
+                vocab=vocab,
+            )
 
         first_token = token_ids[0]
 
         if first_token == vocab.obj_start_id:
             # Parse object
             num_idx = [0]  # Mutable counter for tracking NUM position
-            return self._parse_object_tokens(token_ids, numeric_values, num_idx)
+            return self._parse_object_tokens(
+                token_ids,
+                numeric_values,
+                num_idx,
+                full_sequence=token_ids,
+                offset=0,
+            )
         elif first_token == vocab.array_start_id:
             # Parse array
             num_idx = [0]
-            return self._parse_array_tokens(token_ids, numeric_values, num_idx)
+            return self._parse_array_tokens(
+                token_ids,
+                numeric_values,
+                num_idx,
+                full_sequence=token_ids,
+                offset=0,
+            )
         elif first_token == vocab.num_token_id:
             # NUM token - use sampled value
             if numeric_values:
                 return numeric_values[0]
-            raise GenerationError("NUM token found but no numeric value available")
+            raise GenerationError(
+                "NUM token found but no numeric value available",
+                token_ids=token_ids,
+                position=0,
+                vocab=vocab,
+            )
         elif first_token == vocab.unk_value_id:
             # UNK_VALUE token - return None as fallback
             return None
@@ -706,7 +769,12 @@ class OrigamiGenerator:
             token = vocab.decode(first_token)
             if isinstance(token, ValueToken):
                 return token.value
-            raise GenerationError(f"Cannot decode token {first_token} as value")
+            raise GenerationError(
+                f"Cannot decode token {first_token} as value",
+                token_ids=token_ids,
+                position=0,
+                vocab=vocab,
+            )
 
     def _decode_with_numerics(
         self,
@@ -728,7 +796,11 @@ class OrigamiGenerator:
         vocab = self.tokenizer.vocab
 
         if not token_ids:
-            raise GenerationError("Empty token sequence cannot be decoded")
+            raise GenerationError(
+                "Empty token sequence cannot be decoded",
+                token_ids=token_ids,
+                vocab=vocab,
+            )
 
         # Skip START token
         pos = 0
@@ -736,17 +808,36 @@ class OrigamiGenerator:
             pos += 1
 
         if pos >= len(token_ids):
-            raise GenerationError("Empty sequence after START token")
+            raise GenerationError(
+                "Empty sequence after START token",
+                token_ids=token_ids,
+                vocab=vocab,
+            )
 
         # Parse based on first token
         num_idx = [0]  # Mutable counter
         if token_ids[pos] == vocab.obj_start_id:
-            return self._parse_object_tokens(token_ids[pos:], numeric_values, num_idx)
+            return self._parse_object_tokens(
+                token_ids[pos:],
+                numeric_values,
+                num_idx,
+                full_sequence=token_ids,
+                offset=pos,
+            )
         elif token_ids[pos] == vocab.array_start_id:
-            return self._parse_array_tokens(token_ids[pos:], numeric_values, num_idx)
+            return self._parse_array_tokens(
+                token_ids[pos:],
+                numeric_values,
+                num_idx,
+                full_sequence=token_ids,
+                offset=pos,
+            )
         else:
             raise GenerationError(
-                f"Expected OBJ_START or ARRAY_START after START, got token {token_ids[pos]}"
+                f"Expected OBJ_START or ARRAY_START after START, got token {token_ids[pos]}",
+                token_ids=token_ids,
+                position=pos,
+                vocab=vocab,
             )
 
     def _parse_object_tokens(
@@ -754,11 +845,19 @@ class OrigamiGenerator:
         token_ids: list[int],
         numeric_values: list[float] | None = None,
         num_idx: list[int] | None = None,
+        *,
+        full_sequence: list[int] | None = None,
+        offset: int = 0,
     ) -> dict:
         """Parse object tokens into a dictionary."""
         vocab = self.tokenizer.vocab
         result: dict[str, Any] = {}
         pos = 1  # Skip OBJ_START
+
+        # Track full sequence for error reporting
+        if full_sequence is None:
+            full_sequence = token_ids
+            offset = 0
 
         while pos < len(token_ids):
             token_id = token_ids[pos]
@@ -774,7 +873,14 @@ class OrigamiGenerator:
             pos += 1
 
             # Parse value
-            value, pos = self._parse_value_at(token_ids, pos, numeric_values, num_idx)
+            value, pos = self._parse_value_at(
+                token_ids,
+                pos,
+                numeric_values,
+                num_idx,
+                full_sequence=full_sequence,
+                offset=offset,
+            )
             result[key] = value
 
         return result
@@ -784,11 +890,19 @@ class OrigamiGenerator:
         token_ids: list[int],
         numeric_values: list[float] | None = None,
         num_idx: list[int] | None = None,
+        *,
+        full_sequence: list[int] | None = None,
+        offset: int = 0,
     ) -> list:
         """Parse array tokens into a list."""
         vocab = self.tokenizer.vocab
         result: list[Any] = []
         pos = 1  # Skip ARRAY_START
+
+        # Track full sequence for error reporting
+        if full_sequence is None:
+            full_sequence = token_ids
+            offset = 0
 
         while pos < len(token_ids):
             token_id = token_ids[pos]
@@ -796,7 +910,14 @@ class OrigamiGenerator:
             if token_id == vocab.array_end_id:
                 break
 
-            value, pos = self._parse_value_at(token_ids, pos, numeric_values, num_idx)
+            value, pos = self._parse_value_at(
+                token_ids,
+                pos,
+                numeric_values,
+                num_idx,
+                full_sequence=full_sequence,
+                offset=offset,
+            )
             result.append(value)
 
         return result
@@ -807,12 +928,25 @@ class OrigamiGenerator:
         pos: int,
         numeric_values: list[float] | None = None,
         num_idx: list[int] | None = None,
+        *,
+        full_sequence: list[int] | None = None,
+        offset: int = 0,
     ) -> tuple[Any, int]:
         """Parse a value starting at position pos."""
         vocab = self.tokenizer.vocab
 
+        # Track full sequence for error reporting
+        if full_sequence is None:
+            full_sequence = token_ids
+            offset = 0
+
         if pos >= len(token_ids):
-            raise GenerationError(f"Unexpected end of tokens at position {pos}")
+            raise GenerationError(
+                f"Unexpected end of tokens at position {pos}",
+                token_ids=full_sequence,
+                position=offset + pos,
+                vocab=vocab,
+            )
 
         token_id = token_ids[pos]
 
@@ -826,7 +960,13 @@ class OrigamiGenerator:
                 elif token_ids[end_pos] == vocab.obj_end_id:
                     depth -= 1
                 end_pos += 1
-            obj = self._parse_object_tokens(token_ids[pos:end_pos], numeric_values, num_idx)
+            obj = self._parse_object_tokens(
+                token_ids[pos:end_pos],
+                numeric_values,
+                num_idx,
+                full_sequence=full_sequence,
+                offset=offset + pos,
+            )
             return obj, end_pos
 
         elif token_id == vocab.array_start_id:
@@ -839,7 +979,13 @@ class OrigamiGenerator:
                 elif token_ids[end_pos] == vocab.array_end_id:
                     depth -= 1
                 end_pos += 1
-            arr = self._parse_array_tokens(token_ids[pos:end_pos], numeric_values, num_idx)
+            arr = self._parse_array_tokens(
+                token_ids[pos:end_pos],
+                numeric_values,
+                num_idx,
+                full_sequence=full_sequence,
+                offset=offset + pos,
+            )
             return arr, end_pos
 
         elif token_id == vocab.num_token_id:
@@ -848,7 +994,12 @@ class OrigamiGenerator:
                 value = numeric_values[num_idx[0]]
                 num_idx[0] += 1
                 return value, pos + 1
-            raise GenerationError("NUM token found but no numeric value available")
+            raise GenerationError(
+                "NUM token found but no numeric value available",
+                token_ids=full_sequence,
+                position=offset + pos,
+                vocab=vocab,
+            )
 
         elif token_id == vocab.unk_value_id:
             # UNK_VALUE token - return None as fallback value
@@ -859,7 +1010,12 @@ class OrigamiGenerator:
             token = vocab.decode(token_id)
             if isinstance(token, ValueToken):
                 return token.value, pos + 1
-            raise GenerationError(f"Cannot decode token {token_id} as value")
+            raise GenerationError(
+                f"Cannot decode token {token_id} as value",
+                token_ids=full_sequence,
+                position=offset + pos,
+                vocab=vocab,
+            )
 
     def _sample(
         self,

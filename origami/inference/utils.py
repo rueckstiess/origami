@@ -17,9 +17,47 @@ class GenerationError(Exception):
 
     This replaces silent None returns with explicit errors,
     making debugging easier and preventing silent failures.
+
+    Attributes:
+        message: Human-readable error description
+        token_ids: Full token sequence being decoded (if available)
+        position: Position in token sequence where error occurred
+        context_window: Number of tokens to show around error position
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        token_ids: list[int] | None = None,
+        position: int | None = None,
+        vocab: "Vocabulary | None" = None,
+    ):
+        self.message = message
+        self.token_ids = token_ids
+        self.position = position
+        self.vocab = vocab
+
+        # Build detailed error message
+        full_message = message
+        if token_ids is not None:
+            full_message += f"\n  Token sequence length: {len(token_ids)}"
+            full_message += f"\n  Token IDs: {token_ids}"
+            if vocab is not None:
+                # Decode tokens to readable format
+                decoded = []
+                for i, tid in enumerate(token_ids):
+                    try:
+                        token = vocab.decode(tid)
+                        marker = " <-- ERROR" if i == position else ""
+                        decoded.append(f"    [{i}] {tid}: {token!r}{marker}")
+                    except KeyError:
+                        marker = " <-- ERROR" if i == position else ""
+                        decoded.append(f"    [{i}] {tid}: <unknown>{marker}")
+                full_message += "\n  Decoded tokens:\n" + "\n".join(decoded)
+            if position is not None:
+                full_message += f"\n  Error at position: {position}"
+
+        super().__init__(full_message)
 
 
 def find_target_positions(

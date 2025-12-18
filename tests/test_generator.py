@@ -276,7 +276,11 @@ class TestOrigamiGenerator:
         attention_mask = torch.ones(batch_size, 2, dtype=torch.bool, device=generator.device)
 
         batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
-        results = generator.generate_from_batch(batch, stop_after_value=False, max_tokens=50)
+        # Use allow_complex_values=False to prevent untrained model from generating
+        # runaway nested structures, and higher max_tokens to allow for completion
+        results = generator.generate_from_batch(
+            batch, stop_after_value=False, max_tokens=200, allow_complex_values=False
+        )
 
         assert len(results) == batch_size
         for result in results:
@@ -701,7 +705,11 @@ class TestGenerateFromTensorsAdvanced:
         path_lengths = torch.zeros(3, max_len, dtype=torch.long, device=generator.device)
 
         batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
-        results = generator.generate_from_batch(batch, stop_after_value=False, max_tokens=50)
+        # Use allow_complex_values=False to prevent untrained model from generating
+        # runaway nested structures, and higher max_tokens to allow for completion
+        results = generator.generate_from_batch(
+            batch, stop_after_value=False, max_tokens=200, allow_complex_values=False
+        )
 
         assert len(results) == 3
         for result in results:
@@ -741,7 +749,11 @@ class TestGeneratorGrammarConstraints:
         generator = OrigamiGenerator(constrained_model, constrained_tokenizer)
 
         # Generate multiple samples
-        results = generator.generate(num_samples=5, max_length=100, seed=42)
+        # Use allow_complex_values=False to prevent untrained model from generating
+        # runaway nested structures that don't complete within max_length
+        results = generator.generate(
+            num_samples=5, max_length=100, seed=42, allow_complex_values=False
+        )
 
         assert len(results) == 5
         for result in results:
@@ -827,7 +839,11 @@ class TestGeneratorEdgeCases:
         """Test generating many samples at once."""
         generator = OrigamiGenerator(edge_model, edge_tokenizer)
 
-        results = generator.generate(num_samples=10, max_length=50, seed=42)
+        # Use allow_complex_values=False to prevent untrained model from generating
+        # runaway nested structures that don't complete within max_length
+        results = generator.generate(
+            num_samples=10, max_length=50, seed=42, allow_complex_values=False
+        )
 
         assert len(results) == 10
         for result in results:

@@ -393,6 +393,7 @@ class OrigamiPipeline:
         self,
         obj: dict,
         target_key: str,
+        allow_complex_values: bool = False,
     ) -> Any:
         """Predict value for a target key.
 
@@ -402,11 +403,16 @@ class OrigamiPipeline:
         Args:
             obj: JSON object. The target_key's current value is ignored.
             target_key: Key to predict (dot notation for nested keys)
+            allow_complex_values: If False (default), restrict to primitive values
+                only (strings, numbers, booleans, null). If True, allow objects
+                and arrays which may require multiple tokens to generate.
 
         Returns:
             The predicted value
         """
-        results = self.predict_batch([obj], target_key)
+        results = self.predict_batch(
+            [obj], target_key, allow_complex_values=allow_complex_values
+        )
         return results[0]
 
     def predict_batch(
@@ -414,6 +420,7 @@ class OrigamiPipeline:
         objects: list[dict],
         target_key: str,
         batch_size: int = 32,
+        allow_complex_values: bool = False,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
@@ -421,6 +428,9 @@ class OrigamiPipeline:
             objects: List of JSON objects
             target_key: Key to predict (same for all objects)
             batch_size: Number of objects to process in parallel
+            allow_complex_values: If False (default), restrict to primitive values
+                only (strings, numbers, booleans, null). If True, allow objects
+                and arrays which may require multiple tokens to generate.
 
         Returns:
             List of predicted values (one per object).
@@ -435,7 +445,10 @@ class OrigamiPipeline:
         predictor = self._get_predictor()
 
         # Run prediction (Predictor handles inverse transform internally)
-        return predictor.predict_batch(processed, target_key, batch_size=batch_size)
+        return predictor.predict_batch(
+            processed, target_key, batch_size=batch_size,
+            allow_complex_values=allow_complex_values
+        )
 
     def predict_proba(
         self,
@@ -443,6 +456,7 @@ class OrigamiPipeline:
         target_key: str,
         values: list[Any] | None = None,
         top_k: int | None = None,
+        allow_complex_values: bool = False,
     ) -> dict[Any, float] | list[tuple[Any, float]]:
         """Get probability distribution over possible values.
 
@@ -453,6 +467,8 @@ class OrigamiPipeline:
             target_key: Key to predict
             values: Specific values to get probabilities for
             top_k: If specified, return only top-k values sorted by probability
+            allow_complex_values: If False (default), exclude OBJ_START/ARRAY_START
+                from the probability distribution.
 
         Returns:
             If top_k is None: dict mapping values to probabilities
@@ -467,7 +483,10 @@ class OrigamiPipeline:
         predictor = self._get_predictor()
 
         # Get probability distribution
-        return predictor.predict_proba(processed, target_key, values=values, top_k=top_k)
+        return predictor.predict_proba(
+            processed, target_key, values=values, top_k=top_k,
+            allow_complex_values=allow_complex_values
+        )
 
     def generate(
         self,
@@ -478,6 +497,7 @@ class OrigamiPipeline:
         top_k: int | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        allow_complex_values: bool = True,
     ) -> list[dict]:
         """Generate complete JSON objects.
 
@@ -492,6 +512,8 @@ class OrigamiPipeline:
             top_k: If set, only sample from top-k most likely tokens
             top_p: If set, sample from smallest set with cumulative prob >= top_p
             seed: Random seed for reproducibility
+            allow_complex_values: If False, restrict field values to primitives only
+                (no nested objects or arrays). Useful for untrained models. Default True.
 
         Returns:
             List of generated JSON objects
@@ -510,6 +532,7 @@ class OrigamiPipeline:
             top_k=top_k,
             top_p=top_p,
             seed=seed,
+            allow_complex_values=allow_complex_values,
         )
 
         # Inverse transform numeric fields if needed
