@@ -4,6 +4,8 @@ Provides a unified API for training ORIGAMI models on JSON data and
 performing inference with automatic preprocessing and inverse transforms.
 """
 
+from __future__ import annotations
+
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -22,7 +24,7 @@ from origami.utils.device import auto_device
 from .config import PipelineConfig
 
 if TYPE_CHECKING:
-    pass
+    from origami.training import TrainResult
 
 
 class OrigamiPipeline:
@@ -82,6 +84,7 @@ class OrigamiPipeline:
         self._tokenizer: JSONTokenizer | None = None
         self._model: OrigamiModel | None = None
         self._fitted = False
+        self._train_result: TrainResult | None = None
 
         # Device management
         # _training_device: resolved device for training (GPU/MPS if available)
@@ -160,7 +163,7 @@ class OrigamiPipeline:
         epochs: int | None = None,
         verbose: bool = False,
         callbacks: list | None = None,
-    ) -> "OrigamiPipeline":
+    ) -> OrigamiPipeline:
         """Fit the pipeline on training data.
 
         This method:
@@ -248,10 +251,12 @@ class OrigamiPipeline:
             device=self._training_device,
         )
 
-        # Run training
-        trainer.train()
+        # Run training (handles KeyboardInterrupt gracefully)
+        result = trainer.train()
 
+        # Mark as fitted regardless of whether training completed or was interrupted
         self._fitted = True
+        self._train_result = result
 
         # Reset lazy-initialized inference components
         self._generator = None
@@ -353,7 +358,7 @@ class OrigamiPipeline:
         torch.save(checkpoint, path)
 
     @classmethod
-    def load(cls, path: str | Path) -> "OrigamiPipeline":
+    def load(cls, path: str | Path) -> OrigamiPipeline:
         """Load a pipeline from a checkpoint file.
 
         Args:

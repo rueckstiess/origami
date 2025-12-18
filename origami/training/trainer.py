@@ -33,16 +33,23 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class TrainState:
-    """Mutable training state."""
+class TrainResult:
+    """Mutable training state and result.
 
+    This class tracks training progress during training and contains the final
+    result after training completes (whether normally or via interruption).
+    """
+
+    # Training progress (updated during training)
     epoch: int = 0
     global_step: int = 0
     best_eval_loss: float = float("inf")
-    # Batch-level tracking (updated during training)
     epoch_step: int = 0
     current_batch_loss: float = 0.0
     current_lr: float = 0.0
+    # Completion status (set when training ends)
+    completed: bool = False  # True if all epochs finished
+    interrupted: bool = False  # True if stopped via KeyboardInterrupt
 
 
 @dataclass
@@ -177,7 +184,7 @@ class OrigamiTrainer:
         self.scheduler = self._create_scheduler()
 
         # Training state
-        self.state = TrainState()
+        self.state = TrainResult()
 
         # Callback handler
         self.callback_handler = CallbackHandler(
@@ -281,47 +288,71 @@ class OrigamiTrainer:
 
         return metrics
 
-    def train(self) -> TrainState:
-        """Run full training loop.
+    def _run_evaluation_and_checkpoint(self) -> dict[str, float]:
+        """Run evaluation and save best checkpoint if loss improved.
+
+        This consolidates the common pattern of:
+        1. Running evaluation
+        2. Checking if val_loss improved
+        3. Saving "best" checkpoint if configured
 
         Returns:
-            Final training state
+            Dict of evaluation metrics
+        """
+        eval_metrics = self._run_evaluation()
+
+        # Save best model based on val_loss (skip if nan or no val_loss)
+        val_loss = eval_metrics.get("val_loss")
+        if val_loss is not None and not math.isnan(val_loss):
+            if val_loss < self.state.best_eval_loss:
+                self.state.best_eval_loss = val_loss
+                if self.checkpoint_dir:
+                    self.save_checkpoint("best")
+
+        return eval_metrics
+
+    def train(self) -> TrainResult:
+        """Run full training loop.
+
+        Handles KeyboardInterrupt gracefully by running final evaluation
+        and returning with interrupted=True. The model state is preserved
+        and can be saved.
+
+        Returns:
+            TrainResult with completion status and training metrics
         """
         self.callback_handler.fire_event("on_train_begin", self, self.state, None)
 
-        for epoch in range(self.config.num_epochs):
-            self.state.epoch = epoch
-            metrics = self._train_epoch()
+        try:
+            for epoch in range(self.config.num_epochs):
+                self.state.epoch = epoch
+                metrics = self._train_epoch()
 
-            self.callback_handler.fire_event("on_epoch_end", self, self.state, metrics)
+                self.callback_handler.fire_event("on_epoch_end", self, self.state, metrics)
 
-            # Epoch-based evaluation (using new unified system)
-            if self._should_evaluate_epoch():
-                eval_metrics = self._run_evaluation()
+                # Epoch-based evaluation (using unified system)
+                if self._should_evaluate_epoch():
+                    self._run_evaluation_and_checkpoint()
 
-                # Save best model based on val_loss (skip if nan or no val_loss)
-                val_loss = eval_metrics.get("val_loss")
-                if val_loss is not None and not math.isnan(val_loss):
-                    if val_loss < self.state.best_eval_loss:
-                        self.state.best_eval_loss = val_loss
-                        if self.checkpoint_dir:
-                            self.save_checkpoint("best")
+                # Periodic checkpointing
+                if self.checkpoint_dir and (epoch + 1) % self.config.save_every_n_epochs == 0:
+                    self.save_checkpoint(f"epoch_{epoch + 1}")
 
-            # Periodic checkpointing
-            if self.checkpoint_dir and (epoch + 1) % self.config.save_every_n_epochs == 0:
-                self.save_checkpoint(f"epoch_{epoch + 1}")
+            # Final evaluation if we haven't evaluated at the last epoch
+            if self.config.eval_strategy == "epoch" and self.eval_data:
+                last_epoch_had_eval = self.config.num_epochs % self.config.eval_epochs == 0
+                if not last_epoch_had_eval:
+                    self._run_evaluation_and_checkpoint()
 
-        # Final evaluation if we haven't evaluated at the last epoch
-        if self.config.eval_strategy == "epoch" and self.eval_data:
-            last_epoch_had_eval = self.config.num_epochs % self.config.eval_epochs == 0
-            if not last_epoch_had_eval:
-                eval_metrics = self._run_evaluation()
-                val_loss = eval_metrics.get("val_loss")
-                if val_loss is not None and not math.isnan(val_loss):
-                    if val_loss < self.state.best_eval_loss:
-                        self.state.best_eval_loss = val_loss
-                        if self.checkpoint_dir:
-                            self.save_checkpoint("best")
+            # Training completed normally
+            self.state.completed = True
+
+        except KeyboardInterrupt:
+            # Training interrupted - run final evaluation before returning
+            self.state.interrupted = True
+            if self.eval_data:
+                self._run_evaluation_and_checkpoint()
+            self.callback_handler.fire_event("on_interrupt", self, self.state, None)
 
         self.callback_handler.fire_event("on_train_end", self, self.state, None)
 
@@ -372,15 +403,7 @@ class OrigamiTrainer:
 
             # Step-based evaluation (runs within epoch if configured)
             if self._should_evaluate_step():
-                eval_metrics = self._run_evaluation()
-
-                # Save best model based on val_loss
-                val_loss = eval_metrics.get("val_loss")
-                if val_loss is not None and not math.isnan(val_loss):
-                    if val_loss < self.state.best_eval_loss:
-                        self.state.best_eval_loss = val_loss
-                        if self.checkpoint_dir:
-                            self.save_checkpoint("best")
+                self._run_evaluation_and_checkpoint()
 
         duration = time.time() - start_time
 

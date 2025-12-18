@@ -13,7 +13,7 @@ from origami.training import (
     EvalDataset,
     OrigamiDataCollator,
     OrigamiTrainer,
-    TrainState,
+    TrainResult,
     UpscaledDataset,
 )
 from origami.utils import available_devices as get_available_devices
@@ -488,19 +488,19 @@ class TestLeftPadding:
                 assert valid_count > 0, f"No valid tokens at position {pos} for batch {b}"
 
 
-class TestTrainState:
-    """Tests for TrainState dataclass."""
+class TestTrainResult:
+    """Tests for TrainResult dataclass."""
 
     def test_default_values(self):
         """Test default state values."""
-        state = TrainState()
+        state = TrainResult()
         assert state.epoch == 0
         assert state.global_step == 0
         assert state.best_eval_loss == float("inf")
 
     def test_mutable(self):
         """Test that state is mutable."""
-        state = TrainState()
+        state = TrainResult()
         state.epoch = 5
         state.global_step = 100
         state.best_eval_loss = 0.5

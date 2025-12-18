@@ -312,6 +312,7 @@ def train(
     pipeline = OrigamiPipeline(config)
 
     try:
+        # Training handles KeyboardInterrupt gracefully - model is always saved
         pipeline.fit(
             train_data,
             eval_data=eval_data,
@@ -319,13 +320,11 @@ def train(
             callbacks=[TableLogCallback()],
             verbose=verbose,
         )
-    except KeyboardInterrupt:
-        click.echo("\nTraining interrupted. Saving checkpoint...")
     except Exception as e:
         click.echo(f"\nTraining failed: {e}", err=True)
         sys.exit(1)
 
-    # Save model
+    # Save model (works whether training completed or was interrupted)
     click.echo(f"\nSaving model to {output}...")
     pipeline.save(output)
 

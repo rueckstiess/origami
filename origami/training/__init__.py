@@ -17,7 +17,7 @@ from .metrics import (
     array_jaccard,
     object_key_accuracy,
 )
-from .trainer import EpochStats, OrigamiTrainer, TrainState
+from .trainer import EpochStats, OrigamiTrainer, TrainResult
 
 __all__ = [
     # Datasets
@@ -28,7 +28,7 @@ __all__ = [
     # Trainer
     "OrigamiTrainer",
     "EpochStats",
-    "TrainState",
+    "TrainResult",
     # Callbacks
     "TrainerCallback",
     "CallbackHandler",

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from tqdm.auto import tqdm
 
 if TYPE_CHECKING:
-    from .trainer import EpochStats, OrigamiTrainer, TrainState
+    from .trainer import EpochStats, OrigamiTrainer, TrainResult
 
 
 class TrainerCallback:
@@ -32,7 +32,7 @@ class TrainerCallback:
 
     Subclass this and override the methods you need. All methods receive:
     - trainer: The OrigamiTrainer instance
-    - state: Current TrainState (epoch, global_step, etc.)
+    - state: Current TrainResult (epoch, global_step, etc.)
     - payload: Event-specific data (type varies by event):
         - on_epoch_end: EpochStats with training throughput info
         - on_evaluate: dict[str, float] with evaluation metrics
@@ -42,7 +42,7 @@ class TrainerCallback:
     def on_train_begin(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any,
     ) -> None:
         """Called at the start of training. Payload is None."""
@@ -51,7 +51,7 @@ class TrainerCallback:
     def on_train_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any,
     ) -> None:
         """Called at the end of training. Payload is None."""
@@ -60,7 +60,7 @@ class TrainerCallback:
     def on_epoch_begin(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any,
     ) -> None:
         """Called at the start of each epoch. Payload is None."""
@@ -69,7 +69,7 @@ class TrainerCallback:
     def on_epoch_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: EpochStats | None,
     ) -> None:
         """Called at the end of each epoch. Payload is EpochStats."""
@@ -78,7 +78,7 @@ class TrainerCallback:
     def on_batch_begin(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any,
     ) -> None:
         """Called at the start of each batch. Payload is None."""
@@ -87,7 +87,7 @@ class TrainerCallback:
     def on_batch_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any,
     ) -> None:
         """Called at the end of each batch. Payload is None."""
@@ -96,7 +96,7 @@ class TrainerCallback:
     def on_evaluate(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: dict[str, float],
     ) -> None:
         """Called after evaluation.
@@ -107,6 +107,19 @@ class TrainerCallback:
             payload: Dict of evaluation metrics with prefixed keys.
                 Examples: {"val_loss": 0.5, "val_accuracy": 0.85}
                          {"train_loss": 0.6, "train_accuracy": 0.80, "val_loss": 0.5}
+        """
+        pass
+
+    def on_interrupt(
+        self,
+        trainer: OrigamiTrainer,
+        state: TrainResult,
+        payload: Any,
+    ) -> None:
+        """Called when training is interrupted via KeyboardInterrupt.
+
+        Fired BEFORE on_train_end. The state.interrupted flag will be True.
+        Use this to print interrupt messages or perform cleanup.
         """
         pass
 
@@ -133,7 +146,7 @@ class CallbackHandler:
         self,
         event: str,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: Any = None,
     ) -> None:
         """Fire an event to all callbacks.
@@ -180,7 +193,7 @@ class ProgressCallback(TrainerCallback):
     def on_train_begin(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: EpochStats | None,
     ) -> None:
         """Print training info at start."""
@@ -200,7 +213,7 @@ class ProgressCallback(TrainerCallback):
     def on_epoch_begin(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: EpochStats | None,
     ) -> None:
         """Create progress bar for epoch."""
@@ -215,7 +228,7 @@ class ProgressCallback(TrainerCallback):
     def on_batch_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: EpochStats | None,
     ) -> None:
         """Update progress bar with current batch info."""
@@ -229,7 +242,7 @@ class ProgressCallback(TrainerCallback):
     def on_epoch_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: EpochStats | None,
     ) -> None:
         """Close progress bar and print epoch summary."""
@@ -247,7 +260,7 @@ class ProgressCallback(TrainerCallback):
     def on_evaluate(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         payload: dict[str, float],
     ) -> None:
         """Print evaluation results.
@@ -261,6 +274,23 @@ class ProgressCallback(TrainerCallback):
                 parts.append(f"{key}: {value:.4f}")
             # Use tqdm.write to properly coordinate with progress bar
             tqdm.write(f"Eval: {', '.join(parts)}")
+
+    def on_interrupt(
+        self,
+        trainer: OrigamiTrainer,
+        state: TrainResult,
+        payload: Any,
+    ) -> None:
+        """Handle training interruption."""
+        # Close progress bar if open
+        if self._pbar is not None:
+            self._pbar.close()
+            self._pbar = None
+        # Print interrupt message
+        print(
+            f"\nTraining interrupted at epoch {state.epoch + 1}, "
+            f"step {state.global_step}"
+        )
 
 
 class TableLogCallback(TrainerCallback):
@@ -315,7 +345,7 @@ class TableLogCallback(TrainerCallback):
     def on_batch_begin(
         self,
         _trainer: OrigamiTrainer,
-        _state: TrainState,
+        _state: TrainResult,
         _payload: Any,
     ) -> None:
         """Record batch start time."""
@@ -324,7 +354,7 @@ class TableLogCallback(TrainerCallback):
     def on_batch_end(
         self,
         trainer: OrigamiTrainer,
-        state: TrainState,
+        state: TrainResult,
         _payload: Any,
     ) -> None:
         """Print log line every print_every steps."""
@@ -363,7 +393,7 @@ class TableLogCallback(TrainerCallback):
     def on_evaluate(
         self,
         trainer: OrigamiTrainer,
-        _state: TrainState,
+        _state: TrainResult,
         payload: dict[str, float],
     ) -> None:
         """Print evaluation metrics, combined with batch stats if available."""
@@ -383,3 +413,12 @@ class TableLogCallback(TrainerCallback):
             # Fallback: standalone line (shouldn't normally happen)
             metric_parts = [f"{k}: {v:.4f}" for k, v in sorted(payload.items())]
             print("| Eval: " + ", ".join(metric_parts) + " |")
+
+    def on_interrupt(
+        self,
+        _trainer: OrigamiTrainer,
+        state: TrainResult,
+        _payload: Any,
+    ) -> None:
+        """Print interrupt message in table format."""
+        print(f"\nTraining interrupted at epoch {state.epoch}, step {state.global_step}")
