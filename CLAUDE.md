@@ -187,6 +187,11 @@ probs = pipeline.predict_proba(obj, target_key="b", top_k=5)
 # Generate
 samples = pipeline.generate(num_samples=10, temperature=0.8)
 
+# Evaluate (computes loss and optional prediction metrics)
+from origami.training import accuracy
+results = pipeline.evaluate(test_data)  # Just loss
+results = pipeline.evaluate(test_data, target_key="b", metrics={"acc": accuracy})
+
 # Save/Load (preserves all state: model, tokenizer, preprocessor)
 pipeline.save("model.pt")
 loaded = OrigamiPipeline.load("model.pt")
@@ -221,14 +226,17 @@ origami/
 ├── inference/           # Inference components
 │   ├── generator.py       # JSON generation (ALL generation logic here)
 │   ├── predictor.py       # Field prediction (delegates to Generator)
-│   └── embedder.py        # Embedding extraction
+│   ├── embedder.py        # Embedding extraction
+│   └── evaluator.py       # Unified loss and metrics evaluation
 ├── pipeline/            # High-level API
 │   ├── pipeline.py        # OrigamiPipeline end-to-end API
 │   └── config.py          # PipelineConfig
 ├── training/            # Training components
 │   ├── trainer.py         # Training loop
 │   ├── dataset.py         # Dataset classes
-│   └── collator.py        # Batch collation
+│   ├── collator.py        # Batch collation
+│   ├── callbacks.py       # Training callbacks (ProgressCallback, MetricsCallback)
+│   └── metrics.py         # Evaluation metrics (accuracy, rmse, etc.)
 ├── preprocessing/       # Data preprocessing
 │   ├── numeric_scaler.py      # StandardScaler for continuous numerics
 │   ├── numeric_discretizer.py # Binning high-cardinality numerics
@@ -403,7 +411,10 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 | `OrigamiGenerator` | ALL generation logic: grammar, sampling, MoG, path tracking |
 | `OrigamiPredictor` | Prepare tensors, delegate to Generator, format results |
 | `OrigamiEmbedder` | Extract embeddings for downstream tasks |
+| `OrigamiEvaluator` | Unified loss and prediction metrics evaluation |
 | `OrigamiTrainer` | Training loop with LR warmup, checkpointing |
+| `ProgressCallback` | Training progress bars and logging |
+| `MetricsCallback` | Compute and log evaluation metrics during training |
 | `OrigamiDataCollator` | Batch sequences with left-padding |
 | `UpscaledDataset` | Data augmentation via key-order shuffling |
 | `NumericScaler` | StandardScaler for continuous numeric fields |
@@ -445,11 +456,13 @@ TrainingConfig(
 - Transformer backbone with causal attention
 - Grammar constraints (PDA)
 - Training loop with key-order shuffling
-- Inference: Generator, Predictor, Embedder
+- Training callbacks (ProgressCallback, MetricsCallback)
+- Inference: Generator, Predictor, Embedder, Evaluator
 - NumericDiscretizer for high-cardinality fields
 - NumericScaler + ContinuousHead (MoG) for continuous numerics
 - OrigamiPipeline end-to-end API
 - Unified prediction API with predict/predict_batch/predict_proba
+- Pipeline.evaluate() for loss and metrics computation
 
 ### Partial
 - LSTM/Mamba backbones (stubs only)
