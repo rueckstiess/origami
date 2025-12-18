@@ -2,11 +2,13 @@
 
 Generates complete JSON objects by autoregressive sampling from a trained ORIGAMI model.
 
-The Generator provides two public methods:
-- `generate()`: Generate complete JSON objects from scratch
-- `generate_from_tensors()`: Core generation loop from pre-encoded sequences
+The Generator is the SINGLE implementation of generation logic. All generation
+(from scratch or from prefix) goes through generate_from_batch().
 
-The Predictor uses `generate_from_tensors()` with `stop_after_value=True` for value prediction.
+Public methods:
+- `generate()`: Generate complete JSON objects from scratch
+- `generate_from_batch()`: Core generation loop from EncodedBatch prefix
+- `get_next_token_distribution()`: Get grammar-constrained probabilities (no sampling)
 """
 
 from dataclasses import dataclass, field
@@ -22,9 +24,11 @@ from origami.tokenizer.vocabulary import (
     ValueToken,
 )
 
+from .utils import GenerationError
+
 if TYPE_CHECKING:
     from origami.model.origami_model import OrigamiModel
-    from origami.tokenizer.json_tokenizer import JSONTokenizer
+    from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
 
 @dataclass
@@ -113,11 +117,13 @@ class PathState:
 class OrigamiGenerator:
     """Generate JSON objects by autoregressive sampling from a trained model.
 
-    Supports various sampling strategies (greedy, temperature, top-k, top-p).
+    This is the SINGLE implementation of generation logic. Supports various
+    sampling strategies (greedy, temperature, top-k, top-p).
 
     Public methods:
-    - `generate()`: Generate complete JSON objects from scratch
-    - `generate_from_tensors()`: Core generation loop from pre-encoded tensor sequences
+    - `generate()`: Generate complete JSON objects from scratch (handles batching)
+    - `generate_from_batch()`: Core generation loop from EncodedBatch prefix
+    - `get_next_token_distribution()`: Get grammar-constrained probabilities (no sampling)
 
     Example:
         ```python
@@ -125,6 +131,9 @@ class OrigamiGenerator:
 
         # Generate from scratch
         objects = generator.generate(num_samples=5, temperature=0.8)
+
+        # Generate 10000 samples with internal batching
+        objects = generator.generate(num_samples=10000, batch_size=64)
         ```
     """
 
@@ -144,9 +153,14 @@ class OrigamiGenerator:
             Move the model to your desired device before calling generate().
             For standalone use, CPU is typically fastest for ORIGAMI model sizes.
         """
+        from origami.training.collator import OrigamiDataCollator
+
         self.model = model
         self.tokenizer = tokenizer
         self.model.eval()
+
+        # Collator for batch creation (include_labels=False for inference)
+        self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
 
         # Get grammar PDA reference from model for incremental constraint application
         self._grammar_pda = model._grammar_pda
@@ -160,121 +174,186 @@ class OrigamiGenerator:
     def generate(
         self,
         num_samples: int = 1,
+        batch_size: int = 32,
         max_length: int | None = None,
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
         seed: int | None = None,
-    ) -> list[dict]:
+        profile: bool = False,
+    ) -> list[dict] | tuple[list[dict], Any]:
         """Generate complete JSON objects from scratch.
 
         Starts from [START] token and generates until [END] is produced.
+        Handles batching internally for large num_samples.
 
         Args:
-            num_samples: Number of objects to generate
+            num_samples: Total number of objects to generate
+            batch_size: Number of samples to generate in parallel
             max_length: Maximum sequence length (default: 512)
             temperature: Sampling temperature (1.0 = unchanged, <1.0 = more greedy)
             top_k: If set, only sample from top-k most likely tokens
             top_p: If set, sample from smallest set with cumulative prob >= top_p
             seed: Random seed for reproducibility
+            profile: If True, profile the generation and return (results, stats)
 
         Returns:
-            List of generated JSON objects
+            List of generated JSON objects, or tuple of (results, pstats.Stats) if profile=True
         """
+        if profile:
+            import cProfile
+            import pstats
+
+            profiler = cProfile.Profile()
+            profiler.enable()
+
         if seed is not None:
             torch.manual_seed(seed)
 
         max_length = max_length or 512
+        results: list[dict] = []
+
+        # Process in batches
+        for start in range(0, num_samples, batch_size):
+            n = min(batch_size, num_samples - start)
+            batch = self._create_start_batch(n)
+            batch_results = self.generate_from_batch(
+                batch,
+                stop_after_value=False,
+                max_tokens=max_length,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+            )
+            results.extend(batch_results)
+
+        if profile:
+            profiler.disable()
+            stats = pstats.Stats(profiler)
+            return results, stats
+
+        return results
+
+    @staticmethod
+    def print_profile_stats(
+        stats: Any,
+        top_n: int = 30,
+        sort_by: str = "cumulative",
+    ) -> None:
+        """Print profiling statistics in a readable format.
+
+        Args:
+            stats: pstats.Stats object from generate(profile=True)
+            top_n: Number of top functions to show
+            sort_by: Sort key - 'cumulative', 'time', 'calls', etc.
+        """
+        stats.strip_dirs()
+        stats.sort_stats(sort_by)
+        stats.print_stats(top_n)
+
+    def _create_start_batch(self, num_samples: int) -> "EncodedBatch":
+        """Create batch with START and OBJ_START tokens to generate objects.
+
+        Args:
+            num_samples: Number of sequences to create
+
+        Returns:
+            EncodedBatch with [START, OBJ_START] for each sequence
+        """
+        from origami.tokenizer.json_tokenizer import EncodedBatch
+
         vocab = self.tokenizer.vocab
         max_depth = self.tokenizer.max_depth
+        seq_len = 2  # START + OBJ_START
 
-        # Initialize with START token
-        input_ids = torch.full(
-            (num_samples, 1), vocab.start_id, dtype=torch.long, device=self.device
+        # Initialize with [START, OBJ_START] to ensure we generate objects
+        input_ids = torch.zeros(num_samples, seq_len, dtype=torch.long, device=self.device)
+        input_ids[:, 0] = vocab.start_id
+        input_ids[:, 1] = vocab.obj_start_id
+
+        # Initialize path tensors (both START and OBJ_START have empty path)
+        path_types = torch.zeros(
+            num_samples, seq_len, max_depth, dtype=torch.long, device=self.device
         )
+        path_ids = torch.zeros(
+            num_samples, seq_len, max_depth, dtype=torch.long, device=self.device
+        )
+        path_lengths = torch.zeros(num_samples, seq_len, dtype=torch.long, device=self.device)
 
-        # Initialize path tensors (START has empty path)
-        path_types = torch.zeros(num_samples, 1, max_depth, dtype=torch.long, device=self.device)
-        path_ids = torch.zeros(num_samples, 1, max_depth, dtype=torch.long, device=self.device)
-        path_lengths = torch.zeros(num_samples, 1, dtype=torch.long, device=self.device)
+        # Attention mask: all ones since no padding
+        attention_mask = torch.ones(num_samples, seq_len, dtype=torch.bool, device=self.device)
 
-        # Attention mask: all ones since no padding yet
-        attention_mask = torch.ones(num_samples, 1, dtype=torch.bool, device=self.device)
+        # Numeric values (empty for structural tokens)
+        numeric_values = torch.zeros(num_samples, seq_len, dtype=torch.float, device=self.device)
+        numeric_mask = torch.zeros(num_samples, seq_len, dtype=torch.bool, device=self.device)
 
-        # Delegate to core generation loop
-        return self.generate_from_tensors(
+        # Lengths
+        lengths = torch.full((num_samples,), seq_len, dtype=torch.long, device=self.device)
+
+        return EncodedBatch(
             input_ids=input_ids,
             path_types=path_types,
             path_ids=path_ids,
             path_lengths=path_lengths,
             attention_mask=attention_mask,
-            stop_after_value=False,  # Generate until END
-            max_tokens=max_length,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
+            numeric_values=numeric_values,
+            numeric_mask=numeric_mask,
+            lengths=lengths,
+            labels=None,  # No labels for generation
         )
 
     @torch.inference_mode()
-    def generate_from_tensors(
+    def generate_from_batch(
         self,
-        input_ids: Tensor,
-        path_types: Tensor,
-        path_ids: Tensor,
-        path_lengths: Tensor,
-        attention_mask: Tensor,
-        numeric_values: Tensor | None = None,
+        batch: "EncodedBatch",
         stop_after_value: bool = False,
         max_tokens: int = 512,
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
     ) -> list[Any]:
-        """Core generation loop from pre-encoded sequences.
+        """Core generation loop from EncodedBatch prefix.
 
-        This is the single implementation of the generation loop.
-        All generation methods call this internally.
+        This is the SINGLE implementation of the generation loop.
+        ALL generation logic lives here. Called by:
+        - generate() with START-only batch, stop_after_value=False
+        - Predictor with truncated batch, stop_after_value=True
 
         Uses dynamic batch compaction: completed sequences are removed from the
         batch to avoid unnecessary computation on finished sequences.
 
         Args:
-            input_ids: Pre-encoded sequences (batch, seq_len), may be left-padded
-            path_types: Path type encoding (batch, seq_len, max_depth)
-            path_ids: Path ID encoding (batch, seq_len, max_depth)
-            path_lengths: Path lengths (batch, seq_len)
-            attention_mask: True for real tokens, False for PAD
-            numeric_values: Optional numeric values for scaled fields (batch, seq_len).
-                           Required for conditioning on scaled numeric context (e.g., prediction).
-            stop_after_value: If True, stop each sequence after one complete value
+            batch: Input EncodedBatch (may be left-padded prefixes)
+            stop_after_value: If True, stop each sequence after completing one value
             max_tokens: Maximum tokens to generate
-            temperature: Sampling temperature
+            temperature: Sampling temperature (0.0 for greedy)
             top_k: Top-k filtering
             top_p: Top-p (nucleus) filtering
 
         Returns:
-            List of generated values (one per input sequence).
-            Values can be dicts, lists, or primitives depending on what was generated.
+            List of generated values (one per batch item).
+            - If stop_after_value=True: primitives, lists, or dicts
+            - If stop_after_value=False: complete JSON objects (dicts)
+
+        Raises:
+            GenerationError: If decoding fails
         """
         vocab = self.tokenizer.vocab
-        original_batch_size = input_ids.size(0)
-        seq_len = input_ids.size(1)
+        original_batch_size = batch.input_ids.size(0)
+
+        # Ensure batch is on the right device
+        batch = batch.to(self.device)
 
         # Clone tensors for generation (we'll extend them)
-        current_ids = input_ids.clone()
-        current_path_types = path_types.clone()
-        current_path_ids = path_ids.clone()
-        current_path_lengths = path_lengths.clone()
-        current_attention_mask = attention_mask.clone()
+        current_ids = batch.input_ids.clone()
+        current_path_types = batch.path_types.clone()
+        current_path_ids = batch.path_ids.clone()
+        current_path_lengths = batch.path_lengths.clone()
+        current_attention_mask = batch.attention_mask.clone()
 
         # Track numeric values for continuous head
-        # Use provided numeric_values for conditioning, or zeros if not provided
-        if numeric_values is not None:
-            current_numeric_values = numeric_values.clone().to(self.device)
-        else:
-            current_numeric_values = torch.zeros(
-                original_batch_size, seq_len, dtype=torch.float, device=self.device
-            )
+        current_numeric_values = batch.numeric_values.clone()
+
         # Track sampled numeric values for later decoding (list of lists)
         sampled_numeric_values: list[list[float]] = [[] for _ in range(original_batch_size)]
 
@@ -288,8 +367,11 @@ class OrigamiGenerator:
             path_states.append(states[0])
 
         # Initialize grammar state for each sequence from their prefixes
+        # init_state_from_tokens returns state AFTER processing the prefix,
+        # along with the valid mask for the NEXT token
         grammar_state = None
         initial_depths = None
+        next_valid_mask = None  # Valid mask for the next token to generate
         if self._grammar_pda is not None:
             grammar_states = []
             for i in range(original_batch_size):
@@ -300,11 +382,23 @@ class OrigamiGenerator:
             grammar_state = self._stack_grammar_states(grammar_states)
             # Record initial depths for stop_after_value
             initial_depths = grammar_state[1].clone()
+            # Get valid mask for next token (state is already after processing prefix)
+            next_valid_mask = self._grammar_pda._get_valid_tokens(
+                grammar_state[0],  # stack
+                grammar_state[1],  # depth
+                grammar_state[2],  # awaiting_value
+                grammar_state[3],  # seen_start
+                grammar_state[4],  # root_closed
+                grammar_state[5],  # ended
+                self._grammar_pda._key_ids.to(self.device),
+                self._grammar_pda._value_ids.to(self.device),
+                self.device,
+            )
 
         # Track where each sequence's generated content starts
         # Use sum of attention mask (count of real tokens) since we extract only
         # non-padded tokens when storing completed sequences
-        gen_start_positions = attention_mask.sum(dim=1).long()
+        gen_start_positions = batch.attention_mask.sum(dim=1).long()
 
         # Track original indices for each active sequence (for reordering at end)
         active_indices = list(range(original_batch_size))
@@ -313,7 +407,7 @@ class OrigamiGenerator:
         completed_results: dict[int, tuple[list[int], list[float]]] = {}
 
         # Generation loop
-        for _ in range(max_tokens):
+        for _step in range(max_tokens):
             if len(active_indices) == 0:
                 break
 
@@ -326,24 +420,28 @@ class OrigamiGenerator:
                 path_ids=current_path_ids,
                 path_lengths=current_path_lengths,
                 attention_mask=current_attention_mask,
-                numeric_values=current_numeric_values if self.model.continuous_head is not None else None,
+                numeric_values=current_numeric_values
+                if self.model.continuous_head is not None
+                else None,
             )
 
             # Get logits for last position
             next_logits = output.logits[:, -1, :]  # (batch, vocab_size)
 
-            # Apply grammar constraints incrementally - O(1) per step
-            if self._grammar_pda is not None and grammar_state is not None:
-                last_token = current_ids[:, -1]
-                valid_mask, grammar_state = self._grammar_pda.get_next_token_mask(
-                    last_token, grammar_state
-                )
-                next_logits = next_logits.masked_fill(~valid_mask, float("-inf"))
+            # Apply grammar constraints using pre-computed valid mask
+            if next_valid_mask is not None:
+                next_logits = next_logits.masked_fill(~next_valid_mask, float("-inf"))
 
             # Sample next token
             next_tokens = self._sample(
                 next_logits, temperature=temperature, top_k=top_k, top_p=top_p
             )
+
+            # Update grammar state with sampled token and get mask for next iteration
+            if self._grammar_pda is not None and grammar_state is not None:
+                next_valid_mask, grammar_state = self._grammar_pda.get_next_token_mask(
+                    next_tokens, grammar_state
+                )
 
             # Sample numeric values for NUM tokens from continuous head
             new_numeric_values = torch.zeros(batch_size, 1, dtype=torch.float, device=self.device)
@@ -432,11 +530,13 @@ class OrigamiGenerator:
                     current_numeric_values = current_numeric_values[keep_tensor]
                     current_attention_mask = current_attention_mask[keep_tensor]
 
-                    # Compact grammar state
+                    # Compact grammar state and valid mask
                     if grammar_state is not None:
                         grammar_state = tuple(s[keep_tensor] for s in grammar_state)
                         if initial_depths is not None:
                             initial_depths = initial_depths[keep_tensor]
+                    if next_valid_mask is not None:
+                        next_valid_mask = next_valid_mask[keep_tensor]
 
                 active_indices = new_active_indices
                 path_states = new_path_states
@@ -456,11 +556,8 @@ class OrigamiGenerator:
             if stop_after_value:
                 # Decode just the generated value tokens
                 value_tokens = seq[start_pos:]
-                try:
-                    value = self._decode_value_tokens(value_tokens, numeric_vals)
-                    results.append(value)
-                except Exception:
-                    results.append(None)
+                value = self._decode_value_tokens(value_tokens, numeric_vals)
+                results.append(value)
             else:
                 # Decode full sequence as JSON object
                 # Find END token position
@@ -471,24 +568,15 @@ class OrigamiGenerator:
                     # No END token, append it
                     seq.append(vocab.end_id)
 
-                try:
-                    # For full object decoding with NUM tokens, use our parser
-                    obj = self._decode_with_numerics(seq, numeric_vals)
-                    results.append(obj)
-                except Exception:
-                    results.append({})
+                obj = self._decode_with_numerics(seq, numeric_vals)
+                results.append(obj)
 
         return results
 
     @torch.inference_mode()
-    def get_value_distribution(
+    def get_next_token_distribution(
         self,
-        input_ids: Tensor,
-        path_types: Tensor,
-        path_ids: Tensor,
-        path_lengths: Tensor,
-        attention_mask: Tensor,
-        numeric_values: Tensor | None = None,
+        batch: "EncodedBatch",
     ) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor] | None]:
         """Get grammar-constrained probability distribution for next token.
 
@@ -496,26 +584,24 @@ class OrigamiGenerator:
         possible values without actually sampling/generating.
 
         Args:
-            input_ids: (batch, seq_len) token IDs ending at target key
-            path_types: (batch, seq_len, max_depth) path type encoding
-            path_ids: (batch, seq_len, max_depth) path element IDs
-            path_lengths: (batch, seq_len) path lengths
-            attention_mask: (batch, seq_len) attention mask
-            numeric_values: Optional numeric values for conditioning (batch, seq_len)
+            batch: EncodedBatch ending at position to predict
 
         Returns:
             probs: (batch, vocab_size) probabilities after grammar masking
             continuous_params: Optional (weights, means, log_vars) for MoG head,
                                each with shape (batch, n_components)
         """
+        # Ensure batch is on the right device
+        batch = batch.to(self.device)
+
         # 1. Forward pass
         output = self.model(
-            input_ids=input_ids,
-            path_types=path_types,
-            path_ids=path_ids,
-            path_lengths=path_lengths,
-            attention_mask=attention_mask,
-            numeric_values=numeric_values,
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            numeric_values=batch.numeric_values,
         )
 
         # 2. Get logits at last position (predicts next token)
@@ -524,17 +610,17 @@ class OrigamiGenerator:
         # 3. Apply grammar constraints
         if self._grammar_pda is not None:
             # Initialize grammar state from the full sequence
-            batch_size = input_ids.size(0)
+            batch_size = batch.input_ids.size(0)
             grammar_states = []
             for i in range(batch_size):
-                mask = attention_mask[i]
-                seq_tokens = input_ids[i][mask]
+                mask = batch.attention_mask[i]
+                seq_tokens = batch.input_ids[i][mask]
                 state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
                 grammar_states.append(state)
             grammar_state = self._stack_grammar_states(grammar_states)
 
             # Get valid next tokens based on grammar state
-            last_token = input_ids[:, -1]
+            last_token = batch.input_ids[:, -1]
             valid_mask, _ = self._grammar_pda.get_next_token_mask(last_token, grammar_state)
             next_logits = next_logits.masked_fill(~valid_mask, float("-inf"))
 
@@ -588,11 +674,14 @@ class OrigamiGenerator:
 
         Returns:
             The decoded Python value
+
+        Raises:
+            GenerationError: If decoding fails
         """
         vocab = self.tokenizer.vocab
 
         if not token_ids:
-            return None
+            raise GenerationError("Empty token sequence cannot be decoded")
 
         first_token = token_ids[0]
 
@@ -608,19 +697,22 @@ class OrigamiGenerator:
             # NUM token - use sampled value
             if numeric_values:
                 return numeric_values[0]
-            return 0.0  # Fallback
+            raise GenerationError("NUM token found but no numeric value available")
+        elif first_token == vocab.unk_value_id:
+            # UNK_VALUE token - return None as fallback
+            return None
         else:
             # Primitive value
             token = vocab.decode(first_token)
             if isinstance(token, ValueToken):
                 return token.value
-            return None
+            raise GenerationError(f"Cannot decode token {first_token} as value")
 
     def _decode_with_numerics(
         self,
         token_ids: list[int],
         numeric_values: list[float],
-    ) -> dict:
+    ) -> dict | list:
         """Decode a full sequence with NUM token support.
 
         Args:
@@ -628,25 +720,34 @@ class OrigamiGenerator:
             numeric_values: List of sampled numeric values for NUM tokens
 
         Returns:
-            Decoded JSON object
+            Decoded JSON value (object or array)
+
+        Raises:
+            GenerationError: If decoding fails
         """
         vocab = self.tokenizer.vocab
 
         if not token_ids:
-            return {}
+            raise GenerationError("Empty token sequence cannot be decoded")
 
         # Skip START token
         pos = 0
         if token_ids[pos] == vocab.start_id:
             pos += 1
 
-        # Expect OBJ_START
-        if pos >= len(token_ids) or token_ids[pos] != vocab.obj_start_id:
-            return {}
+        if pos >= len(token_ids):
+            raise GenerationError("Empty sequence after START token")
 
-        # Parse object with numeric values
+        # Parse based on first token
         num_idx = [0]  # Mutable counter
-        return self._parse_object_tokens(token_ids[pos:], numeric_values, num_idx)
+        if token_ids[pos] == vocab.obj_start_id:
+            return self._parse_object_tokens(token_ids[pos:], numeric_values, num_idx)
+        elif token_ids[pos] == vocab.array_start_id:
+            return self._parse_array_tokens(token_ids[pos:], numeric_values, num_idx)
+        else:
+            raise GenerationError(
+                f"Expected OBJ_START or ARRAY_START after START, got token {token_ids[pos]}"
+            )
 
     def _parse_object_tokens(
         self,
@@ -711,7 +812,7 @@ class OrigamiGenerator:
         vocab = self.tokenizer.vocab
 
         if pos >= len(token_ids):
-            return None, pos
+            raise GenerationError(f"Unexpected end of tokens at position {pos}")
 
         token_id = token_ids[pos]
 
@@ -743,18 +844,22 @@ class OrigamiGenerator:
 
         elif token_id == vocab.num_token_id:
             # NUM token - use sampled value
-            value = 0.0  # Default fallback
             if numeric_values and num_idx is not None and num_idx[0] < len(numeric_values):
                 value = numeric_values[num_idx[0]]
                 num_idx[0] += 1
-            return value, pos + 1
+                return value, pos + 1
+            raise GenerationError("NUM token found but no numeric value available")
+
+        elif token_id == vocab.unk_value_id:
+            # UNK_VALUE token - return None as fallback value
+            return None, pos + 1
 
         else:
             # Primitive value
             token = vocab.decode(token_id)
             if isinstance(token, ValueToken):
                 return token.value, pos + 1
-            return None, pos + 1
+            raise GenerationError(f"Cannot decode token {token_id} as value")
 
     def _sample(
         self,

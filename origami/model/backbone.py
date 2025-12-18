@@ -119,23 +119,71 @@ class TransformerBackbone(BackboneBase):
         batch_size, seq_len, _ = hidden_states.shape
         device = hidden_states.device
 
-        # Create causal mask: (seq_len, seq_len)
+        # Create combined attention mask that handles both causal masking and padding
+        # For left-padded sequences, we need to ensure padding positions don't cause NaN
+        # by having all keys masked out in softmax.
+        #
+        # PyTorch's MHA with separate causal mask and key_padding_mask can cause NaN
+        # when a query position is padding (at start of left-padded sequence) because:
+        # - Causal mask allows attending to positions <= current
+        # - But key_padding_mask masks all those positions as padding
+        # - Result: softmax over all -inf = NaN
+        #
+        # Solution: Create a combined 4D attention mask where padding positions
+        # can attend to at least one position (themselves) to avoid NaN.
+
+        # Start with causal mask: (seq_len, seq_len), True = masked
         causal_mask = _make_causal_mask(seq_len, device)
 
-        # Create key padding mask from attention_mask
-        # PyTorch expects True for masked (padding) positions
         if attention_mask is not None:
-            # Invert: True (valid) -> False (don't mask), False (pad) -> True (mask)
-            key_padding_mask = ~attention_mask
-        else:
-            key_padding_mask = None
+            # Create combined mask: (batch, seq_len, seq_len)
+            # Start with causal mask broadcast to batch
+            combined_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()
 
-        # Apply transformer layers
-        hidden_states = self.layers(
-            hidden_states,
-            mask=causal_mask,
-            src_key_padding_mask=key_padding_mask,
-        )
+            # Add key padding: mask out keys that are padding
+            # key_padding: (batch, seq_len) -> (batch, 1, seq_len)
+            key_padding = ~attention_mask  # True for padding
+            combined_mask = combined_mask | key_padding.unsqueeze(1)
+
+            # Critical fix: For padding query positions, allow them to attend to themselves
+            # to avoid softmax(all -inf) = NaN. These positions' outputs don't matter
+            # as they're padding, but they shouldn't produce NaN that corrupts
+            # other positions through numerical instability.
+            #
+            # For each padding position i, ensure mask[i, i] = False (can attend to self)
+            # Vectorized: unmask diagonal for padding positions
+            padding_positions = ~attention_mask  # (batch, seq_len), True for padding
+            # Create indices for diagonal positions
+            diag_indices = torch.arange(seq_len, device=device)
+            # combined_mask[b, i, i] = False where padding_positions[b, i] = True
+            # Use advanced indexing: combined_mask[:, diag, diag] &= ~padding
+            combined_mask[:, diag_indices, diag_indices] = combined_mask[
+                :, diag_indices, diag_indices
+            ] & ~padding_positions
+
+            # Convert to float mask for nn.TransformerEncoder
+            # PyTorch expects: 0 = attend, -inf = don't attend (additive mask)
+            # For 3D masks, shape must be (batch * n_heads, seq_len, seq_len)
+            attn_mask = combined_mask.float().masked_fill(combined_mask, float("-inf"))
+
+            # Expand for multi-head attention: (batch, seq, seq) -> (batch * n_heads, seq, seq)
+            n_heads = self.config.n_heads
+            attn_mask = attn_mask.unsqueeze(1).expand(-1, n_heads, -1, -1)
+            attn_mask = attn_mask.reshape(batch_size * n_heads, seq_len, seq_len)
+
+            # Apply transformer layers with combined mask (no separate key_padding_mask)
+            hidden_states = self.layers(
+                hidden_states,
+                mask=attn_mask,
+                src_key_padding_mask=None,
+            )
+        else:
+            # No padding - use simple causal mask
+            hidden_states = self.layers(
+                hidden_states,
+                mask=causal_mask,
+                src_key_padding_mask=None,
+            )
 
         # Final layer norm
         hidden_states = self.norm(hidden_states)

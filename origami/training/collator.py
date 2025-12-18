@@ -6,27 +6,27 @@ Provides collation utilities for batching tokenized instances.
 from typing import TYPE_CHECKING
 
 import torch
-from torch import Tensor
 
 if TYPE_CHECKING:
-    from origami.tokenizer.json_tokenizer import JSONTokenizer, TokenizedInstance
+    from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer, TokenizedInstance
 
 
 class OrigamiDataCollator:
-    """Collator for batching tokenized JSON instances.
+    """Single source of EncodedBatch creation for training and inference.
 
     Takes a list of TokenizedInstance objects from the dataset and
     creates batched tensors ready for model input. Uses LEFT-PADDING
     so all sequences end at the same position, enabling easy batched
     prediction where `logits[:, -1, :]` gives the next token for all.
 
-    This separates the tokenization (with shuffling) from batching,
-    allowing the dataset to control key-order permutations while
-    the collator handles padding and tensor creation.
+    This is the SINGLE code path for creating batched tensors from
+    tokenized instances, used by both training (DataLoader) and
+    inference (Generator, Predictor, Embedder).
 
     Attributes:
         tokenizer: JSONTokenizer for vocabulary and path encoding
         max_length: Maximum sequence length (truncate if exceeded)
+        include_labels: Whether to include labels tensor (for training)
         device: Device for output tensors
     """
 
@@ -34,6 +34,7 @@ class OrigamiDataCollator:
         self,
         tokenizer: "JSONTokenizer",
         max_length: int | None = None,
+        include_labels: bool = True,
         device: torch.device | None = None,
     ):
         """Initialize collator.
@@ -41,32 +42,28 @@ class OrigamiDataCollator:
         Args:
             tokenizer: Tokenizer with vocabulary for encoding
             max_length: Optional max sequence length for truncation
+            include_labels: If True, include labels tensor (for training).
+                           If False, labels will be None (for inference).
             device: Device for output tensors (default: CPU)
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.include_labels = include_labels
         self.device = device
 
     def __call__(
         self,
         instances: list["TokenizedInstance"],
-    ) -> dict[str, Tensor]:
+    ) -> "EncodedBatch":
         """Collate tokenized instances into a batch.
 
         Args:
             instances: List of TokenizedInstance from dataset
 
         Returns:
-            Dictionary with batched tensors ready for model.forward():
-                - input_ids: (batch, seq_len)
-                - path_types: (batch, seq_len, max_depth)
-                - path_ids: (batch, seq_len, max_depth)
-                - path_lengths: (batch, seq_len)
-                - attention_mask: (batch, seq_len)
-                - labels: (batch, seq_len) - same as input_ids for autoregressive
-                - numeric_values: (batch, seq_len) - scaled values at NUM positions
-                - numeric_mask: (batch, seq_len) - True at NUM positions
-                - lengths: (batch,) - original sequence lengths
+            EncodedBatch with all tensors ready for model.forward().
+            If include_labels=True, labels tensor is set to input_ids.clone().
+            If include_labels=False, labels tensor is None.
 
             Note: The model handles shift internally for both discrete labels
             and numeric values during loss computation.
@@ -152,14 +149,35 @@ class OrigamiDataCollator:
             numeric_mask = numeric_mask.to(self.device)
             lengths = lengths.to(self.device)
 
-        return {
-            "input_ids": input_ids,
-            "path_types": path_types,
-            "path_ids": path_ids,
-            "path_lengths": path_lengths,
-            "attention_mask": attention_mask,
-            "labels": input_ids.clone(),  # For autoregressive training
-            "numeric_values": numeric_values,  # Scaled values at NUM positions
-            "numeric_mask": numeric_mask,  # Mask for NUM token positions
-            "lengths": lengths,
-        }
+        from origami.tokenizer.json_tokenizer import EncodedBatch
+
+        return EncodedBatch(
+            input_ids=input_ids,
+            path_types=path_types,
+            path_ids=path_ids,
+            path_lengths=path_lengths,
+            attention_mask=attention_mask,
+            numeric_values=numeric_values,
+            numeric_mask=numeric_mask,
+            lengths=lengths,
+            labels=input_ids.clone() if self.include_labels else None,
+        )
+
+    def collate_objects(
+        self,
+        objects: list[dict],
+        shuffle: bool = False,
+    ) -> "EncodedBatch":
+        """Convenience method: tokenize objects then collate.
+
+        Used by inference components (Generator, Predictor, Embedder).
+
+        Args:
+            objects: List of JSON-like dictionaries to encode.
+            shuffle: If True, randomly permute key order at each level.
+
+        Returns:
+            EncodedBatch ready for model input.
+        """
+        instances = [self.tokenizer.tokenize(obj, shuffle=shuffle) for obj in objects]
+        return self(instances)

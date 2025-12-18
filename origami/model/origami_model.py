@@ -102,8 +102,9 @@ class OrigamiModel(nn.Module):
         path_lengths: Tensor,  # (batch, seq_len)
         attention_mask: Tensor | None = None,  # (batch, seq_len)
         labels: Tensor | None = None,  # (batch, seq_len)
-        numeric_values: Tensor | None = None,  # (batch, seq_len) - Phase 6
-        numeric_mask: Tensor | None = None,  # (batch, seq_len) - Phase 6
+        numeric_values: Tensor | None = None,  # (batch, seq_len)
+        numeric_mask: Tensor | None = None,  # (batch, seq_len)
+        grammar_mask: Tensor | None = None,  # (batch, seq_len, vocab_size) - explicit!
     ) -> OrigamiOutput:
         """Forward pass through the model.
 
@@ -117,16 +118,17 @@ class OrigamiModel(nn.Module):
                 Shape (batch, seq_len). If None, all positions are valid.
             labels: Target token IDs for loss computation.
                 Shape (batch, seq_len). If None, no loss computed.
-            numeric_values: Scaled numeric values for continuous head (Phase 6)
-            numeric_mask: Boolean mask for NUM token positions (Phase 6)
+            numeric_values: Scaled numeric values for continuous head
+            numeric_mask: Boolean mask for NUM token positions
+            grammar_mask: Boolean mask for valid tokens at each position.
+                Shape (batch, seq_len, vocab_size). If provided, invalid tokens
+                are masked to -inf. Computed by caller (Trainer or Generator).
 
         Returns:
             OrigamiOutput with logits, optional loss, and hidden states
         """
         # 1. Embeddings (with numeric values for continuous head)
-        hidden = self.embeddings(
-            input_ids, path_types, path_ids, path_lengths, numeric_values
-        )
+        hidden = self.embeddings(input_ids, path_types, path_ids, path_lengths, numeric_values)
 
         # 2. Backbone
         hidden = self.backbone(hidden, attention_mask)
@@ -134,10 +136,10 @@ class OrigamiModel(nn.Module):
         # 3. Discrete head
         logits = self.discrete_head(hidden)
 
-        # 4. Apply grammar constraints ONLY during training (when labels provided)
-        # During inference, the Generator handles grammar incrementally for O(n) total.
-        if self.config.use_grammar_constraints and labels is not None:
-            logits = self._apply_grammar_mask(logits, input_ids)
+        # 4. Apply grammar mask if provided (explicit interface)
+        # Caller is responsible for computing the mask (Trainer or Generator)
+        if grammar_mask is not None:
+            logits = logits.masked_fill(~grammar_mask, float("-inf"))
 
         # 5. Continuous head (if enabled)
         continuous_params = None
@@ -163,40 +165,38 @@ class OrigamiModel(nn.Module):
             hidden_states=hidden,
         )
 
-    def _apply_grammar_mask(
+    def compute_grammar_mask(
         self,
-        logits: Tensor,
         input_ids: Tensor,
-    ) -> Tensor:
-        """Apply grammar constraints to logits for training.
+    ) -> Tensor | None:
+        """Compute grammar mask for training.
 
-        Computes which tokens are grammatically valid at each position
-        and masks invalid tokens with -inf. Only called during training.
+        Computes which tokens are grammatically valid at each position.
+        Called by Trainer to compute the mask before forward pass.
 
         Note: Grammar computation runs on CPU for performance, as the
         PDA state updates involve many small tensor operations that cause
         excessive synchronization overhead on MPS/CUDA.
 
         Args:
-            logits: Raw logits of shape (batch, seq_len, vocab_size)
-            input_ids: Input token IDs for grammar state
+            input_ids: Input token IDs of shape (batch, seq_len)
 
         Returns:
-            Logits with invalid tokens masked to -inf
+            Boolean mask of shape (batch, seq_len, vocab_size) where True
+            indicates valid tokens. Returns None if grammar constraints
+            are not enabled.
         """
         if self._grammar_pda is None:
-            return logits
+            return None
+
+        original_device = input_ids.device
 
         # Run grammar computation on CPU for performance (avoids MPS/CUDA sync overhead)
-        original_device = logits.device
         input_ids_cpu = input_ids.cpu()
-
-        # Compute mask for all positions (training always needs full mask)
         valid_mask_cpu = self._grammar_pda.compute_valid_mask(input_ids_cpu)
+
         # Clone and make contiguous before device transfer to avoid shared storage issues
-        valid_mask = valid_mask_cpu.clone().contiguous().to(original_device)
-        # Apply mask using masked_fill which is MPS-safe
-        return logits.clone().masked_fill(~valid_mask, float("-inf"))
+        return valid_mask_cpu.clone().contiguous().to(original_device)
 
     def _compute_loss(
         self,

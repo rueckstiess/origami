@@ -99,6 +99,9 @@ class PipelineConfig:
     # Grammar
     use_grammar_constraints: bool = True
 
+    # Device
+    device: str = "auto"  # "auto", "cpu", "mps", "cuda", or specific like "cuda:0"
+
     # Internal - set during fit
     _vocab_size: int = field(default=0, repr=False)
     _max_seq_length: int = field(default=2048, repr=False)

@@ -1,32 +1,37 @@
 """ORIGAMI value predictor.
 
 Predicts values for target keys in JSON documents using a trained ORIGAMI model.
+
+This is a thin wrapper around Generator. It:
+1. Prepares input (reorder keys, tokenize, truncate at target)
+2. Delegates to Generator for actual generation
+3. Applies inverse transformation if needed
 """
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
 
 from origami.preprocessing import move_target_last
-from origami.tokenizer.vocabulary import KeyToken, ValueToken
+from origami.tokenizer.vocabulary import ValueToken
+
+from .generator import OrigamiGenerator
+from .utils import find_target_positions
 
 if TYPE_CHECKING:
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
-from .generator import OrigamiGenerator
-
 
 class OrigamiPredictor:
     """Predict values for target keys using a trained ORIGAMI model.
 
-    The predictor uses the Generator for ALL value prediction, ensuring
-    grammar constraints are applied consistently.
-
-    For primitive values, the Generator samples from the grammar-constrained
-    distribution. For complex values (objects, arrays), the Generator
-    continues until the value is complete.
+    This is a thin wrapper around Generator. It:
+    1. Prepares input (reorder keys, truncate at target)
+    2. Delegates to Generator for actual generation
+    3. Applies inverse transformation if needed
 
     Example:
         ```python
@@ -37,9 +42,9 @@ class OrigamiPredictor:
         prediction = predictor.predict(obj, target_key="city")
         # Returns: "NYC"
 
-        # Batch prediction
-        predictions = predictor.predict_batch([obj1, obj2, obj3], target_key="city")
-        # Returns: ["NYC", "LA", "SF"]
+        # Batch prediction with internal batching
+        predictions = predictor.predict_batch(objects, target_key="city", batch_size=64)
+        # Returns: ["NYC", "LA", "SF", ...]
 
         # Get probability distribution
         probs = predictor.predict_proba(obj, target_key="city")
@@ -55,91 +60,106 @@ class OrigamiPredictor:
         self,
         model: "OrigamiModel",
         tokenizer: "JSONTokenizer",
+        inverse_transform_fn: Callable[[Any, str], Any] | None = None,
     ):
         """Initialize predictor.
 
         Args:
             model: Trained ORIGAMI model
             tokenizer: JSONTokenizer with fitted vocabulary
+            inverse_transform_fn: Optional function to inverse-transform predictions.
+                Signature: (value, target_key) -> transformed_value.
+                Used for scaled numeric values that need to be converted back
+                to original scale.
 
         Note:
             The Predictor uses the model's current device dynamically.
             Move the model to your desired device before calling predict().
             For standalone use, CPU is typically fastest for ORIGAMI model sizes.
         """
+        from origami.training.collator import OrigamiDataCollator
+
         self.model = model
         self.tokenizer = tokenizer
         self.model.eval()
+        self._inverse_transform = inverse_transform_fn
 
         # Create generator for value generation (handles grammar + continuous values)
         self._generator = OrigamiGenerator(model, tokenizer)
+
+        # Create collator for batch creation (include_labels=False for inference)
+        self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
 
     @property
     def device(self) -> torch.device:
         """Get the model's current device dynamically."""
         return next(self.model.parameters()).device
 
-    @torch.no_grad()
     def predict(
         self,
         obj: dict,
         target_key: str,
     ) -> Any:
-        """Predict value for a target key.
+        """Predict value for a single object.
 
         Args:
-            obj: JSON object. The target_key's current value is ignored.
-            target_key: Key to predict (dot notation for nested keys)
+            obj: JSON object (target_key's current value is ignored)
+            target_key: Key to predict (dot notation for nested)
 
         Returns:
-            The predicted value
-
-        Raises:
-            KeyError: If target_key doesn't exist in obj
+            Predicted value (inverse transformed if scaler configured)
         """
-        results = self.predict_batch([obj], target_key)
-        return results[0]
+        return self.predict_batch([obj], target_key)[0]
 
     @torch.no_grad()
     def predict_batch(
         self,
         objects: list[dict],
         target_key: str,
+        batch_size: int = 32,
     ) -> list[Any]:
         """Predict values for a batch of objects.
+
+        Handles batching internally for large object lists.
 
         Args:
             objects: List of JSON objects
             target_key: Key to predict (same for all objects)
+            batch_size: Number of objects to process in parallel
 
         Returns:
-            List of predicted values (one per object)
+            List of predicted values
         """
-        # 1. Reorder objects to place target key last for maximum context
-        reordered = [move_target_last(obj, target_key) for obj in objects]
+        results: list[Any] = []
 
-        # 2. Tokenize (without shuffle for deterministic results)
-        batch = self.tokenizer.encode_batch(reordered, shuffle=False)
-        batch = batch.to(self.device)
+        for start in range(0, len(objects), batch_size):
+            batch_objects = objects[start : start + batch_size]
 
-        # 3. Truncate sequences to end at target key (exclude the value)
-        truncated = self._truncate_at_target_key(batch, target_key)
+            # 1. Reorder to place target key last (maximum context)
+            reordered = [move_target_last(obj, target_key) for obj in batch_objects]
 
-        # 4. Generate value using Generator (handles grammar + continuous values)
-        # Use temperature=0 for greedy decoding (deterministic predictions)
-        values = self._generator.generate_from_tensors(
-            input_ids=truncated.input_ids,
-            path_types=truncated.path_types,
-            path_ids=truncated.path_ids,
-            path_lengths=truncated.path_lengths,
-            attention_mask=truncated.attention_mask,
-            numeric_values=truncated.numeric_values,  # Pass numeric context for conditioning
-            stop_after_value=True,
-            max_tokens=100,
-            temperature=0.0,  # Greedy decoding for deterministic predictions
-        )
+            # 2. Create batch using collator
+            batch = self._collator.collate_objects(reordered, shuffle=False)
+            batch = batch.to(self.device)
 
-        return values
+            # 3. Truncate at target key (exclude value)
+            truncated = self._truncate_at_target_key(batch, target_key)
+
+            # 4. Generate using Generator
+            values = self._generator.generate_from_batch(
+                truncated,
+                stop_after_value=True,
+                max_tokens=100,
+                temperature=0.0,  # Greedy for deterministic predictions
+            )
+
+            # 5. Inverse transform if configured
+            if self._inverse_transform is not None:
+                values = [self._inverse_transform(v, target_key) for v in values]
+
+            results.extend(values)
+
+        return results
 
     def predict_proba(
         self,
@@ -148,59 +168,106 @@ class OrigamiPredictor:
         values: list[Any] | None = None,
         top_k: int | None = None,
     ) -> dict[Any, float] | list[tuple[Any, float]]:
-        """Get probability distribution over possible values.
-
-        Uses the Generator's get_value_distribution() to get grammar-constrained
-        probabilities.
+        """Get probability distribution for a single object.
 
         Args:
             obj: JSON object
             target_key: Key to predict
-            values: Specific values to get probabilities for
-            top_k: If specified, return only top-k values sorted by probability
+            values: If provided, only return probabilities for these values
+            top_k: If set, return only top-k values
 
         Returns:
-            If top_k is None: dict mapping values to probabilities
-            If top_k is set: list of (value, prob) tuples, sorted desc by probability
+            If top_k=None: dict mapping values to probabilities
+            If top_k set: list of (value, prob) tuples sorted by prob
         """
-        # 1. Prepare tensors (same as predict_batch)
-        reordered = move_target_last(obj, target_key)
-        batch = self.tokenizer.encode_batch([reordered], shuffle=False)
-        batch = batch.to(self.device)
-        truncated = self._truncate_at_target_key(batch, target_key)
+        return self.predict_proba_batch([obj], target_key, values=values, top_k=top_k)[0]
 
-        # 2. Get distribution from Generator (grammar-constrained!)
-        probs, _continuous_params = self._generator.get_value_distribution(
-            input_ids=truncated.input_ids,
-            path_types=truncated.path_types,
-            path_ids=truncated.path_ids,
-            path_lengths=truncated.path_lengths,
-            attention_mask=truncated.attention_mask,
-            numeric_values=truncated.numeric_values,  # Pass numeric context for conditioning
-        )
+    @torch.no_grad()
+    def predict_proba_batch(
+        self,
+        objects: list[dict],
+        target_key: str,
+        values: list[Any] | None = None,
+        top_k: int | None = None,
+        batch_size: int = 32,
+    ) -> list[dict[Any, float] | list[tuple[Any, float]]]:
+        """Get probability distributions for a batch of objects.
 
-        # 3. Map token probabilities to values
+        Handles batching internally for large object lists.
+
+        Args:
+            objects: List of JSON objects
+            target_key: Key to predict (same for all objects)
+            values: If provided, only return probabilities for these values
+            top_k: If set, return only top-k values per object
+            batch_size: Number of objects to process in parallel
+
+        Returns:
+            List of distributions (one per object).
+            Each is dict or list[tuple] depending on top_k.
+        """
+        all_results: list[dict[Any, float] | list[tuple[Any, float]]] = []
+
+        for start in range(0, len(objects), batch_size):
+            batch_objects = objects[start : start + batch_size]
+
+            # 1. Prepare batch
+            reordered = [move_target_last(obj, target_key) for obj in batch_objects]
+            batch = self._collator.collate_objects(reordered, shuffle=False)
+            batch = batch.to(self.device)
+            truncated = self._truncate_at_target_key(batch, target_key)
+
+            # 2. Get distributions from Generator
+            probs, _continuous_params = self._generator.get_next_token_distribution(truncated)
+
+            # 3. Map token probabilities to values for each item
+            for i in range(len(batch_objects)):
+                result = self._map_probs_to_values(probs[i], values)
+
+                if top_k is not None:
+                    sorted_items = sorted(result.items(), key=lambda x: x[1], reverse=True)
+                    all_results.append(sorted_items[:top_k])
+                else:
+                    all_results.append(result)
+
+        return all_results
+
+    def _map_probs_to_values(
+        self,
+        probs: Tensor,
+        specific_values: list[Any] | None = None,
+    ) -> dict[Any, float]:
+        """Map token probabilities to Python values.
+
+        Args:
+            probs: (vocab_size,) probabilities for a single sequence
+            specific_values: If provided, only return probs for these values
+
+        Returns:
+            Dict mapping values to probabilities
+        """
         vocab = self.tokenizer.vocab
-        if values is not None:
+
+        if specific_values is not None:
             # Get probabilities for specific values
-            result = {}
-            for value in values:
+            result: dict[Any, float] = {}
+            for value in specific_values:
                 token = ValueToken(value)
                 try:
                     token_id = vocab.encode(token)
                     if token_id == vocab.unk_value_id:
                         result[value] = 0.0
                     else:
-                        result[value] = probs[0, token_id].item()
+                        result[value] = probs[token_id].item()
                 except KeyError:
                     result[value] = 0.0
             return result
 
-        # 4. Build distribution over all values
+        # Build distribution over all primitive values
         result = {}
         value_ids = vocab.get_all_primitive_value_ids()
         for token_id in value_ids:
-            prob = probs[0, token_id].item()
+            prob = probs[token_id].item()
             if prob > 1e-6:
                 token = vocab.decode(token_id)
                 if isinstance(token, ValueToken):
@@ -208,11 +275,6 @@ class OrigamiPredictor:
                 elif token_id == vocab.num_token_id:
                     # NUM token - include as special marker
                     result["<NUM>"] = prob
-
-        # 5. Return top_k if requested
-        if top_k is not None:
-            sorted_items = sorted(result.items(), key=lambda x: x[1], reverse=True)
-            return sorted_items[:top_k]
 
         return result
 
@@ -232,7 +294,7 @@ class OrigamiPredictor:
         """
         from origami.tokenizer.json_tokenizer import EncodedBatch
 
-        target_positions = self._find_target_positions(batch.input_ids, target_key)
+        target_positions = find_target_positions(batch.input_ids, target_key, self.tokenizer.vocab)
         batch_size = batch.input_ids.size(0)
 
         # Find max length needed (target_pos + 1 for each sequence)
@@ -289,38 +351,5 @@ class OrigamiPredictor:
             numeric_values=new_numeric_values,
             numeric_mask=new_numeric_mask,
             lengths=new_lengths,
+            labels=None,  # No labels for inference
         )
-
-    def _find_target_positions(
-        self,
-        input_ids: Tensor,
-        target_key: str,
-    ) -> Tensor:
-        """Find position of target key token in each sequence.
-
-        Args:
-            input_ids: (batch, seq_len) token IDs
-            target_key: The target key to find (leaf key if nested)
-
-        Returns:
-            Tensor of shape (batch,) with position indices
-        """
-        # Get the leaf key (last part of dot-separated path)
-        leaf_key = target_key.split(".")[-1]
-
-        # Get the token ID for this key
-        key_token = KeyToken(leaf_key)
-        key_id = self.tokenizer.vocab.encode(key_token)
-
-        batch_size = input_ids.size(0)
-        target_positions = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
-
-        for i in range(batch_size):
-            # Find all positions where this key appears
-            matches = (input_ids[i] == key_id).nonzero(as_tuple=True)[0]
-            if len(matches) == 0:
-                raise ValueError(f"Target key '{leaf_key}' not found in sequence {i}")
-            # Use the last occurrence (after move_target_last, target is last)
-            target_positions[i] = matches[-1]
-
-        return target_positions

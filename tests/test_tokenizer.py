@@ -615,8 +615,10 @@ class TestUnknownTokenHandling:
         assert tokenizer.vocab.unk_key_id in ids  # "city"
         assert tokenizer.vocab.unk_value_id in ids  # "Bob"
 
-    def test_encode_batch_with_unknown_tokens(self):
-        """encode_batch should handle unknown tokens gracefully."""
+    def test_collate_objects_with_unknown_tokens(self):
+        """collate_objects should handle unknown tokens gracefully."""
+        from origami.training import OrigamiDataCollator
+
         tokenizer = JSONTokenizer()
         tokenizer.fit([{"name": "Alice"}])
 
@@ -625,7 +627,8 @@ class TestUnknownTokenHandling:
             {"name": "Alice"},  # All known
             {"name": "Bob", "extra": "data"},  # Unknown value + unknown key
         ]
-        batch = tokenizer.encode_batch(objects)
+        collator = OrigamiDataCollator(tokenizer, include_labels=False)
+        batch = collator.collate_objects(objects)
 
         # Should not raise, should produce valid tensors
         assert batch.input_ids.shape[0] == 2

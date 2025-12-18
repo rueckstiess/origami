@@ -156,12 +156,12 @@ class TestOrigamiDataCollator:
 
         batch = collator([instance])
 
-        assert batch["input_ids"].shape[0] == 1
-        assert batch["attention_mask"].shape == batch["input_ids"].shape
-        assert batch["path_types"].shape[:2] == batch["input_ids"].shape
-        assert batch["path_ids"].shape[:2] == batch["input_ids"].shape
-        assert batch["path_lengths"].shape == batch["input_ids"].shape
-        assert batch["labels"].shape == batch["input_ids"].shape
+        assert batch.input_ids.shape[0] == 1
+        assert batch.attention_mask.shape == batch.input_ids.shape
+        assert batch.path_types.shape[:2] == batch.input_ids.shape
+        assert batch.path_ids.shape[:2] == batch.input_ids.shape
+        assert batch.path_lengths.shape == batch.input_ids.shape
+        assert batch.labels.shape == batch.input_ids.shape
 
     def test_collate_multiple_instances(self, tokenizer, sample_data):
         """Test collating multiple instances with padding."""
@@ -170,17 +170,13 @@ class TestOrigamiDataCollator:
 
         batch = collator(instances)
 
-        assert batch["input_ids"].shape[0] == len(sample_data)
+        assert batch.input_ids.shape[0] == len(sample_data)
         # All tensors should have same batch size
-        for key in [
-            "input_ids",
-            "attention_mask",
-            "path_types",
-            "path_ids",
-            "path_lengths",
-            "labels",
-        ]:
-            assert batch[key].shape[0] == len(sample_data)
+        assert batch.attention_mask.shape[0] == len(sample_data)
+        assert batch.path_types.shape[0] == len(sample_data)
+        assert batch.path_ids.shape[0] == len(sample_data)
+        assert batch.path_lengths.shape[0] == len(sample_data)
+        assert batch.labels.shape[0] == len(sample_data)
 
     def test_collate_with_max_length(self, tokenizer, sample_data):
         """Test that max_length truncates sequences."""
@@ -189,7 +185,7 @@ class TestOrigamiDataCollator:
 
         batch = collator(instances)
 
-        assert batch["input_ids"].shape[1] <= 5
+        assert batch.input_ids.shape[1] <= 5
 
     def test_attention_mask_reflects_padding(self, tokenizer):
         """Test that attention mask correctly marks padding."""
@@ -204,7 +200,7 @@ class TestOrigamiDataCollator:
         batch = collator(instances)
 
         # Shorter sequence should have fewer True values in mask
-        assert batch["attention_mask"][0].sum() < batch["attention_mask"][1].sum()
+        assert batch.attention_mask[0].sum() < batch.attention_mask[1].sum()
 
     def test_collate_empty_raises(self, tokenizer):
         """Test that empty batch raises ValueError."""
@@ -221,15 +217,12 @@ class TestOrigamiDataCollator:
 
         batch = collator(instances)
 
-        for key in [
-            "input_ids",
-            "attention_mask",
-            "path_types",
-            "path_ids",
-            "path_lengths",
-            "labels",
-        ]:
-            assert batch[key].device.type == device.type
+        assert batch.input_ids.device.type == device.type
+        assert batch.attention_mask.device.type == device.type
+        assert batch.path_types.device.type == device.type
+        assert batch.path_ids.device.type == device.type
+        assert batch.path_lengths.device.type == device.type
+        assert batch.labels.device.type == device.type
 
     def test_labels_are_copy_of_input_ids(self, tokenizer, sample_data):
         """Test that labels are a copy of input_ids for autoregressive training."""
@@ -238,10 +231,10 @@ class TestOrigamiDataCollator:
 
         batch = collator(instances)
 
-        assert torch.equal(batch["labels"], batch["input_ids"])
+        assert torch.equal(batch.labels, batch.input_ids)
         # But they should be different tensors (not same object)
-        batch["labels"][0, 0] = -1
-        assert not torch.equal(batch["labels"], batch["input_ids"])
+        batch.labels[0, 0] = -1
+        assert not torch.equal(batch.labels, batch.input_ids)
 
 
 class TestLeftPadding:
@@ -277,11 +270,11 @@ class TestLeftPadding:
         batch = collator([short_inst, long_inst])
 
         # Both sequences should have same length (padded to longest)
-        assert batch["input_ids"].shape[1] == len(long_inst.tokens)
+        assert batch.input_ids.shape[1] == len(long_inst.tokens)
 
         # Short sequence: PAD tokens at START, real tokens at END
-        short_ids = batch["input_ids"][0]
-        short_mask = batch["attention_mask"][0]
+        short_ids = batch.input_ids[0]
+        short_mask = batch.attention_mask[0]
 
         # First tokens should be PAD (mask=False)
         pad_count = (~short_mask).sum().item()
@@ -298,7 +291,7 @@ class TestLeftPadding:
             assert short_mask[i]
 
         # Long sequence should have no padding
-        assert batch["attention_mask"][1].all()
+        assert batch.attention_mask[1].all()
 
     def test_all_sequences_end_at_same_position(self, lp_tokenizer):
         """Test that all sequences end at the same position (critical for batched prediction)."""
@@ -314,7 +307,7 @@ class TestLeftPadding:
 
         # All sequences should have real (non-PAD) tokens at the last position
         for i in range(len(objects)):
-            last_token = batch["input_ids"][i, -1]
+            last_token = batch.input_ids[i, -1]
             assert last_token != lp_tokenizer.vocab.pad_token_id, (
                 f"Sequence {i} has PAD at last position"
             )
@@ -325,7 +318,7 @@ class TestLeftPadding:
             )
 
             # Attention mask should be True at last position
-            assert batch["attention_mask"][i, -1]
+            assert batch.attention_mask[i, -1]
 
     def test_path_encoding_aligned_with_left_padding(self, lp_tokenizer):
         """Test that path encoding is correctly aligned with left-padded sequences."""
@@ -339,19 +332,19 @@ class TestLeftPadding:
         batch = collator([short_inst, long_inst])
 
         # For short sequence, path info should be at positions where real tokens are
-        short_mask = batch["attention_mask"][0]
+        short_mask = batch.attention_mask[0]
         pad_count = (~short_mask).sum().item()
 
         # Padded positions should have zero path_lengths
         for i in range(pad_count):
-            assert batch["path_lengths"][0, i] == 0
+            assert batch.path_lengths[0, i] == 0
 
         # Real token positions should have correct path_lengths (could be 0 for START/END)
         # but should match the original tokenized instance
         for i, path in enumerate(short_inst.paths):
             pos = pad_count + i
             expected_depth = min(len(path), lp_tokenizer.max_depth)
-            assert batch["path_lengths"][0, pos] == expected_depth
+            assert batch.path_lengths[0, pos] == expected_depth
 
     def test_lengths_tensor_correct(self, lp_tokenizer):
         """Test that lengths tensor reflects original sequence lengths."""
@@ -365,8 +358,8 @@ class TestLeftPadding:
         batch = collator(instances)
 
         # lengths should match original token counts
-        assert batch["lengths"][0] == len(instances[0].tokens)
-        assert batch["lengths"][1] == len(instances[1].tokens)
+        assert batch.lengths[0] == len(instances[0].tokens)
+        assert batch.lengths[1] == len(instances[1].tokens)
 
     def test_model_forward_with_left_padded_batch(self, lp_tokenizer):
         """Test that model forward pass works correctly with left-padded batches."""
@@ -392,21 +385,21 @@ class TestLeftPadding:
 
         with torch.no_grad():
             output = model(
-                input_ids=batch["input_ids"],
-                path_types=batch["path_types"],
-                path_ids=batch["path_ids"],
-                path_lengths=batch["path_lengths"],
-                attention_mask=batch["attention_mask"],
+                input_ids=batch.input_ids,
+                path_types=batch.path_types,
+                path_ids=batch.path_ids,
+                path_lengths=batch.path_lengths,
+                attention_mask=batch.attention_mask,
             )
 
         # Output should have correct shape
-        batch_size, seq_len = batch["input_ids"].shape
+        batch_size, seq_len = batch.input_ids.shape
         assert output.logits.shape == (batch_size, seq_len, config.vocab_size)
 
         # No NaN in outputs for real (non-PAD) positions
         # PAD positions may have NaN due to all-masked attention (softmax of all -inf)
         for b in range(batch_size):
-            mask = batch["attention_mask"][b]
+            mask = batch.attention_mask[b]
             real_logits = output.logits[b][mask]
             assert not torch.isnan(real_logits).any(), f"NaN in real positions for batch {b}"
 
@@ -433,12 +426,12 @@ class TestLeftPadding:
         batch = collator(instances)
 
         output = model(
-            input_ids=batch["input_ids"],
-            path_types=batch["path_types"],
-            path_ids=batch["path_ids"],
-            path_lengths=batch["path_lengths"],
-            attention_mask=batch["attention_mask"],
-            labels=batch["labels"],
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
         )
 
         # Loss should be computed and not be NaN or Inf
@@ -474,18 +467,18 @@ class TestLeftPadding:
 
         # Training pass (grammar constraints applied)
         output = model(
-            input_ids=batch["input_ids"],
-            path_types=batch["path_types"],
-            path_ids=batch["path_ids"],
-            path_lengths=batch["path_lengths"],
-            attention_mask=batch["attention_mask"],
-            labels=batch["labels"],
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
         )
 
         # For positions where we predict real tokens, logits should have valid entries
         # (some tokens masked to -inf, but not all)
-        for b in range(batch["input_ids"].shape[0]):
-            mask = batch["attention_mask"][b]
+        for b in range(batch.input_ids.shape[0]):
+            mask = batch.attention_mask[b]
             # For each real position (except the last which predicts nothing useful)
             for t in range(mask.sum().item() - 1):
                 pos = (~mask).sum().item() + t  # Actual position in padded sequence
@@ -1032,8 +1025,9 @@ class TestEndToEndTraining:
         assert state.global_step > 0
 
         # Model should produce valid output
-        batch = tokenizer.encode_batch([train_data[0]])
-        batch = batch.to(trainer.device)
+        collator = OrigamiDataCollator(tokenizer, include_labels=False)
+        instances = [tokenizer.tokenize(train_data[0])]
+        batch = collator(instances).to(trainer.device)
 
         model.eval()
         with torch.no_grad():
@@ -1092,8 +1086,9 @@ class TestEndToEndTraining:
             assert not torch.isinf(param).any(), f"Inf in {name}"
 
         # Verify model still produces valid output
-        batch = tokenizer.encode_batch([train_data[0]])
-        batch = batch.to(trainer.device)
+        collator = OrigamiDataCollator(tokenizer, include_labels=False)
+        instances = [tokenizer.tokenize(train_data[0])]
+        batch = collator(instances).to(trainer.device)
 
         model.eval()
         with torch.no_grad():

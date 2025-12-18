@@ -21,6 +21,7 @@ from origami.model import (
     create_backbone,
 )
 from origami.tokenizer import JSONTokenizer
+from origami.training import OrigamiDataCollator
 from origami.utils import available_devices as get_available_devices
 
 AVAILABLE_DEVICES = get_available_devices()
@@ -383,7 +384,7 @@ class TestOrigamiModel:
         """Test forward pass without labels."""
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30}])
 
         output = model(
             input_ids=batch.input_ids,
@@ -403,7 +404,7 @@ class TestOrigamiModel:
         """Test forward pass with labels (computes loss)."""
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30}])
 
         # Use input_ids as labels (teacher forcing)
         output = model(
@@ -426,7 +427,7 @@ class TestOrigamiModel:
             {"name": "Alice", "age": 30},
             {"name": "Bob", "active": True},
         ]
-        batch = tokenizer.encode_batch(objects)
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(objects)
 
         output = model(
             input_ids=batch.input_ids,
@@ -453,7 +454,7 @@ class TestOrigamiModel:
             {"name": "Alice", "age": 30, "active": True},  # Longer
             {"name": "Bob"},  # Shorter
         ]
-        batch = tokenizer.encode_batch(objects)
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(objects)
 
         # Compute loss with attention mask
         output_with_mask = model(
@@ -493,8 +494,8 @@ class TestOrigamiModel:
         long_obj = {"name": "Alice", "age": 30, "active": True}
 
         # Encode separately to get different sequence lengths
-        batch_short = tokenizer.encode_batch([short_obj])
-        batch_long = tokenizer.encode_batch([long_obj])
+        batch_short = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([short_obj])
+        batch_long = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([long_obj])
 
         # Compute individual losses
         loss_short = model(
@@ -516,7 +517,7 @@ class TestOrigamiModel:
         ).loss
 
         # Now batch them together (will have padding)
-        batch_combined = tokenizer.encode_batch([short_obj, long_obj])
+        batch_combined = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([short_obj, long_obj])
 
         output_combined = model(
             input_ids=batch_combined.input_ids,
@@ -549,7 +550,7 @@ class TestOrigamiModel:
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
         # Use data with arrays so index_embeddings gets gradients
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30, "scores": [90, 85]}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30, "scores": [90, 85]}])
 
         output = model(
             input_ids=batch.input_ids,
@@ -580,7 +581,7 @@ class TestOrigamiModel:
         """Test forward pass on different devices."""
         model = OrigamiModel(config, vocab=tokenizer.vocab).to(device)
 
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30}])
         batch = batch.to(device)
 
         output = model(
@@ -602,7 +603,7 @@ class TestOrigamiModel:
         model = OrigamiModel(config, vocab=tokenizer.vocab).to(device)
 
         # Use data with arrays so index_embeddings gets gradients
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30, "scores": [90, 85]}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30, "scores": [90, 85]}])
         batch = batch.to(device)
 
         output = model(
@@ -642,7 +643,7 @@ class TestOrigamiModel:
         # Verify continuous head exists
         assert model.continuous_head is not None
 
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30}])
         output = model(
             input_ids=batch.input_ids,
             path_types=batch.path_types,
@@ -671,7 +672,7 @@ class TestOrigamiModel:
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = tokenizer.encode_batch([{"name": "Alice", "age": 30}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice", "age": 30}])
         seq_len = batch.input_ids.shape[1]
 
         # Create numeric values and mask (simulate NUM tokens at positions 3, 5)
@@ -726,7 +727,7 @@ class TestEncodeBatch:
 
     def test_encode_batch_single(self, tokenizer):
         """Test encoding a single object."""
-        batch = tokenizer.encode_batch([{"name": "Alice"}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice"}])
 
         assert batch.input_ids.shape[0] == 1
         assert batch.attention_mask.shape == batch.input_ids.shape
@@ -741,7 +742,7 @@ class TestEncodeBatch:
             {"name": "Alice", "age": 30, "scores": [90, 85]},
             {"name": "Bob"},
         ]
-        batch = tokenizer.encode_batch(objects)
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(objects)
 
         assert batch.input_ids.shape[0] == 2
         # First object is longer, so second should be padded
@@ -754,7 +755,7 @@ class TestEncodeBatch:
         """Test that path types are correctly encoded."""
         from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
 
-        batch = tokenizer.encode_batch([{"scores": [90, 85]}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"scores": [90, 85]}])
 
         # Find positions where path has elements
         path_lengths = batch.path_lengths[0]
@@ -769,8 +770,8 @@ class TestEncodeBatch:
 
     def test_encode_batch_empty_raises(self, tokenizer):
         """Test that encoding empty batch raises error."""
-        with pytest.raises(ValueError, match="Cannot encode empty batch"):
-            tokenizer.encode_batch([])
+        with pytest.raises(ValueError, match="Cannot collate empty batch"):
+            OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([])
 
     def test_encode_batch_shuffle(self, tokenizer):
         """Test that shuffle produces different orderings."""
@@ -782,7 +783,7 @@ class TestEncodeBatch:
         tokenizer.fit([obj])
 
         # Encode multiple times with shuffle
-        batches = [tokenizer.encode_batch([obj], shuffle=True) for _ in range(10)]
+        batches = [OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([obj], shuffle=True) for _ in range(10)]
 
         # Get token sequences
         sequences = [tuple(b.input_ids[0].tolist()) for b in batches]
@@ -795,7 +796,7 @@ class TestEncodeBatch:
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_encode_batch_to_device(self, tokenizer, device):
         """Test moving encoded batch to different devices."""
-        batch = tokenizer.encode_batch([{"name": "Alice"}])
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"name": "Alice"}])
 
         # Default should be CPU
         assert batch.input_ids.device.type == "cpu"
@@ -816,7 +817,7 @@ class TestEncodeBatch:
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_encode_batch_with_device_param(self, tokenizer, device):
         """Test encoding directly to a device."""
-        batch = tokenizer.encode_batch([{"name": "Alice"}], device=device)
+        batch = OrigamiDataCollator(tokenizer, include_labels=False, device=device).collate_objects([{"name": "Alice"}])
 
         assert batch.input_ids.device.type == device.type
         assert batch.attention_mask.device.type == device.type

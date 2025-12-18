@@ -9,9 +9,12 @@ Provides inference modes for trained ORIGAMI models:
 from .embedder import OrigamiEmbedder
 from .generator import OrigamiGenerator
 from .predictor import OrigamiPredictor
+from .utils import GenerationError, find_target_positions
 
 __all__ = [
+    "GenerationError",
     "OrigamiEmbedder",
     "OrigamiGenerator",
     "OrigamiPredictor",
+    "find_target_positions",
 ]

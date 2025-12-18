@@ -11,6 +11,8 @@ from torch import Tensor
 
 from origami.preprocessing import move_target_last
 
+from .utils import find_target_positions
+
 if TYPE_CHECKING:
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import JSONTokenizer
@@ -38,8 +40,8 @@ class OrigamiEmbedder:
         # Embed single document
         embedding = embedder.embed({"name": "Alice", "age": 30})
 
-        # Embed batch
-        embeddings = embedder.embed_batch([doc1, doc2, doc3])
+        # Embed batch with internal batching
+        embeddings = embedder.embed_batch(objects, batch_size=64)
 
         # Target-specific embedding for classification
         embedder_target = OrigamiEmbedder(model, tokenizer, pooling="target")
@@ -64,15 +66,23 @@ class OrigamiEmbedder:
             pooling: Pooling strategy for aggregating hidden states
 
         Note:
-            Embedder always runs on CPU as benchmarking shows it's faster
-            for the model sizes typically used with ORIGAMI.
+            The Embedder uses the model's current device dynamically.
+            Move the model to your desired device before calling embed().
         """
+        from origami.training.collator import OrigamiDataCollator
+
         self.model = model
         self.tokenizer = tokenizer
         self.pooling = pooling
-        self.device = torch.device("cpu")
-        self.model.to(self.device)
         self.model.eval()
+
+        # Create collator for batch creation (include_labels=False for inference)
+        self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
+
+    @property
+    def device(self) -> torch.device:
+        """Get the model's current device dynamically."""
+        return next(self.model.parameters()).device
 
     @torch.no_grad()
     def embed(
@@ -103,63 +113,76 @@ class OrigamiEmbedder:
         objects: list[dict],
         target_key: str | None = None,
         normalize: bool = True,
+        batch_size: int = 32,
     ) -> Tensor:
         """Embed multiple JSON objects.
+
+        Handles batching internally for large object lists.
 
         Args:
             objects: List of JSON objects to embed
             target_key: Required if pooling="target". Dot-separated key path.
                         All objects in batch use the same target_key.
             normalize: Whether to L2-normalize embeddings
+            batch_size: Number of objects to process in parallel
 
         Returns:
-            Embedding tensor of shape (batch_size, d_model)
+            Embedding tensor of shape (len(objects), d_model)
 
         Raises:
             ValueError: If pooling="target" but target_key not provided
         """
-        if self.pooling == "target":
-            if target_key is None:
-                raise ValueError("target_key is required when pooling='target'")
-            # Reorder objects to place target key last for maximum context
-            objects = [move_target_last(obj, target_key) for obj in objects]
+        if self.pooling == "target" and target_key is None:
+            raise ValueError("target_key is required when pooling='target'")
 
-        # Tokenize and encode
-        batch = self.tokenizer.encode_batch(objects, shuffle=False)
-        batch = batch.to(self.device)
+        all_embeddings = []
 
-        # Forward pass
-        output = self.model(
-            input_ids=batch.input_ids,
-            path_types=batch.path_types,
-            path_ids=batch.path_ids,
-            path_lengths=batch.path_lengths,
-            attention_mask=batch.attention_mask,
-        )
+        for start in range(0, len(objects), batch_size):
+            batch_objects = objects[start : start + batch_size]
 
-        hidden_states = output.hidden_states  # (batch, seq_len, d_model)
+            # Reorder if target pooling
+            if self.pooling == "target":
+                batch_objects = [move_target_last(obj, target_key) for obj in batch_objects]
 
-        # Apply pooling strategy
-        if self.pooling == "mean":
-            embeddings = self._mean_pool(hidden_states, batch.attention_mask)
-        elif self.pooling == "max":
-            embeddings = self._max_pool(hidden_states, batch.attention_mask)
-        elif self.pooling == "last":
-            embeddings = self._last_pool(hidden_states, batch.attention_mask)
-        elif self.pooling == "target":
-            embeddings = self._target_pool(
-                hidden_states,
-                batch.input_ids,
-                target_key,  # type: ignore
+            # Create batch using collator
+            batch = self._collator.collate_objects(batch_objects, shuffle=False)
+            batch = batch.to(self.device)
+
+            # Forward pass
+            output = self.model(
+                input_ids=batch.input_ids,
+                path_types=batch.path_types,
+                path_ids=batch.path_ids,
+                path_lengths=batch.path_lengths,
+                attention_mask=batch.attention_mask,
+                numeric_values=batch.numeric_values,
             )
-        else:
-            raise ValueError(f"Unknown pooling strategy: {self.pooling}")
 
-        # Normalize if requested
-        if normalize:
-            embeddings = F.normalize(embeddings, p=2, dim=-1)
+            hidden_states = output.hidden_states  # (batch, seq_len, d_model)
 
-        return embeddings
+            # Apply pooling strategy
+            if self.pooling == "mean":
+                embeddings = self._mean_pool(hidden_states, batch.attention_mask)
+            elif self.pooling == "max":
+                embeddings = self._max_pool(hidden_states, batch.attention_mask)
+            elif self.pooling == "last":
+                embeddings = self._last_pool(hidden_states, batch.attention_mask)
+            elif self.pooling == "target":
+                embeddings = self._target_pool(
+                    hidden_states,
+                    batch.input_ids,
+                    target_key,  # type: ignore
+                )
+            else:
+                raise ValueError(f"Unknown pooling strategy: {self.pooling}")
+
+            # Normalize if requested
+            if normalize:
+                embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+            all_embeddings.append(embeddings)
+
+        return torch.cat(all_embeddings, dim=0)
 
     def _mean_pool(self, hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
         """Mean pooling over non-padding positions.
@@ -172,13 +195,17 @@ class OrigamiEmbedder:
             Pooled embeddings of shape (batch, d_model)
         """
         # Expand mask for broadcasting
-        mask = attention_mask.unsqueeze(-1).float()  # (batch, seq_len, 1)
+        mask = attention_mask.unsqueeze(-1)  # (batch, seq_len, 1)
+
+        # Mask out padding positions (set to 0) to avoid NaN * 0 = NaN
+        # This is needed because hidden_states may contain NaN at padding positions
+        masked_hidden = hidden_states.masked_fill(~mask, 0.0)
 
         # Sum over valid positions
-        summed = (hidden_states * mask).sum(dim=1)  # (batch, d_model)
+        summed = masked_hidden.sum(dim=1)  # (batch, d_model)
 
         # Divide by count of valid positions
-        counts = mask.sum(dim=1).clamp(min=1)  # (batch, 1)
+        counts = mask.float().sum(dim=1).clamp(min=1)  # (batch, 1)
 
         return summed / counts
 
@@ -239,28 +266,10 @@ class OrigamiEmbedder:
         Returns:
             Target position embeddings of shape (batch, d_model)
         """
-        from origami.tokenizer.vocabulary import KeyToken
-
-        # Get the leaf key (last part of dot-separated path)
-        leaf_key = target_key.split(".")[-1]
-
-        # Get the token ID for this key
-        key_token = KeyToken(leaf_key)
-        key_id = self.tokenizer.vocab.encode(key_token)
-
-        # Find position of target key in each sequence
-        batch_size = input_ids.size(0)
-        target_positions = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
-
-        for i in range(batch_size):
-            # Find all positions where this key appears
-            matches = (input_ids[i] == key_id).nonzero(as_tuple=True)[0]
-            if len(matches) == 0:
-                raise ValueError(f"Target key '{leaf_key}' not found in sequence {i}")
-            # Use the last occurrence (after move_target_last, target is last)
-            target_positions[i] = matches[-1]
+        target_positions = find_target_positions(input_ids, target_key, self.tokenizer.vocab)
 
         # Gather hidden states at target positions
+        batch_size = hidden_states.size(0)
         batch_indices = torch.arange(batch_size, device=hidden_states.device)
         return hidden_states[batch_indices, target_positions]  # (batch, d_model)
 

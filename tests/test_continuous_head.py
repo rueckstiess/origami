@@ -88,28 +88,28 @@ class TestEmbeddingsWithNumeric:
         # Forward with different numeric values
         with torch.no_grad():
             output1 = model.embeddings(
-                batch["input_ids"],
-                batch["path_types"],
-                batch["path_ids"],
-                batch["path_lengths"],
-                numeric_values=batch["numeric_values"],
+                batch.input_ids,
+                batch.path_types,
+                batch.path_ids,
+                batch.path_lengths,
+                numeric_values=batch.numeric_values,
             )
 
             # Change numeric value
-            modified_numerics = batch["numeric_values"].clone()
-            modified_numerics[batch["numeric_mask"]] = 2.0
+            modified_numerics = batch.numeric_values.clone()
+            modified_numerics[batch.numeric_mask] = 2.0
 
             output2 = model.embeddings(
-                batch["input_ids"],
-                batch["path_types"],
-                batch["path_ids"],
-                batch["path_lengths"],
+                batch.input_ids,
+                batch.path_types,
+                batch.path_ids,
+                batch.path_lengths,
                 numeric_values=modified_numerics,
             )
 
         # Outputs should differ at NUM token positions
         diff = (output1 - output2).abs()
-        assert diff[batch["numeric_mask"]].sum() > 0
+        assert diff[batch.numeric_mask].sum() > 0
 
 
 class TestModelWithContinuousHead:
@@ -148,18 +148,18 @@ class TestModelWithContinuousHead:
         batch = collator(instances)
 
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
         )
 
         assert output.continuous_params is not None
         weights, means, log_vars = output.continuous_params
 
         # Check shapes
-        batch_size, seq_len = batch["input_ids"].shape
+        batch_size, seq_len = batch.input_ids.shape
         num_components = model.config.num_mixture_components
 
         assert weights.shape == (batch_size, seq_len, num_components)
@@ -176,14 +176,14 @@ class TestModelWithContinuousHead:
 
         # Forward with labels - model handles shift internally
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch["numeric_values"],
-            numeric_mask=batch["numeric_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
         )
 
         assert output.loss is not None
@@ -199,14 +199,14 @@ class TestModelWithContinuousHead:
         batch = collator(instances)
 
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch["numeric_values"],
-            numeric_mask=batch["numeric_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
         )
 
         output.loss.backward()
@@ -242,8 +242,8 @@ class TestCollatorWithNumerics:
         collator = OrigamiDataCollator(tokenizer)
         batch = collator(instances)
 
-        assert batch["numeric_values"] is not None
-        assert batch["numeric_mask"] is not None
+        assert batch.numeric_values is not None
+        assert batch.numeric_mask is not None
 
     def test_numeric_mask_marks_num_positions(self, tokenizer):
         """Test numeric_mask marks NUM token positions."""
@@ -255,10 +255,10 @@ class TestCollatorWithNumerics:
 
         # Find NUM token positions
         num_token_id = 9  # NUM token ID
-        num_positions = batch["input_ids"] == num_token_id
+        num_positions = batch.input_ids == num_token_id
 
         # numeric_mask should match NUM positions
-        assert (batch["numeric_mask"] == num_positions).all()
+        assert (batch.numeric_mask == num_positions).all()
 
     def test_numeric_values_at_correct_positions(self, tokenizer):
         """Test numeric values are at correct positions."""
@@ -269,9 +269,9 @@ class TestCollatorWithNumerics:
         batch = collator(instances)
 
         # Get value at NUM position
-        num_pos = batch["numeric_mask"][0].nonzero(as_tuple=True)[0]
+        num_pos = batch.numeric_mask[0].nonzero(as_tuple=True)[0]
         if len(num_pos) > 0:
-            value = batch["numeric_values"][0, num_pos[0]].item()
+            value = batch.numeric_values[0, num_pos[0]].item()
             assert abs(value - 0.75) < 0.001
 
 
@@ -313,14 +313,14 @@ class TestEndToEndContinuousPipeline:
 
         # Training step - model handles shift internally
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch["numeric_values"],
-            numeric_mask=batch["numeric_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
         )
 
         _initial_loss = output.loss.item()  # noqa: F841
@@ -330,14 +330,14 @@ class TestEndToEndContinuousPipeline:
         # Another step should reduce loss (usually)
         optimizer.zero_grad()
         output2 = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch["numeric_values"],
-            numeric_mask=batch["numeric_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
         )
 
         # Just verify training runs without error
@@ -367,14 +367,14 @@ class TestEndToEndContinuousPipeline:
         batch = collator(instances)
 
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch["numeric_values"],
-            numeric_mask=batch["numeric_mask"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
         )
 
         assert output.loss is not None
@@ -433,12 +433,12 @@ class TestMixedDiscreteAndContinuous:
 
         # Should work without numeric tensors
         output = model(
-            batch["input_ids"],
-            batch["path_types"],
-            batch["path_ids"],
-            batch["path_lengths"],
-            batch["attention_mask"],
-            labels=batch["labels"],
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
+            labels=batch.labels,
         )
 
         assert output.loss is not None

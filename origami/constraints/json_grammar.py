@@ -71,8 +71,9 @@ class JSONGrammarPDA:
         self._array_elements_mask = self._values_and_containers_mask.clone()
         self._array_elements_mask[vocab.array_end_id] = True
 
-        # Cache for device-specific masks (lazy initialization)
+        # Cache for device-specific tensors (lazy initialization)
         self._device_masks: dict[torch.device, tuple[Tensor, Tensor, Tensor]] = {}
+        self._device_ids: dict[torch.device, tuple[Tensor, Tensor]] = {}
 
     def compute_valid_mask(
         self,
@@ -83,6 +84,9 @@ class JSONGrammarPDA:
         For autoregressive models: logits[t] predicts the token at position t+1.
         This method returns mask[t] indicating which tokens are valid at
         position t+1, based on state after processing tokens 0..t.
+
+        This is implemented as a thin wrapper around get_next_token_mask(),
+        ensuring single code path for both training and inference.
 
         Note: With left-padded sequences, PAD tokens at the start are handled
         correctly by the grammar state (they don't update state). The loss
@@ -99,53 +103,16 @@ class JSONGrammarPDA:
         device = token_ids.device
         vocab_size = self.vocab.size
 
-        # Initialize state tensors (batch-parallel)
-        # Stack stores container type at each depth level
-        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
-        # Current depth (0 = at root level)
-        depth = torch.zeros(batch_size, dtype=torch.long, device=device)
-        # Whether we're awaiting a value (after key in object)
-        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        # Whether START has been seen
-        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        # Whether root container has been closed
-        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        # Whether END has been seen
-        ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
-
-        # Output mask: valid tokens for position t
+        # Initialize output mask
         masks = torch.zeros(batch_size, seq_len, vocab_size, dtype=torch.bool, device=device)
 
-        # Move pre-computed ID tensors to device
-        key_ids = self._key_ids.to(device)
-        value_ids = self._value_ids.to(device)
+        # Initialize state
+        state = self.init_state(batch_size, device)
 
-        # Process each position sequentially
-        # For autoregressive training: logits[t] predicts token at position t+1
-        # So mask[t] should indicate valid tokens for position t+1, given tokens 0..t
+        # Process each position using the same code path as incremental generation
         for t in range(seq_len):
-            # Get current token
-            current_token = token_ids[:, t]  # (batch,)
-
-            # Update state with current token FIRST
-            # Note: PAD tokens don't match any grammar token, so state remains unchanged
-            stack, depth, awaiting_value, seen_start, root_closed, ended = self._update_state(
-                current_token, stack, depth, awaiting_value, seen_start, root_closed, ended
-            )
-
-            # Compute valid tokens for NEXT position (t+1) based on state after 0..t
-            valid_mask = self._get_valid_tokens(
-                stack,
-                depth,
-                awaiting_value,
-                seen_start,
-                root_closed,
-                ended,
-                key_ids,
-                value_ids,
-                device,
-            )
-
+            current_token = token_ids[:, t]
+            valid_mask, state = self.get_next_token_mask(current_token, state)
             masks[:, t] = valid_mask
 
         return masks
@@ -264,15 +231,16 @@ class JSONGrammarPDA:
         is_array_start = token == self.vocab.array_start_id
         is_array_end = token == self.vocab.array_end_id
 
-        # Check if token is a key (vectorized)
-        is_key = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        for kid in self._key_ids:
-            is_key = is_key | (token == kid.item())
-
-        # Check if token is a value (primitive, vectorized)
-        is_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        for vid in self._value_ids:
-            is_value = is_value | (token == vid.item())
+        # Check if token is a key or value (vectorized with torch.isin)
+        # Use cached device-specific tensors to avoid repeated .to() calls
+        if device not in self._device_ids:
+            self._device_ids[device] = (
+                self._key_ids.to(device),
+                self._value_ids.to(device),
+            )
+        key_ids, value_ids = self._device_ids[device]
+        is_key = torch.isin(token, key_ids)
+        is_value = torch.isin(token, value_ids)
 
         # START: mark seen_start = True
         new_seen_start = new_seen_start | is_start

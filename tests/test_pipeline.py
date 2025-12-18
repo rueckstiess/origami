@@ -293,8 +293,10 @@ class TestPipelineGenerate:
             {"name": "Alice", "age": 25},
             {"name": "Bob", "age": 30},
         ]
-        pipeline = OrigamiPipeline()
-        pipeline.fit(data, epochs=1, verbose=False)
+
+        config = PipelineConfig(d_model=16, n_heads=4, n_layers=4)
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1, verbose=True)
         return pipeline
 
     def test_generate_single(self, fitted_pipeline):
@@ -469,3 +471,76 @@ class TestPipelineRepr:
         config = PipelineConfig(numeric_mode="scale")
         pipeline = OrigamiPipeline(config)
         assert "scale" in repr(pipeline)
+
+
+class TestPipelineDeviceManagement:
+    """Tests for automatic device management."""
+
+    def test_model_on_cpu_after_inference(self):
+        """Test that model moves to CPU after first inference call."""
+        data = [{"a": i, "b": i * 2} for i in range(50)]
+
+        # Force CPU device in config to test the logic
+        config = PipelineConfig(d_model=32, n_layers=2, device="cpu")
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1)
+
+        # Model should be on configured device after fit
+        device = next(pipeline.model.parameters()).device
+        assert device.type == "cpu"
+
+        # After prediction, should still be on CPU
+        _ = pipeline.predict({"a": 3, "b": 0}, target_key="b")
+        device = next(pipeline.model.parameters()).device
+        assert device.type == "cpu"
+
+    def test_inference_moves_to_cpu(self):
+        """Test that inference components trigger device move."""
+        data = [{"a": i} for i in range(20)]
+        config = PipelineConfig(d_model=32, n_layers=2, device="cpu")
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1)
+
+        # All inference methods should work and keep model on CPU
+        _ = pipeline.predict({"a": 5}, target_key="a")
+        assert next(pipeline.model.parameters()).device.type == "cpu"
+
+        _ = pipeline.generate(num_samples=1)
+        assert next(pipeline.model.parameters()).device.type == "cpu"
+
+        _ = pipeline.embed({"a": 5})
+        assert next(pipeline.model.parameters()).device.type == "cpu"
+
+    def test_training_device_set_from_config(self):
+        """Test that training device is resolved from config."""
+        config = PipelineConfig(d_model=32, n_layers=2, device="cpu")
+        pipeline = OrigamiPipeline(config)
+
+        # Before fit, training device is None
+        assert pipeline._training_device is None
+
+        data = [{"a": i} for i in range(20)]
+        pipeline.fit(data, epochs=1)
+
+        # After fit, training device should be set
+        assert pipeline._training_device is not None
+        assert pipeline._training_device.type == "cpu"
+
+    def test_load_sets_training_device(self, tmp_path):
+        """Test that loading a model sets training device."""
+        data = [{"a": i, "b": i * 2} for i in range(50)]
+
+        config = PipelineConfig(d_model=32, n_layers=2, device="cpu")
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1)
+
+        # Save and reload
+        path = tmp_path / "model.pt"
+        pipeline.save(path)
+        loaded = OrigamiPipeline.load(path)
+
+        # Training device should be set from config
+        assert loaded._training_device is not None
+
+        # Model should be on CPU (loaded with map_location="cpu")
+        assert next(loaded.model.parameters()).device.type == "cpu"

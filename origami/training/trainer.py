@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from torch import Tensor
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -29,7 +28,7 @@ from .dataset import EvalDataset, UpscaledDataset
 if TYPE_CHECKING:
     from origami.model.config import TrainingConfig
     from origami.model.origami_model import OrigamiModel
-    from origami.tokenizer.json_tokenizer import JSONTokenizer
+    from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
 
 @dataclass
@@ -288,27 +287,31 @@ class OrigamiTrainer:
             duration_seconds=duration,
         )
 
-    def _train_step(self, batch: dict[str, Tensor]) -> tuple[float, int]:
+    def _train_step(self, batch: "EncodedBatch") -> tuple[float, int]:
         """Execute single training step.
 
         Args:
-            batch: Collated batch dictionary
+            batch: Collated EncodedBatch
 
         Returns:
             Tuple of (loss value, number of tokens)
         """
         self.optimizer.zero_grad()
 
-        # Forward pass (include numeric values for continuous head if present)
+        # Compute grammar mask if model has grammar constraints enabled
+        grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
+
+        # Forward pass with explicit grammar mask
         output = self.model(
-            input_ids=batch["input_ids"],
-            path_types=batch["path_types"],
-            path_ids=batch["path_ids"],
-            path_lengths=batch["path_lengths"],
-            attention_mask=batch["attention_mask"],
-            labels=batch["labels"],
-            numeric_values=batch.get("numeric_values"),
-            numeric_mask=batch.get("numeric_mask"),
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
+            grammar_mask=grammar_mask,
         )
         loss = output.loss
 
@@ -323,7 +326,7 @@ class OrigamiTrainer:
         self.scheduler.step()
 
         # Count tokens (excluding padding)
-        num_tokens = batch["attention_mask"].sum().item()
+        num_tokens = batch.attention_mask.sum().item()
 
         return loss.item(), int(num_tokens)
 
@@ -352,19 +355,23 @@ class OrigamiTrainer:
         start_time = time.time()
 
         for batch in eval_loader:
+            # Compute grammar mask for evaluation loss
+            grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
+
             output = self.model(
-                input_ids=batch["input_ids"],
-                path_types=batch["path_types"],
-                path_ids=batch["path_ids"],
-                path_lengths=batch["path_lengths"],
-                attention_mask=batch["attention_mask"],
-                labels=batch["labels"],
-                numeric_values=batch.get("numeric_values"),
-                numeric_mask=batch.get("numeric_mask"),
+                input_ids=batch.input_ids,
+                path_types=batch.path_types,
+                path_ids=batch.path_ids,
+                path_lengths=batch.path_lengths,
+                attention_mask=batch.attention_mask,
+                labels=batch.labels,
+                numeric_values=batch.numeric_values,
+                numeric_mask=batch.numeric_mask,
+                grammar_mask=grammar_mask,
             )
 
             total_loss += output.loss.item()
-            total_tokens += batch["attention_mask"].sum().item()
+            total_tokens += batch.attention_mask.sum().item()
             num_batches += 1
 
         duration = time.time() - start_time

@@ -16,6 +16,7 @@ from origami.model import OrigamiConfig, OrigamiModel
 from origami.model.config import TrainingConfig
 from origami.preprocessing import NumericDiscretizer, NumericScaler
 from origami.tokenizer import JSONTokenizer
+from origami.utils.device import auto_device
 
 from .config import PipelineConfig
 
@@ -81,6 +82,11 @@ class OrigamiPipeline:
         self._model: OrigamiModel | None = None
         self._fitted = False
 
+        # Device management
+        # _training_device: resolved device for training (GPU/MPS if available)
+        # After inference, model stays on CPU (faster for autoregressive generation)
+        self._training_device: torch.device | None = None
+
         # Lazy-initialized inference components
         self._generator: OrigamiGenerator | None = None
         self._predictor: OrigamiPredictor | None = None
@@ -95,6 +101,56 @@ class OrigamiPipeline:
     def tokenizer(self) -> JSONTokenizer | None:
         """Get the tokenizer (None before fit/load)."""
         return self._tokenizer
+
+    def _resolve_device(self) -> torch.device:
+        """Resolve the configured device string to an actual device.
+
+        Returns:
+            torch.device based on config.device setting
+        """
+        if self.config.device == "auto":
+            return auto_device()
+        return torch.device(self.config.device)
+
+    def _ensure_training_device(self) -> None:
+        """Move model to training device (GPU/MPS if available).
+
+        Called at start of fit() to ensure training uses accelerator.
+        """
+        if self._model is None:
+            return
+
+        if self._training_device is None:
+            self._training_device = self._resolve_device()
+
+        current_device = next(self._model.parameters()).device
+        if current_device != self._training_device:
+            self._model.to(self._training_device)
+            # Invalidate inference components (they cache the model's device)
+            self._generator = None
+            self._predictor = None
+            self._embedder = None
+
+    def _ensure_inference_device(self) -> None:
+        """Move model to CPU for inference.
+
+        CPU is faster for autoregressive generation due to:
+        - No GPU kernel launch overhead per token
+        - No CPU<->GPU memory transfer per step
+        - Better single-threaded performance for sequential ops
+
+        Once moved to CPU, the model stays there until fit() is called again.
+        """
+        if self._model is None:
+            return
+
+        current_device = next(self._model.parameters()).device
+        if current_device.type != "cpu":
+            self._model.to("cpu")
+            # Invalidate inference components (they cache the model's device)
+            self._generator = None
+            self._predictor = None
+            self._embedder = None
 
     def fit(
         self,
@@ -145,11 +201,14 @@ class OrigamiPipeline:
         if verbose:
             print(f"Vocabulary size: {self._tokenizer.vocab.size}")
 
-        # Step 3: Create model
+        # Step 3: Create model and move to training device
         self._model = self._create_model()
+        self._training_device = self._resolve_device()
+        self._model.to(self._training_device)
 
         if verbose:
             print(f"Model parameters: {self._model.get_num_parameters():,}")
+            print(f"Training device: {self._training_device}")
 
         # Step 4: Create trainer and train
         train_config = TrainingConfig(
@@ -178,6 +237,7 @@ class OrigamiPipeline:
             config=train_config,
             shuffle=self.config.shuffle_keys,
             callbacks=all_callbacks if all_callbacks else None,
+            device=self._training_device,
         )
 
         # Run training
@@ -309,11 +369,14 @@ class OrigamiPipeline:
         # Reconstruct tokenizer
         pipeline._tokenizer = cls._tokenizer_from_dict(checkpoint["tokenizer_state"])
 
-        # Reconstruct model
+        # Reconstruct model (stays on CPU - faster for inference)
         model_config = OrigamiConfig(**checkpoint["model_config"])
         pipeline._model = OrigamiModel(model_config, vocab=pipeline._tokenizer.vocab)
         pipeline._model.load_state_dict(checkpoint["model_state_dict"])
         pipeline._model.eval()
+
+        # Set training device for potential future fit() calls
+        pipeline._training_device = pipeline._resolve_device()
 
         pipeline._fitted = True
         return pipeline
@@ -342,12 +405,14 @@ class OrigamiPipeline:
         self,
         objects: list[dict],
         target_key: str,
+        batch_size: int = 32,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
         Args:
             objects: List of JSON objects
             target_key: Key to predict (same for all objects)
+            batch_size: Number of objects to process in parallel
 
         Returns:
             List of predicted values (one per object).
@@ -358,17 +423,11 @@ class OrigamiPipeline:
         # Preprocess objects
         processed = self._preprocess_for_inference(objects)
 
-        # Get or create predictor
+        # Get or create predictor (has inverse_transform_fn configured if needed)
         predictor = self._get_predictor()
 
-        # Run prediction
-        results = predictor.predict_batch(processed, target_key)
-
-        # Inverse transform results if needed
-        if self._preprocessor is not None and self.config.numeric_mode == "scale":
-            results = self._inverse_transform_predictions(results, target_key)
-
-        return results
+        # Run prediction (Predictor handles inverse transform internally)
+        return predictor.predict_batch(processed, target_key, batch_size=batch_size)
 
     def predict_proba(
         self,
@@ -405,6 +464,7 @@ class OrigamiPipeline:
     def generate(
         self,
         num_samples: int = 1,
+        batch_size: int = 32,
         max_length: int = 512,
         temperature: float = 1.0,
         top_k: int | None = None,
@@ -418,6 +478,7 @@ class OrigamiPipeline:
 
         Args:
             num_samples: Number of objects to generate
+            batch_size: Number of samples to generate in parallel
             max_length: Maximum sequence length
             temperature: Sampling temperature (1.0 = unchanged, <1.0 = more greedy)
             top_k: If set, only sample from top-k most likely tokens
@@ -435,6 +496,7 @@ class OrigamiPipeline:
         # Generate samples
         samples = generator.generate(
             num_samples=num_samples,
+            batch_size=batch_size,
             max_length=max_length,
             temperature=temperature,
             top_k=top_k,
@@ -500,7 +562,7 @@ class OrigamiPipeline:
         # Get embeddings
         embeddings = embedder.embed_batch(processed, target_key=target_key, normalize=normalize)
 
-        return embeddings.numpy()
+        return embeddings.cpu().numpy()
 
     def _check_fitted(self) -> None:
         """Raise error if pipeline hasn't been fitted."""
@@ -527,34 +589,6 @@ class OrigamiPipeline:
             return self._preprocessor.transform(objects)
         else:
             return objects
-
-    def _inverse_transform_predictions(
-        self,
-        results: list[Any],
-        target_key: str,
-    ) -> list[Any]:
-        """Inverse transform predicted values back to original scale."""
-        if not isinstance(self._preprocessor, NumericScaler):
-            return results
-
-        # Get the leaf key for inverse transform
-        leaf_key = target_key.split(".")[-1]
-
-        # Check if this field was scaled
-        if leaf_key not in self._preprocessor.scaled_fields:
-            return results
-
-        # Inverse transform each prediction
-        new_results = []
-        for value in results:
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                # Inverse transform scaled value
-                original = self._preprocessor.inverse_transform_value(leaf_key, value)
-                new_results.append(original)
-            else:
-                new_results.append(value)
-
-        return new_results
 
     def _inverse_transform_object(self, obj: dict) -> dict:
         """Inverse transform all scaled numeric values in an object."""
@@ -593,19 +627,64 @@ class OrigamiPipeline:
             return value
 
     def _get_generator(self) -> OrigamiGenerator:
-        """Get or create the generator."""
+        """Get or create the generator.
+
+        Moves model to CPU for faster inference if not already there.
+        """
+        self._ensure_inference_device()
         if self._generator is None:
             self._generator = OrigamiGenerator(self._model, self._tokenizer)
         return self._generator
 
     def _get_predictor(self) -> OrigamiPredictor:
-        """Get or create the predictor."""
+        """Get or create the predictor with inverse transform configured.
+
+        Moves model to CPU for faster inference if not already there.
+        """
+        self._ensure_inference_device()
         if self._predictor is None:
-            self._predictor = OrigamiPredictor(self._model, self._tokenizer)
+            inverse_fn = None
+            if isinstance(self._preprocessor, NumericScaler):
+                # Create inverse transform function for the predictor
+                inverse_fn = self._create_inverse_transform_fn()
+
+            self._predictor = OrigamiPredictor(
+                self._model,
+                self._tokenizer,
+                inverse_transform_fn=inverse_fn,
+            )
         return self._predictor
 
+    def _create_inverse_transform_fn(self):
+        """Create an inverse transform function for scaled numeric predictions.
+
+        Returns:
+            Function that takes (value, target_key) and returns the inverse-transformed value.
+        """
+        if not isinstance(self._preprocessor, NumericScaler):
+            return None
+
+        def inverse_transform(value, target_key: str):
+            # Get the leaf key for inverse transform
+            leaf_key = target_key.split(".")[-1]
+
+            # Check if this field was scaled
+            if leaf_key not in self._preprocessor.scaled_fields:
+                return value
+
+            # Only transform numeric values
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return self._preprocessor.inverse_transform_value(leaf_key, value)
+            return value
+
+        return inverse_transform
+
     def _get_embedder(self, pooling: Literal["mean", "max", "last", "target"]) -> OrigamiEmbedder:
-        """Get or create an embedder with the specified pooling."""
+        """Get or create an embedder with the specified pooling.
+
+        Moves model to CPU for faster inference if not already there.
+        """
+        self._ensure_inference_device()
         # Always create a new embedder if pooling strategy differs
         if self._embedder is None or self._embedder.pooling != pooling:
             self._embedder = OrigamiEmbedder(self._model, self._tokenizer, pooling=pooling)

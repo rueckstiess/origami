@@ -377,7 +377,6 @@ class MetricsCallback(TrainerCallback):
         if self.train_sample_size > 0 and self._train_data:
             samples, y_true = self._sample_data(self._train_data, self.train_sample_size)
             y_pred = predictor.predict_batch(samples, self.target_key)
-            print(f"y_pred", y_pred)
 
             for name, metric_fn in self.metrics.items():
                 value = metric_fn(y_true, y_pred)
@@ -563,9 +562,7 @@ class TableLogCallback(TrainerCallback):
         trainer.model.to(original_device)
         trainer.model.train()
 
-    def _sample_data(
-        self, data: list[dict], sample_size: int
-    ) -> tuple[list[dict], list[Any]]:
+    def _sample_data(self, data: list[dict], sample_size: int) -> tuple[list[dict], list[Any]]:
         """Sample data and extract true labels."""
         if sample_size >= len(data):
             samples = data
@@ -575,48 +572,36 @@ class TableLogCallback(TrainerCallback):
         true_labels = [obj[self.target_key] for obj in samples]
         return samples, true_labels
 
-    def _compute_eval_loss(
-        self, trainer: OrigamiTrainer, samples: list[dict]
-    ) -> float:
+    def _compute_eval_loss(self, trainer: OrigamiTrainer, samples: list[dict]) -> float:
         """Compute average loss on samples."""
         import torch
 
         if not samples:
-            print("DEBUG: No samples!")
             return float("nan")
 
         # Tokenize samples (shuffle=False for deterministic eval)
         tokenized = [trainer.tokenizer.tokenize(obj, shuffle=False) for obj in samples]
-        print(f"DEBUG: tokenized {len(tokenized)} samples")
 
-        # Collate into batch
+        # Collate into batch (returns EncodedBatch dataclass)
         batch = trainer.collator(tokenized)
-        print(f"DEBUG: batch keys = {batch.keys()}")
-        print(f"DEBUG: input_ids shape = {batch['input_ids'].shape}")
-        print(f"DEBUG: labels shape = {batch['labels'].shape}")
 
         # Move batch to model's current device (CPU during metrics computation)
         model_device = next(trainer.model.parameters()).device
-        print(f"DEBUG: model_device = {model_device}")
-        batch = {
-            k: v.to(model_device) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
+        batch = batch.to(model_device)
 
         # Forward pass
         with torch.no_grad():
             output = trainer.model(
-                input_ids=batch["input_ids"],
-                path_types=batch["path_types"],
-                path_ids=batch["path_ids"],
-                path_lengths=batch["path_lengths"],
-                attention_mask=batch["attention_mask"],
-                labels=batch["labels"],
-                numeric_values=batch.get("numeric_values"),
-                numeric_mask=batch.get("numeric_mask"),
+                input_ids=batch.input_ids,
+                path_types=batch.path_types,
+                path_ids=batch.path_ids,
+                path_lengths=batch.path_lengths,
+                attention_mask=batch.attention_mask,
+                labels=batch.labels,
+                numeric_values=batch.numeric_values,
+                numeric_mask=batch.numeric_mask,
             )
 
-        print(f"DEBUG: output.loss = {output.loss}")
         if output.loss is None:
             return float("nan")
 
