@@ -553,9 +553,7 @@ class TestPredictorIntegration:
         )
         return OrigamiModel(config, vocab=integration_tokenizer.vocab)
 
-    def test_predictor_uses_generator_internally(
-        self, integration_model, integration_tokenizer
-    ):
+    def test_predictor_uses_generator_internally(self, integration_model, integration_tokenizer):
         """Test that predictor uses generator for value generation."""
         predictor = OrigamiPredictor(integration_model, integration_tokenizer)
 
@@ -565,9 +563,7 @@ class TestPredictorIntegration:
         # Should return a valid value
         assert result is not None or result is None
 
-    def test_predictor_with_grammar_constraints(
-        self, integration_model, integration_tokenizer
-    ):
+    def test_predictor_with_grammar_constraints(self, integration_model, integration_tokenizer):
         """Test that predictor respects grammar constraints via generator."""
         predictor = OrigamiPredictor(integration_model, integration_tokenizer)
 
@@ -623,9 +619,7 @@ class TestAllowComplexValues:
         # NOT a dict or list
         assert not isinstance(result, (dict, list))
 
-    def test_default_is_allow_complex_false(
-        self, model_with_complex, tokenizer_with_complex
-    ):
+    def test_default_is_allow_complex_false(self, model_with_complex, tokenizer_with_complex):
         """Test that default behavior restricts to primitives."""
         predictor = OrigamiPredictor(model_with_complex, tokenizer_with_complex)
 
@@ -647,18 +641,14 @@ class TestAllowComplexValues:
         try:
             # With random weights, may or may not generate complex values
             # but should not raise due to complex value being generated
-            result = predictor.predict(
-                obj, target_key="target", allow_complex_values=True
-            )
+            result = predictor.predict(obj, target_key="target", allow_complex_values=True)
             # Result could be primitive or complex - just check it runs
             assert result is not None or result is None or isinstance(result, (dict, list))
         except GenerationError:
             # Untrained models may not complete within max_tokens
             pass
 
-    def test_batch_predict_allow_complex_values(
-        self, model_with_complex, tokenizer_with_complex
-    ):
+    def test_batch_predict_allow_complex_values(self, model_with_complex, tokenizer_with_complex):
         """Test batch prediction with allow_complex_values parameter."""
         predictor = OrigamiPredictor(model_with_complex, tokenizer_with_complex)
 
@@ -668,9 +658,7 @@ class TestAllowComplexValues:
         ]
 
         # With allow_complex_values=False
-        results = predictor.predict_batch(
-            objects, target_key="target", allow_complex_values=False
-        )
+        results = predictor.predict_batch(objects, target_key="target", allow_complex_values=False)
         assert len(results) == 2
         for result in results:
             assert not isinstance(result, (dict, list))
@@ -682,9 +670,7 @@ class TestAllowComplexValues:
         predictor = OrigamiPredictor(model_with_complex, tokenizer_with_complex)
 
         obj = {"context": "a", "target": None}
-        probs = predictor.predict_proba(
-            obj, target_key="target", allow_complex_values=False
-        )
+        probs = predictor.predict_proba(obj, target_key="target", allow_complex_values=False)
 
         # The probabilities should not include OBJ_START or ARRAY_START
         # These would appear as { or [ if decoded, but they're not in the value mapping

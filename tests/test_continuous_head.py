@@ -386,10 +386,7 @@ class TestMixedDiscreteAndContinuous:
     def test_mixed_data_processing(self):
         """Test processing data with both discrete and continuous fields."""
         # Data with low-cardinality (discrete) and high-cardinality (continuous)
-        data = [
-            {"category": "A", "amount": float(i * 100)}
-            for i in range(150)
-        ]
+        data = [{"category": "A", "amount": float(i * 100)} for i in range(150)]
 
         # Scale
         scaler = NumericScaler(cat_threshold=100)
@@ -408,6 +405,7 @@ class TestMixedDiscreteAndContinuous:
 
         # Should have both regular tokens and NUM tokens
         from origami.tokenizer.vocabulary import NUM
+
         tokens_have_num = any(str(t) == str(NUM) for t in instance.tokens)
         assert tokens_have_num
 

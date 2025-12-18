@@ -87,10 +87,7 @@ class TestNumericScalerFit:
 
     def test_fit_mixed_cardinality(self):
         """Test with mix of high and low cardinality."""
-        data = [
-            {"high": float(i), "low": i % 5}
-            for i in range(200)
-        ]
+        data = [{"high": float(i), "low": i % 5} for i in range(200)]
 
         scaler = NumericScaler(cat_threshold=100)
         scaler.fit(data)
@@ -153,8 +150,7 @@ class TestNumericScalerTransform:
     def test_transform_preserves_structure(self):
         """Test transformation preserves JSON structure."""
         data = [
-            {"user": {"name": "test", "score": float(i)}, "items": [1, 2, 3]}
-            for i in range(150)
+            {"user": {"name": "test", "score": float(i)}, "items": [1, 2, 3]} for i in range(150)
         ]
 
         scaler = NumericScaler(cat_threshold=100)
@@ -180,7 +176,7 @@ class TestNumericScalerTransform:
         values = [obj["value"].value for obj in transformed]
         mean = sum(values) / len(values)
         variance = sum((v - mean) ** 2 for v in values) / len(values)
-        std = variance ** 0.5
+        std = variance**0.5
 
         # Should be approximately normalized
         assert abs(mean) < 0.01
@@ -243,6 +239,7 @@ class TestNumericScalerInverseTransform:
     def test_roundtrip_transform(self):
         """Test complete roundtrip: value -> scaled -> original."""
         import random
+
         random.seed(42)
 
         # Generate random data
@@ -289,10 +286,7 @@ class TestNumericScalerEdgeCases:
 
     def test_none_values_skipped(self):
         """Test None values are preserved."""
-        data = [
-            {"value": float(i) if i % 2 == 0 else None}
-            for i in range(200)
-        ]
+        data = [{"value": float(i) if i % 2 == 0 else None} for i in range(200)]
 
         scaler = NumericScaler(cat_threshold=50)
         scaler.fit(data)
@@ -339,6 +333,7 @@ class TestNumericScalerIntegrationWithTokenizer:
 
         # Check NUM token is in vocab
         from origami.tokenizer.vocabulary import NUM
+
         assert tokenizer.vocab.encode(NUM) == 9  # NUM token ID
 
         # Tokenize an instance

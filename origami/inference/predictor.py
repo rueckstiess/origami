@@ -113,9 +113,7 @@ class OrigamiPredictor:
         Returns:
             Predicted value (inverse transformed if scaler configured)
         """
-        return self.predict_batch(
-            [obj], target_key, allow_complex_values=allow_complex_values
-        )[0]
+        return self.predict_batch([obj], target_key, allow_complex_values=allow_complex_values)[0]
 
     @torch.no_grad()
     def predict_batch(
@@ -195,8 +193,7 @@ class OrigamiPredictor:
             If top_k set: list of (value, prob) tuples sorted by prob
         """
         return self.predict_proba_batch(
-            [obj], target_key, values=values, top_k=top_k,
-            allow_complex_values=allow_complex_values
+            [obj], target_key, values=values, top_k=top_k, allow_complex_values=allow_complex_values
         )[0]
 
     @torch.no_grad()

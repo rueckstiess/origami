@@ -277,9 +277,7 @@ class OrigamiTrainer:
         self._last_eval_step = self.state.global_step
 
         # Fire callback with metrics dict
-        self.callback_handler.fire_event(
-            "on_evaluate", self, self.state, metrics
-        )
+        self.callback_handler.fire_event("on_evaluate", self, self.state, metrics)
 
         return metrics
 

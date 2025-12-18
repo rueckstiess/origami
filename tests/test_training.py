@@ -1199,10 +1199,7 @@ class TestEvaluationScheduling:
     @pytest.fixture
     def setup(self):
         """Set up model, tokenizer, and data for scheduling tests."""
-        data = [
-            {"label": "A", "x": i}
-            for i in range(20)
-        ]
+        data = [{"label": "A", "x": i} for i in range(20)]
 
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)

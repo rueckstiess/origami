@@ -55,7 +55,6 @@ def _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, d
     )
 
 
-
 class TestPathState:
     """Tests for PathState tracking."""
 
@@ -275,7 +274,9 @@ class TestOrigamiGenerator:
         path_lengths = torch.zeros(batch_size, 2, dtype=torch.long, device=generator.device)
         attention_mask = torch.ones(batch_size, 2, dtype=torch.bool, device=generator.device)
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         # Use allow_complex_values=False to prevent untrained model from generating
         # runaway nested structures, and higher max_tokens to allow for completion
         results = generator.generate_from_batch(
@@ -313,7 +314,9 @@ class TestOrigamiGenerator:
         path_lengths = torch.zeros(1, 3, dtype=torch.long, device=generator.device)
         attention_mask = torch.ones(1, 3, dtype=torch.bool, device=generator.device)
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         results = generator.generate_from_batch(batch, stop_after_value=True, max_tokens=50)
 
         # Should return a single value (could be primitive or complex)
@@ -617,7 +620,9 @@ class TestGenerateFromTensorsAdvanced:
             device=generator.device,
         )
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         results = generator.generate_from_batch(batch, stop_after_value=False, max_tokens=50)
 
         assert len(results) == 2
@@ -654,7 +659,9 @@ class TestGenerateFromTensorsAdvanced:
         path_lengths = torch.zeros(2, 3, dtype=torch.long, device=generator.device)
         attention_mask = torch.ones(2, 3, dtype=torch.bool, device=generator.device)
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         results = generator.generate_from_batch(batch, stop_after_value=True, max_tokens=50)
 
         # Should return exactly 2 values (one per sequence)
@@ -704,7 +711,9 @@ class TestGenerateFromTensorsAdvanced:
         path_ids = torch.zeros(3, max_len, max_depth, dtype=torch.long, device=generator.device)
         path_lengths = torch.zeros(3, max_len, dtype=torch.long, device=generator.device)
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         # Use allow_complex_values=False to prevent untrained model from generating
         # runaway nested structures, and higher max_tokens to allow for completion
         results = generator.generate_from_batch(
@@ -780,7 +789,9 @@ class TestGeneratorGrammarConstraints:
         path_lengths = torch.zeros(1, 2, dtype=torch.long, device=generator.device)
         attention_mask = torch.ones(1, 2, dtype=torch.bool, device=generator.device)
 
-        batch = _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device)
+        batch = _make_batch(
+            input_ids, path_types, path_ids, path_lengths, attention_mask, generator.device
+        )
         results = generator.generate_from_batch(batch, stop_after_value=False, max_tokens=100)
 
         assert len(results) == 1

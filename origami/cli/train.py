@@ -310,9 +310,15 @@ def train(
     # Create and train pipeline
     click.echo("\nTraining...")
     pipeline = OrigamiPipeline(config)
-    
+
     try:
-        pipeline.fit(train_data, eval_data=eval_data, epochs=epochs, callbacks=[TableLogCallback()], verbose=verbose)
+        pipeline.fit(
+            train_data,
+            eval_data=eval_data,
+            epochs=epochs,
+            callbacks=[TableLogCallback()],
+            verbose=verbose,
+        )
     except KeyboardInterrupt:
         click.echo("\nTraining interrupted. Saving checkpoint...")
     except Exception as e:

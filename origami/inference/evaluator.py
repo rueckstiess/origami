@@ -134,9 +134,7 @@ class OrigamiEvaluator:
 
         return results
 
-    def _sample_data(
-        self, data: list[dict], sample_size: int | None
-    ) -> list[dict]:
+    def _sample_data(self, data: list[dict], sample_size: int | None) -> list[dict]:
         """Sample data if sample_size is specified."""
         if sample_size is None or sample_size >= len(data):
             return data
@@ -194,9 +192,7 @@ class OrigamiEvaluator:
 
         return total_loss / max(1, num_batches)
 
-    def _get_predictions(
-        self, data: list[dict], batch_size: int
-    ) -> tuple[list[Any], list[Any]]:
+    def _get_predictions(self, data: list[dict], batch_size: int) -> tuple[list[Any], list[Any]]:
         """Get true values and predictions for all samples.
 
         Uses CPU for prediction as it's faster for autoregressive generation.
@@ -270,9 +266,7 @@ def evaluate(
         print(f"Accuracy: {results['acc']:.2%}")
         ```
     """
-    evaluator = OrigamiEvaluator(
-        model, tokenizer, target_key, inverse_transform
-    )
+    evaluator = OrigamiEvaluator(model, tokenizer, target_key, inverse_transform)
     return evaluator.evaluate(
         data,
         metrics=metrics,

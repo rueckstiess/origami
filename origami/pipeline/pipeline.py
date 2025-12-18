@@ -410,9 +410,7 @@ class OrigamiPipeline:
         Returns:
             The predicted value
         """
-        results = self.predict_batch(
-            [obj], target_key, allow_complex_values=allow_complex_values
-        )
+        results = self.predict_batch([obj], target_key, allow_complex_values=allow_complex_values)
         return results[0]
 
     def predict_batch(
@@ -446,8 +444,7 @@ class OrigamiPipeline:
 
         # Run prediction (Predictor handles inverse transform internally)
         return predictor.predict_batch(
-            processed, target_key, batch_size=batch_size,
-            allow_complex_values=allow_complex_values
+            processed, target_key, batch_size=batch_size, allow_complex_values=allow_complex_values
         )
 
     def predict_proba(
@@ -484,8 +481,11 @@ class OrigamiPipeline:
 
         # Get probability distribution
         return predictor.predict_proba(
-            processed, target_key, values=values, top_k=top_k,
-            allow_complex_values=allow_complex_values
+            processed,
+            target_key,
+            values=values,
+            top_k=top_k,
+            allow_complex_values=allow_complex_values,
         )
 
     def generate(

@@ -104,6 +104,7 @@ class TestPipelineFit:
         assert pipeline._fitted
         assert pipeline._preprocessor is not None
         from origami.preprocessing import NumericDiscretizer
+
         assert isinstance(pipeline._preprocessor, NumericDiscretizer)
 
     def test_fit_with_scale_mode(self):
@@ -121,6 +122,7 @@ class TestPipelineFit:
         assert pipeline._fitted
         assert pipeline._preprocessor is not None
         from origami.preprocessing import NumericScaler
+
         assert isinstance(pipeline._preprocessor, NumericScaler)
 
     def test_fit_empty_data_raises(self):
@@ -184,6 +186,7 @@ class TestPipelineSaveLoad:
             assert loaded.config.numeric_mode == "scale"
             assert loaded._preprocessor is not None
             from origami.preprocessing import NumericScaler
+
             assert isinstance(loaded._preprocessor, NumericScaler)
         finally:
             path.unlink()
@@ -206,6 +209,7 @@ class TestPipelineSaveLoad:
             assert loaded.config.numeric_mode == "discretize"
             assert loaded._preprocessor is not None
             from origami.preprocessing import NumericDiscretizer
+
             assert isinstance(loaded._preprocessor, NumericDiscretizer)
         finally:
             path.unlink()

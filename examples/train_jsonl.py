@@ -50,7 +50,9 @@ def parse_args():
     # Numeric preprocessing (mutually exclusive)
     numeric_group = parser.add_mutually_exclusive_group()
     numeric_group.add_argument(
-        "--discretize", action="store_true", help="Discretize high-cardinality numeric fields into bins"
+        "--discretize",
+        action="store_true",
+        help="Discretize high-cardinality numeric fields into bins",
     )
     numeric_group.add_argument(
         "--scale",

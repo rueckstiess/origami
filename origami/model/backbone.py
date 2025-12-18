@@ -157,9 +157,9 @@ class TransformerBackbone(BackboneBase):
             diag_indices = torch.arange(seq_len, device=device)
             # combined_mask[b, i, i] = False where padding_positions[b, i] = True
             # Use advanced indexing: combined_mask[:, diag, diag] &= ~padding
-            combined_mask[:, diag_indices, diag_indices] = combined_mask[
-                :, diag_indices, diag_indices
-            ] & ~padding_positions
+            combined_mask[:, diag_indices, diag_indices] = (
+                combined_mask[:, diag_indices, diag_indices] & ~padding_positions
+            )
 
             # Convert to float mask for nn.TransformerEncoder
             # PyTorch expects: 0 = attend, -inf = don't attend (additive mask)
