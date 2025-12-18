@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import torch
 
-from origami.inference import OrigamiEmbedder, OrigamiGenerator, OrigamiPredictor
+from origami.inference import OrigamiEmbedder, OrigamiEvaluator, OrigamiGenerator, OrigamiPredictor
+from origami.inference.evaluator import MetricFn
 from origami.model import OrigamiConfig, OrigamiModel
 from origami.model.config import TrainingConfig
 from origami.preprocessing import NumericDiscretizer, NumericScaler
@@ -173,9 +174,10 @@ class OrigamiPipeline:
             data: Training data as list of JSON-like dictionaries
             eval_data: Optional evaluation data for validation during training
             epochs: Number of training epochs. Overrides config if provided.
-            verbose: Whether to print training progress (adds ProgressCallback)
-            callbacks: List of TrainerCallback instances for custom monitoring.
-                Use MetricsCallback to track prediction accuracy during training.
+            verbose: Whether to print training info (vocab size, model params, device)
+            callbacks: List of TrainerCallback instances for monitoring/customization.
+                If None (default), uses [ProgressCallback()] for progress bars.
+                Pass an explicit list to use only your callbacks (e.g., [] for silent).
 
         Returns:
             self (for method chaining)
@@ -219,15 +221,21 @@ class OrigamiPipeline:
             weight_decay=self.config.weight_decay,
             upscale_factor=self.config.upscale_factor,
             save_every_n_epochs=self.config.save_every_n_epochs,
+            # Evaluation
+            eval_strategy=self.config.eval_strategy,
+            eval_steps=self.config.eval_steps,
+            eval_epochs=self.config.eval_epochs,
+            eval_metrics=self.config.eval_metrics,
+            eval_sample_size=self.config.eval_sample_size,
+            eval_on_train=self.config.eval_on_train,
+            target_key=self.config.target_key,
         )
 
-        # Build callbacks list
-        all_callbacks = list(callbacks) if callbacks else []
-        if verbose:
-            # Add progress callback if verbose and not already provided
-            has_progress = any(isinstance(cb, ProgressCallback) for cb in all_callbacks)
-            if not has_progress:
-                all_callbacks.insert(0, ProgressCallback())
+        # Build callbacks list: default to ProgressCallback if not specified
+        if callbacks is None:
+            all_callbacks = [ProgressCallback()]
+        else:
+            all_callbacks = list(callbacks)
 
         trainer = OrigamiTrainer(
             model=self._model,
@@ -509,6 +517,81 @@ class OrigamiPipeline:
             samples = [self._inverse_transform_object(s) for s in samples]
 
         return samples
+
+    def evaluate(
+        self,
+        data: list[dict],
+        target_key: str | None = None,
+        metrics: dict[str, MetricFn] | None = None,
+        sample_size: int | None = None,
+        batch_size: int = 32,
+    ) -> dict[str, float]:
+        """Evaluate the model on data.
+
+        Computes loss and any additional prediction-based metrics.
+
+        Args:
+            data: List of JSON objects to evaluate on
+            target_key: Key to predict for prediction-based metrics.
+                Falls back to config.target_key if not provided.
+                Required if metrics are provided.
+            metrics: Dict mapping metric names to functions. Each function should
+                follow sklearn convention: (y_true, y_pred) -> float.
+                Example: {"acc": accuracy}. Loss is always computed.
+            sample_size: If set, randomly sample this many examples.
+                None means use all data.
+            batch_size: Batch size for evaluation.
+
+        Returns:
+            Dict mapping metric names to their values. Always includes "loss".
+
+        Example:
+            ```python
+            from origami.training import accuracy
+
+            # Just loss
+            results = pipeline.evaluate(test_data)
+            print(f"Loss: {results['loss']:.4f}")
+
+            # Loss + accuracy
+            results = pipeline.evaluate(
+                test_data,
+                target_key="label",
+                metrics={"acc": accuracy},
+            )
+            print(f"Accuracy: {results['acc']:.2%}")
+            ```
+        """
+        self._check_fitted()
+
+        # Fall back to config target_key if not provided
+        effective_target_key = target_key or self.config.target_key
+
+        # Preprocess data
+        processed = self._preprocess_for_inference(data)
+
+        # Move to CPU for faster evaluation
+        self._ensure_inference_device()
+
+        # Create inverse transform function if needed
+        inverse_fn = None
+        if isinstance(self._preprocessor, NumericScaler):
+            inverse_fn = self._create_inverse_transform_fn()
+
+        # Create evaluator and run evaluation
+        evaluator = OrigamiEvaluator(
+            self._model,
+            self._tokenizer,
+            target_key=effective_target_key,
+            inverse_transform=inverse_fn,
+        )
+
+        return evaluator.evaluate(
+            processed,
+            metrics=metrics,
+            sample_size=sample_size,
+            batch_size=batch_size,
+        )
 
     def embed(
         self,

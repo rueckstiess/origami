@@ -4,8 +4,9 @@ Unified configuration that combines model architecture, training parameters,
 and preprocessing options into a single dataclass.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass
@@ -33,6 +34,14 @@ class PipelineConfig:
             numeric_mode="discretize",
             n_bins=20,
             bin_strategy="quantile",
+        )
+
+        # With evaluation metrics
+        from origami.training import accuracy
+        config = PipelineConfig(
+            eval_strategy="epoch",
+            eval_metrics={"acc": accuracy},
+            target_key="label",
         )
         ```
 
@@ -65,6 +74,16 @@ class PipelineConfig:
         upscale_factor: Data augmentation factor for key shuffling
 
         use_grammar_constraints: Whether to enforce valid JSON syntax
+
+        eval_strategy: When to evaluate - "no", "steps", or "epoch"
+        eval_steps: Evaluate every N steps (when eval_strategy="steps")
+        eval_epochs: Evaluate every N epochs (when eval_strategy="epoch")
+        eval_metrics: Dict mapping metric names to functions, e.g. {"acc": accuracy}.
+            Loss is always computed automatically.
+        eval_sample_size: If set, sample this many examples for evaluation
+        eval_on_train: Whether to also evaluate on training data
+        target_key: Key to predict for prediction-based metrics (required
+            if eval_metrics is provided)
     """
 
     # Model architecture
@@ -98,6 +117,15 @@ class PipelineConfig:
 
     # Grammar
     use_grammar_constraints: bool = True
+
+    # Evaluation
+    eval_strategy: Literal["no", "steps", "epoch"] = "epoch"
+    eval_steps: int = 100
+    eval_epochs: int = 1
+    eval_metrics: dict[str, Callable[[list[Any], list[Any]], float]] | None = None
+    eval_sample_size: int | None = None
+    eval_on_train: bool = False
+    target_key: str | None = None
 
     # Device
     device: str = "auto"  # "auto", "cpu", "mps", "cuda", or specific like "cuda:0"

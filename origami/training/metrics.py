@@ -8,7 +8,7 @@ from collections.abc import Hashable
 from typing import Any
 
 
-def exact_match(y_true: list[Any], y_pred: list[Any]) -> float:
+def accuracy(y_true: list[Any], y_pred: list[Any]) -> float:
     """Fraction of predictions that exactly match the true values.
 
     Works for any JSON value type (str, int, float, bool, None, list, dict).
@@ -19,7 +19,7 @@ def exact_match(y_true: list[Any], y_pred: list[Any]) -> float:
         y_pred: List of predicted values.
 
     Returns:
-        Fraction of exact matches (0.0 to 1.0).
+        Accuracy score (0.0 to 1.0).
     """
     if len(y_true) == 0:
         return 1.0

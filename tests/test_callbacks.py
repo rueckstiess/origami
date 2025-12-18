@@ -4,15 +4,14 @@ import pytest
 
 from origami.training.callbacks import (
     CallbackHandler,
-    MetricsCallback,
     ProgressCallback,
     TableLogCallback,
     TrainerCallback,
 )
 from origami.training.metrics import (
+    accuracy,
     array_f1,
     array_jaccard,
-    exact_match,
     object_key_accuracy,
 )
 
@@ -20,49 +19,49 @@ from origami.training.metrics import (
 class TestMetrics:
     """Tests for metric functions."""
 
-    def test_exact_match_simple_values(self):
-        """Test exact_match with simple values."""
+    def test_accuracy_simple_values(self):
+        """Test accuracy with simple values."""
         y_true = ["a", "b", "c"]
         y_pred = ["a", "b", "c"]
-        assert exact_match(y_true, y_pred) == 1.0
+        assert accuracy(y_true, y_pred) == 1.0
 
         y_pred = ["a", "x", "c"]
-        assert exact_match(y_true, y_pred) == pytest.approx(2 / 3)
+        assert accuracy(y_true, y_pred) == pytest.approx(2 / 3)
 
         y_pred = ["x", "y", "z"]
-        assert exact_match(y_true, y_pred) == 0.0
+        assert accuracy(y_true, y_pred) == 0.0
 
-    def test_exact_match_numbers(self):
-        """Test exact_match with numeric values."""
+    def test_accuracy_numbers(self):
+        """Test accuracy with numeric values."""
         y_true = [1, 2, 3]
         y_pred = [1, 2, 3]
-        assert exact_match(y_true, y_pred) == 1.0
+        assert accuracy(y_true, y_pred) == 1.0
 
         y_pred = [1, 2, 4]
-        assert exact_match(y_true, y_pred) == pytest.approx(2 / 3)
+        assert accuracy(y_true, y_pred) == pytest.approx(2 / 3)
 
-    def test_exact_match_arrays(self):
-        """Test exact_match with array values."""
+    def test_accuracy_arrays(self):
+        """Test accuracy with array values."""
         y_true = [[1, 2], [3, 4]]
         y_pred = [[1, 2], [3, 4]]
-        assert exact_match(y_true, y_pred) == 1.0
+        assert accuracy(y_true, y_pred) == 1.0
 
-        # Different order = not equal for exact_match
+        # Different order = not equal for accuracy
         y_pred = [[2, 1], [3, 4]]
-        assert exact_match(y_true, y_pred) == 0.5
+        assert accuracy(y_true, y_pred) == 0.5
 
-    def test_exact_match_objects(self):
-        """Test exact_match with object values (order-independent)."""
+    def test_accuracy_objects(self):
+        """Test accuracy with object values (order-independent)."""
         y_true = [{"a": 1, "b": 2}]
         y_pred = [{"b": 2, "a": 1}]  # Same keys/values, different order
-        assert exact_match(y_true, y_pred) == 1.0
+        assert accuracy(y_true, y_pred) == 1.0
 
         y_pred = [{"a": 1, "b": 3}]
-        assert exact_match(y_true, y_pred) == 0.0
+        assert accuracy(y_true, y_pred) == 0.0
 
-    def test_exact_match_empty(self):
-        """Test exact_match with empty lists."""
-        assert exact_match([], []) == 1.0
+    def test_accuracy_empty(self):
+        """Test accuracy with empty lists."""
+        assert accuracy([], []) == 1.0
 
     def test_array_f1_exact_sets(self):
         """Test array_f1 with exact set matches."""
@@ -252,83 +251,25 @@ class TestProgressCallback:
         assert hasattr(callback, "on_evaluate")
 
 
-class TestMetricsCallback:
-    """Tests for MetricsCallback."""
-
-    def test_metrics_callback_instantiation(self):
-        """Test that MetricsCallback can be instantiated."""
-        callback = MetricsCallback(target_key="label")
-        assert callback.target_key == "label"
-        assert callback._predictor is None
-        assert "train_accuracy" in callback.history
-        assert "eval_accuracy" in callback.history
-
-    def test_metrics_callback_custom_metrics(self):
-        """Test MetricsCallback with custom metrics."""
-
-        def custom_metric(y_true, y_pred):
-            return 0.5
-
-        callback = MetricsCallback(
-            target_key="label",
-            metrics={"custom": custom_metric, "exact": exact_match},
-        )
-        assert "train_custom" in callback.history
-        assert "eval_custom" in callback.history
-        assert "train_exact" in callback.history
-        assert "eval_exact" in callback.history
-
-    def test_metrics_callback_sample_sizes(self):
-        """Test MetricsCallback respects sample sizes."""
-        callback = MetricsCallback(
-            target_key="label",
-            train_sample_size=50,
-            eval_sample_size=25,
-        )
-        assert callback.train_sample_size == 50
-        assert callback.eval_sample_size == 25
-
-    def test_metrics_callback_epoch_frequency(self):
-        """Test MetricsCallback respects compute_every_n_epochs."""
-        callback = MetricsCallback(
-            target_key="label",
-            compute_every_n_epochs=5,
-        )
-        assert callback.compute_every_n_epochs == 5
-
-
 class TestTableLogCallback:
     """Tests for TableLogCallback."""
 
     def test_table_log_callback_instantiation(self):
-        """Test that TableLogCallback can be instantiated."""
+        """Test that TableLogCallback can be instantiated with defaults."""
         callback = TableLogCallback()
         assert callback.print_every == 10
-        assert callback.eval_every == 100
-        assert callback.target_key is None
 
     def test_table_log_callback_custom_params(self):
         """Test TableLogCallback with custom parameters."""
-        callback = TableLogCallback(
-            print_every=5,
-            eval_every=50,
-            target_key="category",
-            train_sample_size=200,
-            eval_sample_size=150,
-        )
+        callback = TableLogCallback(print_every=5)
         assert callback.print_every == 5
-        assert callback.eval_every == 50
-        assert callback.target_key == "category"
-        assert callback.train_sample_size == 200
-        assert callback.eval_sample_size == 150
 
     def test_table_log_callback_has_all_hooks(self):
         """Test that TableLogCallback has all expected hooks."""
         callback = TableLogCallback()
-        assert hasattr(callback, "on_train_begin")
-        assert hasattr(callback, "on_epoch_begin")
         assert hasattr(callback, "on_batch_begin")
         assert hasattr(callback, "on_batch_end")
+        assert hasattr(callback, "on_evaluate")
 
     def test_table_log_callback_batch_timing(self):
         """Test that TableLogCallback tracks batch timing."""
@@ -339,16 +280,3 @@ class TestTableLogCallback:
 
         # Check that start time was recorded
         assert callback._batch_start_time > 0
-
-    def test_table_log_callback_reset_on_train_begin(self):
-        """Test that TableLogCallback resets state on train begin."""
-        callback = TableLogCallback()
-        callback._last_train_acc = 0.9
-        callback._last_val_loss = 0.5
-        callback._last_val_acc = 0.85
-
-        callback.on_train_begin(None, None, None)
-
-        assert callback._last_train_acc is None
-        assert callback._last_val_loss is None
-        assert callback._last_val_acc is None

@@ -6,6 +6,7 @@ Provides training utilities with support for:
 - Mixed discrete + continuous loss
 - Learning rate scheduling with warmup
 - Callback system for monitoring and customization
+- Step-based and epoch-based evaluation scheduling
 """
 
 import math
@@ -45,8 +46,12 @@ class TrainState:
 
 
 @dataclass
-class TrainMetrics:
-    """Metrics from a training epoch or evaluation."""
+class EpochStats:
+    """Statistics from a training epoch.
+
+    Note: This is distinct from evaluation metrics (dict[str, float]).
+    EpochStats tracks training throughput and performance per epoch.
+    """
 
     loss: float
     num_samples: int
@@ -118,7 +123,8 @@ class OrigamiTrainer:
             shuffle: Whether to shuffle key order during training (default True).
                      If False, upscaling is disabled since it would just duplicate samples.
             callbacks: List of TrainerCallback instances for monitoring/customization.
-                     Use ProgressCallback for progress bars and MetricsCallback for metrics.
+                     Use ProgressCallback for progress bars. Evaluation metrics are
+                     computed automatically based on TrainingConfig settings.
             log_every_n_batches: Fire batch callbacks every N batches (default=1).
         """
         from origami.model.config import TrainingConfig
@@ -135,6 +141,10 @@ class OrigamiTrainer:
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         if self.checkpoint_dir:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # Store raw data for evaluator (Evaluator needs original dicts, not tokenized)
+        self.train_data = train_data
+        self.eval_data = eval_data
 
         # Create datasets
         self.train_dataset = UpscaledDataset(
@@ -174,6 +184,18 @@ class OrigamiTrainer:
             callbacks or [], log_every_n_batches=log_every_n_batches
         )
 
+        # Create evaluator for unified evaluation (lazy import to avoid circular)
+        from origami.inference import OrigamiEvaluator
+
+        self.evaluator = OrigamiEvaluator(
+            model=model,
+            tokenizer=tokenizer,
+            target_key=self.config.target_key,
+        )
+
+        # Track last evaluation step to avoid duplicate evals
+        self._last_eval_step = -1
+
     def _create_scheduler(self) -> LambdaLR:
         """Create learning rate scheduler with linear warmup."""
         warmup_steps = self.config.warmup_steps
@@ -184,6 +206,82 @@ class OrigamiTrainer:
             return max(0.0, 1.0 - step / max(1, self.total_steps))
 
         return LambdaLR(self.optimizer, lr_lambda)
+
+    def _should_evaluate_step(self) -> bool:
+        """Check if we should evaluate at the current step.
+
+        Returns True for step-based evaluation when:
+        - eval_strategy is "steps"
+        - Current step is a multiple of eval_steps
+        - We haven't already evaluated at this step
+        """
+        if self.config.eval_strategy != "steps":
+            return False
+        if self.state.global_step == 0:
+            return False  # Don't evaluate before training starts
+        if self.state.global_step == self._last_eval_step:
+            return False  # Already evaluated at this step
+        return self.state.global_step % self.config.eval_steps == 0
+
+    def _should_evaluate_epoch(self) -> bool:
+        """Check if we should evaluate at the current epoch.
+
+        Returns True for epoch-based evaluation when:
+        - eval_strategy is "epoch"
+        - Current epoch is a multiple of eval_epochs
+        """
+        if self.config.eval_strategy != "epoch":
+            return False
+        # epoch is 0-indexed, so check (epoch + 1)
+        return (self.state.epoch + 1) % self.config.eval_epochs == 0
+
+    def _run_evaluation(self) -> dict[str, float]:
+        """Run unified evaluation using the Evaluator.
+
+        Computes all configured metrics on train and/or eval data.
+        Moves model to eval mode, then restores training mode after.
+
+        Returns:
+            Dict of metrics with prefixes: {"train_loss": ..., "val_loss": ..., etc}
+        """
+        was_training = self.model.training
+        self.model.eval()
+
+        metrics: dict[str, float] = {}
+
+        # Evaluate on training data if configured
+        if self.config.eval_on_train and self.train_data:
+            train_results = self.evaluator.evaluate(
+                self.train_data,
+                metrics=self.config.eval_metrics,
+                sample_size=self.config.eval_sample_size,
+                batch_size=self.config.batch_size,
+            )
+            metrics.update({f"train_{k}": v for k, v in train_results.items()})
+
+        # Evaluate on eval data
+        if self.eval_data:
+            val_results = self.evaluator.evaluate(
+                self.eval_data,
+                metrics=self.config.eval_metrics,
+                sample_size=self.config.eval_sample_size,
+                batch_size=self.config.batch_size,
+            )
+            metrics.update({f"val_{k}": v for k, v in val_results.items()})
+
+        # Restore training mode
+        if was_training:
+            self.model.train()
+
+        # Track this evaluation step
+        self._last_eval_step = self.state.global_step
+
+        # Fire callback with metrics dict
+        self.callback_handler.fire_event(
+            "on_evaluate", self, self.state, metrics
+        )
+
+        return metrics
 
     def train(self) -> TrainState:
         """Run full training loop.
@@ -199,43 +297,39 @@ class OrigamiTrainer:
 
             self.callback_handler.fire_event("on_epoch_end", self, self.state, metrics)
 
-            # Evaluation
-            if self.eval_dataset and (epoch + 1) % max(1, self.config.save_every_n_epochs) == 0:
-                eval_metrics = self.evaluate()
-                self.callback_handler.fire_event("on_evaluate", self, self.state, eval_metrics)
+            # Epoch-based evaluation (using new unified system)
+            if self._should_evaluate_epoch():
+                eval_metrics = self._run_evaluation()
 
-                # Save best model (skip if loss is nan)
-                if (
-                    not math.isnan(eval_metrics.loss)
-                    and eval_metrics.loss < self.state.best_eval_loss
-                ):
-                    self.state.best_eval_loss = eval_metrics.loss
-                    if self.checkpoint_dir:
-                        self.save_checkpoint("best")
+                # Save best model based on val_loss (skip if nan or no val_loss)
+                val_loss = eval_metrics.get("val_loss")
+                if val_loss is not None and not math.isnan(val_loss):
+                    if val_loss < self.state.best_eval_loss:
+                        self.state.best_eval_loss = val_loss
+                        if self.checkpoint_dir:
+                            self.save_checkpoint("best")
 
             # Periodic checkpointing
             if self.checkpoint_dir and (epoch + 1) % self.config.save_every_n_epochs == 0:
                 self.save_checkpoint(f"epoch_{epoch + 1}")
 
         # Final evaluation if we haven't evaluated at the last epoch
-        if self.eval_dataset:
-            last_epoch_had_eval = self.config.num_epochs % self.config.save_every_n_epochs == 0
+        if self.config.eval_strategy == "epoch" and self.eval_data:
+            last_epoch_had_eval = self.config.num_epochs % self.config.eval_epochs == 0
             if not last_epoch_had_eval:
-                eval_metrics = self.evaluate()
-                self.callback_handler.fire_event("on_evaluate", self, self.state, eval_metrics)
-                if (
-                    not math.isnan(eval_metrics.loss)
-                    and eval_metrics.loss < self.state.best_eval_loss
-                ):
-                    self.state.best_eval_loss = eval_metrics.loss
-                    if self.checkpoint_dir:
-                        self.save_checkpoint("best")
+                eval_metrics = self._run_evaluation()
+                val_loss = eval_metrics.get("val_loss")
+                if val_loss is not None and not math.isnan(val_loss):
+                    if val_loss < self.state.best_eval_loss:
+                        self.state.best_eval_loss = val_loss
+                        if self.checkpoint_dir:
+                            self.save_checkpoint("best")
 
         self.callback_handler.fire_event("on_train_end", self, self.state, None)
 
         return self.state
 
-    def _train_epoch(self) -> TrainMetrics:
+    def _train_epoch(self) -> EpochStats:
         """Train for one epoch.
 
         Returns:
@@ -278,9 +372,21 @@ class OrigamiTrainer:
 
             self.callback_handler.fire_event("on_batch_end", self, self.state, None)
 
+            # Step-based evaluation (runs within epoch if configured)
+            if self._should_evaluate_step():
+                eval_metrics = self._run_evaluation()
+
+                # Save best model based on val_loss
+                val_loss = eval_metrics.get("val_loss")
+                if val_loss is not None and not math.isnan(val_loss):
+                    if val_loss < self.state.best_eval_loss:
+                        self.state.best_eval_loss = val_loss
+                        if self.checkpoint_dir:
+                            self.save_checkpoint("best")
+
         duration = time.time() - start_time
 
-        return TrainMetrics(
+        return EpochStats(
             loss=total_loss / max(1, num_batches),
             num_samples=num_batches * self.config.batch_size,
             num_tokens=total_tokens,
@@ -329,59 +435,6 @@ class OrigamiTrainer:
         num_tokens = batch.attention_mask.sum().item()
 
         return loss.item(), int(num_tokens)
-
-    @torch.no_grad()
-    def evaluate(self) -> TrainMetrics:
-        """Evaluate on eval dataset.
-
-        Returns:
-            Evaluation metrics
-        """
-        if self.eval_dataset is None:
-            raise ValueError("No eval dataset provided")
-
-        self.model.eval()
-
-        eval_loader = DataLoader(
-            self.eval_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=False,
-            collate_fn=self.collator,
-        )
-
-        total_loss = 0.0
-        total_tokens = 0
-        num_batches = 0
-        start_time = time.time()
-
-        for batch in eval_loader:
-            # Compute grammar mask for evaluation loss
-            grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
-
-            output = self.model(
-                input_ids=batch.input_ids,
-                path_types=batch.path_types,
-                path_ids=batch.path_ids,
-                path_lengths=batch.path_lengths,
-                attention_mask=batch.attention_mask,
-                labels=batch.labels,
-                numeric_values=batch.numeric_values,
-                numeric_mask=batch.numeric_mask,
-                grammar_mask=grammar_mask,
-            )
-
-            total_loss += output.loss.item()
-            total_tokens += batch.attention_mask.sum().item()
-            num_batches += 1
-
-        duration = time.time() - start_time
-
-        return TrainMetrics(
-            loss=total_loss / max(1, num_batches),
-            num_samples=len(self.eval_dataset),
-            num_tokens=total_tokens,
-            duration_seconds=duration,
-        )
 
     def save_checkpoint(self, name: str) -> Path:
         """Save model checkpoint.

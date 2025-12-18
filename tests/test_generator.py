@@ -4,11 +4,11 @@ import pytest
 import torch
 
 from origami.inference import OrigamiGenerator
-from origami.tokenizer.json_tokenizer import EncodedBatch
 from origami.inference.generator import PathState
 from origami.model import OrigamiConfig, OrigamiModel
 from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
 from origami.tokenizer import JSONTokenizer
+from origami.tokenizer.json_tokenizer import EncodedBatch
 
 
 @pytest.fixture

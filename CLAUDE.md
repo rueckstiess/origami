@@ -314,9 +314,8 @@ model.to("cpu")  # Move to CPU for faster inference
 predictor = OrigamiPredictor(model, tokenizer)
 assert predictor.device == torch.device("cpu")
 
-# For training with MetricsCallback, device management is automatic:
-# - Moves model to CPU for prediction (faster)
-# - Restores model to training device (MPS/CUDA) afterwards
+# During training evaluation, device management is automatic:
+# The OrigamiEvaluator handles model mode (eval/train) transitions
 ```
 
 ### 4. Ruff Linting Rules

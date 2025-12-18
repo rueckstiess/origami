@@ -9,10 +9,10 @@ import torch
 from origami.model import OrigamiConfig, OrigamiModel, TrainingConfig
 from origami.tokenizer import JSONTokenizer
 from origami.training import (
+    EpochStats,
     EvalDataset,
     OrigamiDataCollator,
     OrigamiTrainer,
-    TrainMetrics,
     TrainState,
     UpscaledDataset,
 )
@@ -510,12 +510,12 @@ class TestTrainState:
         assert state.best_eval_loss == 0.5
 
 
-class TestTrainMetrics:
-    """Tests for TrainMetrics dataclass."""
+class TestEpochStats:
+    """Tests for EpochStats dataclass."""
 
     def test_tokens_per_second(self):
         """Test tokens per second calculation."""
-        metrics = TrainMetrics(
+        metrics = EpochStats(
             loss=0.5,
             num_samples=100,
             num_tokens=1000,
@@ -525,7 +525,7 @@ class TestTrainMetrics:
 
     def test_tokens_per_second_zero_duration(self):
         """Test tokens per second with zero duration."""
-        metrics = TrainMetrics(
+        metrics = EpochStats(
             loss=0.5,
             num_samples=100,
             num_tokens=1000,
@@ -667,41 +667,19 @@ class TestOrigamiTrainer:
         # Check that final loss is less than initial
         assert losses[-1] < initial_metrics.loss
 
-    def test_evaluate(self, model_and_tokenizer):
-        """Test evaluation."""
+    def test_evaluator_via_trainer(self, model_and_tokenizer):
+        """Test evaluation via trainer's evaluator."""
         model, tokenizer = model_and_tokenizer
-        train_data = [{"name": "Alice", "age": 30}]
         eval_data = [{"name": "Bob", "age": 25}]
 
-        config = TrainingConfig(batch_size=1)
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=train_data,
-            eval_data=eval_data,
-            config=config,
-        )
+        # Use trainer's evaluator directly
+        from origami.inference import OrigamiEvaluator
 
-        metrics = trainer.evaluate()
+        evaluator = OrigamiEvaluator(model, tokenizer)
+        results = evaluator.evaluate(eval_data)  # Loss is always computed
 
-        assert isinstance(metrics, TrainMetrics)
-        assert metrics.loss > 0
-        assert metrics.num_samples == 1
-        assert metrics.num_tokens > 0
-
-    def test_evaluate_without_eval_data_raises(self, model_and_tokenizer):
-        """Test that evaluate raises without eval data."""
-        model, tokenizer = model_and_tokenizer
-        train_data = [{"name": "Alice", "age": 30}]
-
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=train_data,
-        )
-
-        with pytest.raises(ValueError, match="No eval dataset provided"):
-            trainer.evaluate()
+        assert "loss" in results
+        assert results["loss"] > 0
 
     def test_save_and_load_checkpoint(self, model_and_tokenizer):
         """Test checkpoint save and load."""
@@ -948,7 +926,8 @@ class TestEndToEndTraining:
                     train_losses.append(metrics.loss)
 
                 def on_evaluate(self, trainer, state, metrics):
-                    eval_losses.append(metrics.loss)
+                    # metrics is now a dict with prefixed keys
+                    eval_losses.append(metrics.get("val_loss"))
 
             trainer = OrigamiTrainer(
                 model=model,
@@ -1104,3 +1083,329 @@ class TestEndToEndTraining:
         # Note: -inf values are expected from grammar constraint masking
         # Only check for +inf (actual numerical instability)
         assert not torch.isposinf(output.logits).any()
+
+
+class TestEvaluator:
+    """Tests for OrigamiEvaluator."""
+
+    @pytest.fixture
+    def setup(self):
+        """Set up model, tokenizer, and test data."""
+        data = [
+            {"label": "A", "x": 1},
+            {"label": "B", "x": 2},
+            {"label": "A", "x": 3},
+            {"label": "B", "x": 4},
+        ]
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        config = OrigamiConfig(
+            vocab_size=tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        return model, tokenizer, data
+
+    def test_evaluator_init(self, setup):
+        """Test evaluator initialization."""
+        from origami.inference import OrigamiEvaluator
+
+        model, tokenizer, _ = setup
+        evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
+
+        assert evaluator.model is model
+        assert evaluator.tokenizer is tokenizer
+        assert evaluator.target_key == "label"
+
+    def test_evaluate_loss_only(self, setup):
+        """Test evaluating only loss (default when no metrics provided)."""
+        from origami.inference import OrigamiEvaluator
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer)
+
+        # No metrics dict = just loss
+        results = evaluator.evaluate(data)
+
+        assert "loss" in results
+        assert len(results) == 1  # Only loss
+        assert isinstance(results["loss"], float)
+        assert results["loss"] > 0  # Loss should be positive
+
+    def test_evaluate_prediction_metrics(self, setup):
+        """Test evaluating prediction-based metrics."""
+        from origami.inference import OrigamiEvaluator
+        from origami.training import accuracy
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
+
+        results = evaluator.evaluate(data, metrics={"acc": accuracy})
+
+        assert "loss" in results  # Always included
+        assert "acc" in results
+        assert 0.0 <= results["acc"] <= 1.0
+
+    def test_evaluate_multiple_metrics(self, setup):
+        """Test evaluating multiple metrics together."""
+        from origami.inference import OrigamiEvaluator
+        from origami.training import accuracy, array_f1
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
+
+        results = evaluator.evaluate(data, metrics={"acc": accuracy, "f1": array_f1})
+
+        assert "loss" in results  # Always included
+        assert "acc" in results
+        assert "f1" in results
+        assert len(results) == 3  # loss + acc + f1
+
+    def test_evaluate_sample_size(self, setup):
+        """Test evaluation with sample_size."""
+        from origami.inference import OrigamiEvaluator
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer)
+
+        # Sample 2 out of 4 - just loss (no metrics dict)
+        results = evaluator.evaluate(data, sample_size=2)
+
+        assert "loss" in results
+        assert isinstance(results["loss"], float)
+
+    def test_evaluate_requires_target_key_for_prediction_metrics(self, setup):
+        """Test that prediction metrics require target_key."""
+        from origami.inference import OrigamiEvaluator
+        from origami.training import accuracy
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer, target_key=None)
+
+        with pytest.raises(ValueError, match="target_key required"):
+            evaluator.evaluate(data, metrics={"acc": accuracy})
+
+
+class TestEvaluationScheduling:
+    """Tests for step-based and epoch-based evaluation scheduling."""
+
+    @pytest.fixture
+    def setup(self):
+        """Set up model, tokenizer, and data for scheduling tests."""
+        data = [
+            {"label": "A", "x": i}
+            for i in range(20)
+        ]
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        config = OrigamiConfig(
+            vocab_size=tokenizer.vocab.size,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        return model, tokenizer, data
+
+    def test_step_based_evaluation(self, setup):
+        """Test evaluation fires at specified step intervals."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        eval_steps_fired = []
+
+        class EvalTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                eval_steps_fired.append(state.global_step)
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=1,
+            eval_strategy="steps",
+            eval_steps=2,  # Evaluate every 2 steps
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[EvalTracker()],
+        )
+        trainer.train()
+
+        # With 20 samples, batch_size=4, drop_last=True: 5 batches per epoch
+        # Should evaluate at steps 2, 4 (not at 0 or 5 since drop_last=True may affect)
+        assert len(eval_steps_fired) >= 1
+        assert all(step % 2 == 0 for step in eval_steps_fired)
+
+    def test_epoch_based_evaluation_every_n_epochs(self, setup):
+        """Test evaluation fires at epoch intervals."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        eval_epochs_fired = []
+
+        class EvalTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                eval_epochs_fired.append(state.epoch)
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=4,
+            eval_strategy="epoch",
+            eval_epochs=2,  # Evaluate every 2 epochs
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[EvalTracker()],
+        )
+        trainer.train()
+
+        # Should evaluate at epochs 1 and 3 (end of epoch 2 and 4)
+        # epoch is 0-indexed, so (epoch+1) % 2 == 0 means epochs 1, 3
+        assert len(eval_epochs_fired) == 2
+
+    def test_no_evaluation_strategy(self, setup):
+        """Test that eval_strategy='no' disables evaluation."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        eval_count = [0]
+
+        class EvalTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                eval_count[0] += 1
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=2,
+            eval_strategy="no",
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[EvalTracker()],
+        )
+        trainer.train()
+
+        assert eval_count[0] == 0
+
+    def test_eval_metrics_config(self, setup):
+        """Test that eval_metrics config is respected."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        received_metrics = []
+
+        class EvalTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                received_metrics.append(set(metrics.keys()))
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=1,
+            eval_strategy="epoch",
+            # No eval_metrics = just loss (always computed)
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[EvalTracker()],
+        )
+        trainer.train()
+
+        assert len(received_metrics) >= 1
+        # Should have val_loss since we have eval_data
+        assert "val_loss" in received_metrics[0]
+
+    def test_eval_on_train_includes_train_metrics(self, setup):
+        """Test that eval_on_train=True includes train_ prefixed metrics."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        received_metrics = []
+
+        class EvalTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                received_metrics.append(dict(metrics))
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=1,
+            eval_strategy="epoch",
+            # No eval_metrics = just loss
+            eval_on_train=True,
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[EvalTracker()],
+        )
+        trainer.train()
+
+        assert len(received_metrics) >= 1
+        # Should have both train_loss and val_loss
+        assert "train_loss" in received_metrics[0]
+        assert "val_loss" in received_metrics[0]
+
+    def test_best_model_saved_on_val_loss_improvement(self, setup):
+        """Test that best model is saved when val_loss improves."""
+        model, tokenizer, data = setup
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = TrainingConfig(
+                batch_size=4,
+                num_epochs=3,
+                eval_strategy="epoch",
+                # No eval_metrics = just loss
+            )
+
+            trainer = OrigamiTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_data=data,
+                eval_data=data[:4],
+                config=config,
+                checkpoint_dir=tmpdir,
+            )
+            trainer.train()
+
+            # Best checkpoint should exist
+            best_path = Path(tmpdir) / "best.pt"
+            assert best_path.exists()
