@@ -15,3 +15,7 @@ wheels/
 # Local data and checkpoints
 datasets/
 checkpoints/
+*.pt
+
+# IDE
+.vscode/
