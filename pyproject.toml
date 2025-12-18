@@ -9,10 +9,14 @@ dependencies = [
     "numpy>=1.24",
     "scikit-learn>=1.3",
     "tqdm",
+    "click>=8.0",
     "ipykernel>=7.1.0",
     "matplotlib>=3.10.8",
     "ipywidgets>=8.1.8",
 ]
+
+[project.scripts]
+origami = "origami.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -20,6 +24,9 @@ dev = [
     "pytest-cov",
     "ruff",
     "mypy",
+]
+mongodb = [
+    "pymongo>=4.0",
 ]
 hf = [
     "transformers>=4.30",

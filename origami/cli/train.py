@@ -1,0 +1,329 @@
+"""Train subcommand for Origami CLI."""
+
+from __future__ import annotations
+
+import random
+import sys
+from typing import TYPE_CHECKING
+
+import click
+
+from origami.cli.data_loaders import DataFormat, detect_format, load_data
+
+if TYPE_CHECKING:
+    pass
+
+
+def parse_set_params(set_params: tuple[str, ...]) -> dict:
+    """Parse --set KEY=VALUE parameters into a dictionary.
+
+    Handles type conversion for common value types:
+    - integers, floats, booleans, None, strings
+
+    Args:
+        set_params: Tuple of "KEY=VALUE" strings
+
+    Returns:
+        Dictionary of parameter names to values
+    """
+    result = {}
+    for param in set_params:
+        if "=" not in param:
+            raise click.BadParameter(f"Invalid --set format: '{param}'. Use KEY=VALUE.")
+
+        key, value = param.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+
+        # Type conversion
+        if value.lower() == "none":
+            result[key] = None
+        elif value.lower() == "true":
+            result[key] = True
+        elif value.lower() == "false":
+            result[key] = False
+        else:
+            # Try int
+            try:
+                result[key] = int(value)
+                continue
+            except ValueError:
+                pass
+
+            # Try float
+            try:
+                result[key] = float(value)
+                continue
+            except ValueError:
+                pass
+
+            # Keep as string
+            result[key] = value
+
+    return result
+
+
+@click.command()
+@click.option(
+    "-d",
+    "--data",
+    required=True,
+    help="Training data. Format auto-detected: .csv, .json, .jsonl, or mongodb:// URI.",
+)
+@click.option(
+    "--db",
+    default=None,
+    help="MongoDB database name (required with mongodb:// URI).",
+)
+@click.option(
+    "-c",
+    "--collection",
+    default=None,
+    help="MongoDB collection name (required with mongodb:// URI).",
+)
+@click.option(
+    "--val",
+    default=None,
+    help="Validation data file. Format auto-detected from extension.",
+)
+@click.option(
+    "--val-collection",
+    default=None,
+    help="Validation collection name (MongoDB mode). Uses same --db.",
+)
+@click.option(
+    "--train-ratio",
+    type=float,
+    default=None,
+    help="Split training data into train/val with this ratio (e.g., 0.8).",
+)
+@click.option(
+    "-t",
+    "--target-key",
+    default=None,
+    help="Target field to predict. Required for accuracy metrics during training.",
+)
+@click.option(
+    "-e",
+    "--epochs",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Number of training epochs.",
+)
+@click.option(
+    "-b",
+    "--batch-size",
+    type=int,
+    default=32,
+    show_default=True,
+    help="Training batch size.",
+)
+@click.option(
+    "-l",
+    "--lr",
+    type=float,
+    default=1e-3,
+    show_default=True,
+    help="Learning rate.",
+)
+@click.option(
+    "-D",
+    "--d-model",
+    type=int,
+    default=128,
+    show_default=True,
+    help="Model hidden dimension.",
+)
+@click.option(
+    "-H",
+    "--n-heads",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of attention heads.",
+)
+@click.option(
+    "-L",
+    "--n-layers",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of transformer layers.",
+)
+@click.option(
+    "-n",
+    "--numeric-mode",
+    type=click.Choice(["none", "discretize", "scale"]),
+    default="none",
+    show_default=True,
+    help="Numeric field handling: none, discretize (binning), or scale (continuous).",
+)
+@click.option(
+    "-o",
+    "--output",
+    required=True,
+    help="Output path for trained model (e.g., model.pt).",
+)
+@click.option(
+    "--eval-sample-size",
+    type=int,
+    default=None,
+    help="Sample N examples for progress evaluations (faster). Default: full eval.",
+)
+@click.option(
+    "--set",
+    "set_params",
+    multiple=True,
+    help="Set any PipelineConfig parameter. Example: --set d_ff=1024",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=42,
+    show_default=True,
+    help="Random seed for reproducibility.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Enable verbose progress output.",
+)
+def train(
+    data: str,
+    db: str | None,
+    collection: str | None,
+    val: str | None,
+    val_collection: str | None,
+    train_ratio: float | None,
+    target_key: str | None,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    d_model: int,
+    n_heads: int,
+    n_layers: int,
+    numeric_mode: str,
+    output: str,
+    eval_sample_size: int | None,
+    set_params: tuple[str, ...],
+    seed: int,
+    verbose: bool,
+) -> None:
+    """Train an Origami model on data.
+
+    \b
+    Examples:
+      # Train on JSONL file
+      origami train -d data.jsonl -t label -e 20 -o model.pt
+
+      # Train with validation split
+      origami train -d data.jsonl -t label --train-ratio 0.8 -o model.pt
+
+      # Train with separate validation file
+      origami train -d train.jsonl --val val.jsonl -t label -o model.pt
+
+      # Train with custom architecture
+      origami train -d data.jsonl -t label -D 256 -L 6 -H 8 -o model.pt
+
+      # Train with continuous numeric handling
+      origami train -d data.jsonl -t label -n scale -o model.pt
+
+      # Train from MongoDB
+      origami train -d mongodb://localhost:27017 --db mydb -c train -t label -o model.pt
+    """
+    import torch
+
+    from origami import OrigamiPipeline, PipelineConfig
+    from origami.training import TableLogCallback, accuracy
+
+    # Set seeds
+    random.seed(seed)
+    torch.manual_seed(seed)
+
+    # Parse escape hatch parameters
+    extra_params = parse_set_params(set_params)
+
+    # Load training data
+    click.echo(f"Loading training data from {data}...")
+    train_data = load_data(data, db=db, collection=collection)
+    click.echo(f"  Loaded {len(train_data)} samples")
+
+    # Load or split validation data
+    eval_data = None
+    if val:
+        click.echo(f"Loading validation data from {val}...")
+        eval_data = load_data(val, db=db, collection=None)
+        click.echo(f"  Loaded {len(eval_data)} samples")
+    elif val_collection:
+        if detect_format(data) != DataFormat.MONGODB:
+            raise click.BadParameter("--val-collection requires MongoDB data source")
+        click.echo(f"Loading validation data from collection {val_collection}...")
+        eval_data = load_data(data, db=db, collection=val_collection)
+        click.echo(f"  Loaded {len(eval_data)} samples")
+    elif train_ratio:
+        # Split training data
+        random.shuffle(train_data)
+        split_idx = int(len(train_data) * train_ratio)
+        eval_data = train_data[split_idx:]
+        train_data = train_data[:split_idx]
+        click.echo(f"  Split: {len(train_data)} train, {len(eval_data)} validation")
+
+    # Build config
+    config_kwargs = {
+        "d_model": d_model,
+        "n_heads": n_heads,
+        "n_layers": n_layers,
+        "batch_size": batch_size,
+        "learning_rate": lr,
+        "num_epochs": epochs,
+        "numeric_mode": numeric_mode,
+    }
+
+    # Add evaluation config if target_key is provided
+    if target_key:
+        config_kwargs["target_key"] = target_key
+        config_kwargs["eval_strategy"] = "epoch"
+        config_kwargs["eval_metrics"] = {"accuracy": accuracy}
+        if eval_sample_size:
+            config_kwargs["eval_sample_size"] = eval_sample_size
+
+    # Apply escape hatch parameters
+    config_kwargs.update(extra_params)
+
+    try:
+        config = PipelineConfig(**config_kwargs)
+    except (ValueError, TypeError) as e:
+        raise click.BadParameter(f"Invalid configuration: {e}") from e
+
+    if verbose:
+        click.echo("\nConfiguration:")
+        click.echo(f"  d_model: {config.d_model}")
+        click.echo(f"  n_heads: {config.n_heads}")
+        click.echo(f"  n_layers: {config.n_layers}")
+        click.echo(f"  d_ff: {config.d_ff}")
+        click.echo(f"  numeric_mode: {config.numeric_mode}")
+        click.echo(f"  batch_size: {config.batch_size}")
+        click.echo(f"  learning_rate: {config.learning_rate}")
+
+    # Create and train pipeline
+    click.echo("\nTraining...")
+    pipeline = OrigamiPipeline(config)
+    
+    try:
+        pipeline.fit(train_data, eval_data=eval_data, epochs=epochs, callbacks=[TableLogCallback()], verbose=verbose)
+    except KeyboardInterrupt:
+        click.echo("\nTraining interrupted. Saving checkpoint...")
+    except Exception as e:
+        click.echo(f"\nTraining failed: {e}", err=True)
+        sys.exit(1)
+
+    # Save model
+    click.echo(f"\nSaving model to {output}...")
+    pipeline.save(output)
+
+    # Report final stats
+    params = pipeline._model.get_num_parameters()
+    click.echo(f"  Model parameters: {params:,}")
+    click.echo("Done!")
