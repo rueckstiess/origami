@@ -215,9 +215,10 @@ class NumericDiscretizer:
             # Check if this field should be discretized
             if path in self.discretizers:
                 discretizer = self.discretizers[path]
-                bin_idx = discretizer.transform([[float(value)]])[0, 0]
-                # Create a bin label like "bin_0", "bin_1", etc.
-                return f"bin_{int(bin_idx)}"
+                bin_idx = int(discretizer.transform([[float(value)]])[0, 0])
+                # Return bin center instead of string label
+                edges = discretizer.bin_edges_[0]
+                return float((edges[bin_idx] + edges[bin_idx + 1]) / 2)
             else:
                 # Pass through unchanged
                 return value

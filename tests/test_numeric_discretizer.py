@@ -132,16 +132,15 @@ class TestNumericDiscretizerTransform:
             d.transform([{"value": 1}])
 
     def test_transform_high_cardinality(self):
-        """Test transform converts high cardinality fields to bins."""
+        """Test transform converts high cardinality fields to bin centers."""
         data = [{"value": float(i)} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
 
-        # All values should be converted to bin labels
+        # All values should be converted to bin center floats
         for obj in transformed:
-            assert isinstance(obj["value"], str)
-            assert obj["value"].startswith("bin_")
+            assert isinstance(obj["value"], float)
 
     def test_transform_low_cardinality_passthrough(self):
         """Test transform passes through low cardinality fields."""
@@ -153,8 +152,8 @@ class TestNumericDiscretizerTransform:
         # category should pass through unchanged
         for i, obj in enumerate(transformed):
             assert obj["category"] == i % 5
-            # value gets discretized
-            assert isinstance(obj["value"], str)
+            # value gets discretized to bin center
+            assert isinstance(obj["value"], float)
 
     def test_transform_preserves_non_numeric(self):
         """Test transform preserves non-numeric fields."""
@@ -175,8 +174,7 @@ class TestNumericDiscretizerTransform:
         transformed = d.fit_transform(data)
 
         for obj in transformed:
-            assert isinstance(obj["outer"]["inner"], str)
-            assert obj["outer"]["inner"].startswith("bin_")
+            assert isinstance(obj["outer"]["inner"], float)
 
     def test_transform_arrays(self):
         """Test transform handles arrays."""
@@ -188,8 +186,7 @@ class TestNumericDiscretizerTransform:
         for obj in transformed:
             assert len(obj["items"]) == 3
             for item in obj["items"]:
-                assert isinstance(item, str)
-                assert item.startswith("bin_")
+                assert isinstance(item, float)
 
     def test_transform_does_not_mutate_input(self):
         """Test transform creates new objects, doesn't mutate input."""
@@ -204,13 +201,13 @@ class TestNumericDiscretizerTransform:
             assert obj["value"] == original_values[i]
 
     def test_transform_consistent_binning(self):
-        """Test same values map to same bins."""
+        """Test same values map to same bin centers."""
         data = [{"value": float(i % 50)} for i in range(200)]
 
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
 
-        # Check values 0 and 50 (which equal 0 after mod) get same bin
+        # Check values 0 and 50 (which equal 0 after mod) get same bin center
         assert transformed[0]["value"] == transformed[50]["value"]
         assert transformed[1]["value"] == transformed[51]["value"]
 
@@ -273,11 +270,11 @@ class TestNumericDiscretizerStrategies:
         d = NumericDiscretizer(cat_threshold=100, n_bins=10, strategy="quantile")
         transformed = d.fit_transform(data)
 
-        # Count samples in each bin
+        # Count samples in each bin (by bin center value)
         bin_counts = {}
         for obj in transformed:
-            bin_label = obj["value"]
-            bin_counts[bin_label] = bin_counts.get(bin_label, 0) + 1
+            bin_center = obj["value"]
+            bin_counts[bin_center] = bin_counts.get(bin_center, 0) + 1
 
         # Quantile strategy should have roughly equal counts per bin
         counts = list(bin_counts.values())
@@ -304,8 +301,8 @@ class TestNumericDiscretizerStrategies:
         d = NumericDiscretizer(cat_threshold=100, n_bins=5, strategy="kmeans")
         transformed = d.fit_transform(data)
 
-        # Should successfully transform
-        assert all(obj["value"].startswith("bin_") for obj in transformed)
+        # Should successfully transform to bin center floats
+        assert all(isinstance(obj["value"], float) for obj in transformed)
 
 
 class TestNumericDiscretizerSummary:
@@ -385,10 +382,9 @@ class TestNumericDiscretizerEdgeCases:
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
 
-        # Should convert integers to bins
+        # Should convert integers to bin center floats
         for obj in transformed:
-            assert isinstance(obj["value"], str)
-            assert obj["value"].startswith("bin_")
+            assert isinstance(obj["value"], float)
 
     def test_negative_values(self):
         """Test negative values are handled correctly."""
@@ -407,6 +403,91 @@ class TestNumericDiscretizerEdgeCases:
         d = NumericDiscretizer(cat_threshold=100, n_bins=10)
         transformed = d.fit_transform(data)
 
-        # Should successfully discretize
+        # Should successfully discretize to bin center floats
         for obj in transformed:
-            assert obj["value"].startswith("bin_")
+            assert isinstance(obj["value"], float)
+
+
+class TestNumericDiscretizerBinCenters:
+    """Tests for bin center calculation."""
+
+    def test_transform_returns_bin_center(self):
+        """Test transform returns the center of the bin."""
+        data = [{"value": float(i)} for i in range(200)]
+
+        d = NumericDiscretizer(cat_threshold=100, n_bins=10)
+        d.fit(data)
+
+        edges = d.get_bin_edges("value")
+
+        # Transform a value and verify it's the bin center
+        result = d.transform([{"value": 50.0}])[0]
+
+        # Find which bin 50.0 falls into
+        bin_idx = None
+        for i in range(len(edges) - 1):
+            if edges[i] <= 50.0 < edges[i + 1]:
+                bin_idx = i
+                break
+        # Handle edge case where value equals the last edge
+        if bin_idx is None:
+            bin_idx = len(edges) - 2
+
+        expected_center = (edges[bin_idx] + edges[bin_idx + 1]) / 2
+        assert abs(result["value"] - expected_center) < 0.001
+
+    def test_all_bins_produce_valid_centers(self):
+        """Test that all bins produce centers within expected range."""
+        data = [{"value": float(i)} for i in range(200)]
+
+        d = NumericDiscretizer(cat_threshold=100, n_bins=10)
+        d.fit(data)
+
+        edges = d.get_bin_edges("value")
+        transformed = d.transform(data)
+
+        # All transformed values should be valid bin centers
+        valid_centers = set()
+        for i in range(len(edges) - 1):
+            center = (edges[i] + edges[i + 1]) / 2
+            valid_centers.add(round(center, 6))  # Round to avoid float precision issues
+
+        for obj in transformed:
+            # Each value should be one of the valid bin centers
+            rounded = round(obj["value"], 6)
+            assert rounded in valid_centers, f"{obj['value']} not in valid centers"
+
+    def test_bin_center_within_original_range(self):
+        """Test bin centers are within the original data range."""
+        data = [{"value": float(i)} for i in range(100, 200)]  # Range 100-199
+
+        d = NumericDiscretizer(cat_threshold=50, n_bins=5)
+        transformed = d.fit_transform(data)
+
+        for obj in transformed:
+            # Bin center should be within the data range (with some tolerance for bin edges)
+            assert 99 <= obj["value"] <= 200, f"Value {obj['value']} outside expected range"
+
+    def test_multiple_fields_get_correct_centers(self):
+        """Test that multiple fields get their own correct bin centers."""
+        data = [{"a": float(i), "b": float(i * 10)} for i in range(200)]
+
+        d = NumericDiscretizer(cat_threshold=100, n_bins=5)
+        d.fit(data)
+
+        # Both fields should be discretized
+        assert "a" in d.discretized_fields
+        assert "b" in d.discretized_fields
+
+        # Field 'a' ranges 0-199, field 'b' ranges 0-1990
+        # Their bin centers should be different
+        transformed = d.transform([{"a": 50.0, "b": 500.0}])[0]
+
+        # Verify 'a' center is reasonable (around 0-199 range)
+        assert 0 <= transformed["a"] <= 200
+
+        # Verify 'b' center is reasonable (around 0-1990 range)
+        assert 0 <= transformed["b"] <= 2000
+
+        # They should not be equal
+        assert transformed["a"] != transformed["b"]

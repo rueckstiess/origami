@@ -1550,9 +1550,7 @@ class TestCallbacks:
 
         model, tokenizer, data = trainer_setup
 
-        config = TrainingConfig(
-            batch_size=4, num_epochs=1, eval_strategy="steps", eval_steps=10
-        )
+        config = TrainingConfig(batch_size=4, num_epochs=1, eval_strategy="steps", eval_steps=10)
         trainer = OrigamiTrainer(
             model=model,
             tokenizer=tokenizer,

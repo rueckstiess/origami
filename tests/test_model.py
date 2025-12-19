@@ -974,9 +974,9 @@ class TestOrigamiModelSaveLoad:
 
         # Compare weights
         for key in original_state:
-            assert torch.allclose(
-                original_state[key], loaded_model.state_dict()[key]
-            ), f"Weights mismatch for {key}"
+            assert torch.allclose(original_state[key], loaded_model.state_dict()[key]), (
+                f"Weights mismatch for {key}"
+            )
 
 
 class TestOrigamiModelGrammar:
@@ -1016,9 +1016,7 @@ class TestOrigamiModelGrammar:
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
-            [{"a": 1}]
-        )
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"a": 1}])
         mask = model.compute_grammar_mask(batch.input_ids)
 
         assert mask is not None
@@ -1048,9 +1046,7 @@ class TestOrigamiModelContinuousLossWeight:
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
-            [{"value": 1}]
-        )
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"value": 1}])
         seq_len = batch.input_ids.shape[1]
 
         # Create numeric values and mask
@@ -1084,9 +1080,7 @@ class TestOrigamiModelContinuousLossWeight:
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
-            [{"value": 1}]
-        )
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"value": 1}])
         seq_len = batch.input_ids.shape[1]
 
         # Create numeric values and mask with multiple NUM positions

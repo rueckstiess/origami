@@ -710,9 +710,7 @@ class TestPipelineEvaluate:
         pipeline = OrigamiPipeline(config)
         pipeline.fit(data, epochs=2)
 
-        results = pipeline.evaluate(
-            data[:10], target_key="label", metrics={"accuracy": accuracy}
-        )
+        results = pipeline.evaluate(data[:10], target_key="label", metrics={"accuracy": accuracy})
 
         assert "loss" in results
         assert "accuracy" in results
@@ -790,10 +788,7 @@ class TestPipelineInverseTransform:
         random.seed(42)
 
         # Data with categorical field and scaled numeric
-        data = [
-            {"category": random.choice(["A", "B"]), "count": i}
-            for i in range(100)
-        ]
+        data = [{"category": random.choice(["A", "B"]), "count": i} for i in range(100)]
 
         config = OrigamiConfig(
             model=ModelConfig(d_model=32, n_layers=2),

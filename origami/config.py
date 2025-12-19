@@ -155,9 +155,7 @@ class ModelConfig(PrettyReprMixin):
             )
         valid_backbones = {"transformer", "lstm", "mamba"}
         if self.backbone not in valid_backbones:
-            raise ValueError(
-                f"backbone must be one of {valid_backbones}, got '{self.backbone}'"
-            )
+            raise ValueError(f"backbone must be one of {valid_backbones}, got '{self.backbone}'")
 
 
 @dataclass(repr=False)
