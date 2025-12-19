@@ -178,6 +178,9 @@ class TrainingConfig(PrettyReprMixin):
         eval_sample_size: If set, sample this many examples for evaluation.
         eval_on_train: Whether to also evaluate on training data.
         target_key: Key to predict for prediction-based metrics.
+        allow_complex_values: Whether to allow complex values (objects/arrays) during
+            evaluation predictions. If None (default), auto-detected based on metrics.
+            Set True for array_f1, array_jaccard, object_key_accuracy metrics.
     """
 
     # Optimization
@@ -204,6 +207,7 @@ class TrainingConfig(PrettyReprMixin):
     eval_sample_size: int | None = None
     eval_on_train: bool = False
     target_key: str | None = None
+    allow_complex_values: bool | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration."""

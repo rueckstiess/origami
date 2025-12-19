@@ -201,9 +201,7 @@ class OrigamiPipeline:
             max_depth=self.config.model.max_depth,
             max_array_index=self.config.model.max_array_position,
         )
-        self._tokenizer.fit(
-            all_processed, max_vocab_size=self.config.data.max_vocab_size
-        )
+        self._tokenizer.fit(all_processed, max_vocab_size=self.config.data.max_vocab_size)
 
         if verbose:
             print(f"Vocabulary size: {self._tokenizer.vocab.size}")
@@ -578,6 +576,7 @@ class OrigamiPipeline:
         metrics: dict[str, MetricFn] | None = None,
         sample_size: int | None = None,
         batch_size: int = 32,
+        allow_complex_values: bool | None = None,
     ) -> dict[str, float]:
         """Evaluate the model on data.
 
@@ -594,6 +593,8 @@ class OrigamiPipeline:
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
             batch_size: Batch size for evaluation.
+            allow_complex_values: Whether to allow complex values (objects/arrays)
+                during predictions. If None (default), auto-detected based on metrics.
 
         Returns:
             Dict mapping metric names to their values. Always includes "loss".
@@ -631,12 +632,16 @@ class OrigamiPipeline:
         if isinstance(self._preprocessor, NumericScaler):
             inverse_fn = self._create_inverse_transform_fn()
 
+        # Resolve allow_complex_values with auto-detection
+        effective_allow_complex = self._resolve_allow_complex_values(allow_complex_values, metrics)
+
         # Create evaluator and run evaluation
         evaluator = OrigamiEvaluator(
             self._model,
             self._tokenizer,
             target_key=effective_target_key,
             inverse_transform=inverse_fn,
+            allow_complex_values=effective_allow_complex,
         )
 
         return evaluator.evaluate(
@@ -811,6 +816,27 @@ class OrigamiPipeline:
             return value
 
         return inverse_transform
+
+    def _resolve_allow_complex_values(
+        self,
+        explicit_value: bool | None,
+        metrics: dict[str, MetricFn] | None,
+    ) -> bool:
+        """Resolve allow_complex_values with auto-detection.
+
+        Args:
+            explicit_value: Explicit value passed to evaluate(), or None
+            metrics: Metrics dict to check for complex-requiring metrics
+
+        Returns:
+            Resolved boolean value
+        """
+        from origami.training.metrics import any_metric_requires_complex_values
+
+        if explicit_value is not None:
+            return explicit_value
+
+        return any_metric_requires_complex_values(metrics)
 
     def _get_embedder(self, pooling: Literal["mean", "max", "last", "target"]) -> OrigamiEmbedder:
         """Get or create an embedder with the specified pooling.

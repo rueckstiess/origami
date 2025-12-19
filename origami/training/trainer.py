@@ -11,6 +11,7 @@ Provides training utilities with support for:
 
 import math
 import time
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -194,10 +195,14 @@ class OrigamiTrainer:
         # Create evaluator for unified evaluation (lazy import to avoid circular)
         from origami.inference import OrigamiEvaluator
 
+        # Resolve allow_complex_values with auto-detection and warning
+        allow_complex_values = self._resolve_allow_complex_values()
+
         self.evaluator = OrigamiEvaluator(
             model=model,
             tokenizer=tokenizer,
             target_key=self.config.target_key,
+            allow_complex_values=allow_complex_values,
         )
 
         # Track last evaluation step to avoid duplicate evals
@@ -213,6 +218,48 @@ class OrigamiTrainer:
             return max(0.0, 1.0 - step / max(1, self.total_steps))
 
         return LambdaLR(self.optimizer, lr_lambda)
+
+    def _resolve_allow_complex_values(self) -> bool:
+        """Resolve allow_complex_values with auto-detection and conflict warning.
+
+        If config.allow_complex_values is None, auto-detects based on whether
+        any configured metrics require complex values (arrays/objects).
+
+        If config.allow_complex_values is explicitly False but metrics require
+        complex values, emits a warning.
+
+        Returns:
+            Resolved boolean value for allow_complex_values.
+        """
+        from origami.training.metrics import (
+            any_metric_requires_complex_values,
+            metric_requires_complex_values,
+        )
+
+        config_value = self.config.allow_complex_values
+        requires_complex = any_metric_requires_complex_values(self.config.eval_metrics)
+
+        if config_value is None:
+            # Auto-detect based on metrics
+            return requires_complex
+
+        if config_value is False and requires_complex:
+            # Explicit False but metrics require complex values - warn
+            # Build list of conflicting metrics for the warning message
+            conflicting = [
+                f"{name} ({fn.__name__})"
+                for name, fn in self.config.eval_metrics.items()
+                if metric_requires_complex_values(fn)
+            ]
+            warnings.warn(
+                f"allow_complex_values=False but these metrics require complex values: "
+                f"{sorted(conflicting)}. Evaluation predictions will be restricted "
+                f"to primitive values, which may cause these metrics to report incorrect results.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        return config_value
 
     def _should_evaluate_step(self) -> bool:
         """Check if we should evaluate at the current step.

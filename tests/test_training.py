@@ -1642,3 +1642,191 @@ class TestCallbacks:
         # Epoch begin should reset
         handler.fire_event("on_epoch_begin", trainer, state)
         assert handler._batch_count == 0
+
+
+class TestAllowComplexValues:
+    """Tests for allow_complex_values in training."""
+
+    @pytest.fixture
+    def trainer_setup(self):
+        """Create model, tokenizer, and data for trainer tests."""
+        data = [
+            {"tags": ["a", "b"], "x": 1},
+            {"tags": ["c"], "x": 2},
+            {"tags": ["a", "c"], "x": 3},
+        ]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        config = ModelConfig(d_model=32, n_heads=2, n_layers=1)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        return model, tokenizer, data
+
+    def test_training_config_default_is_none(self):
+        """Test that TrainingConfig.allow_complex_values defaults to None."""
+        config = TrainingConfig()
+        assert config.allow_complex_values is None
+
+    def test_training_config_explicit_values(self):
+        """Test setting explicit True/False values."""
+        config_true = TrainingConfig(allow_complex_values=True)
+        assert config_true.allow_complex_values is True
+
+        config_false = TrainingConfig(allow_complex_values=False)
+        assert config_false.allow_complex_values is False
+
+    def test_auto_detect_enables_for_array_f1(self, trainer_setup):
+        """Test auto-detection enables allow_complex_values for array_f1."""
+        from origami.training import array_f1
+
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            eval_metrics={"f1": array_f1},  # Aliased name - detection uses fn.__name__
+            target_key="tags",
+            # allow_complex_values=None (default, auto-detect)
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        assert trainer.evaluator.allow_complex_values is True
+
+    def test_auto_detect_enables_for_array_jaccard(self, trainer_setup):
+        """Test auto-detection enables allow_complex_values for array_jaccard."""
+        from origami.training import array_jaccard
+
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            eval_metrics={"jaccard": array_jaccard},  # Aliased name
+            target_key="tags",
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        assert trainer.evaluator.allow_complex_values is True
+
+    def test_auto_detect_disabled_for_accuracy_only(self, trainer_setup):
+        """Test auto-detection keeps False for accuracy-only metrics."""
+        from origami.training import accuracy
+
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            eval_metrics={"acc": accuracy},
+            target_key="x",
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        assert trainer.evaluator.allow_complex_values is False
+
+    def test_auto_detect_disabled_when_no_metrics(self, trainer_setup):
+        """Test auto-detection keeps False when no metrics configured."""
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            # No eval_metrics
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        assert trainer.evaluator.allow_complex_values is False
+
+    def test_explicit_true_respected(self, trainer_setup):
+        """Test explicit True is respected even without complex metrics."""
+        from origami.training import accuracy
+
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            eval_metrics={"acc": accuracy},
+            target_key="x",
+            allow_complex_values=True,  # Explicit True
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        assert trainer.evaluator.allow_complex_values is True
+
+    def test_explicit_false_with_complex_metric_warns(self, trainer_setup):
+        """Test warning when explicit False conflicts with complex-requiring metrics."""
+        import warnings
+
+        from origami.training import array_f1
+
+        model, tokenizer, data = trainer_setup
+        config = TrainingConfig(
+            batch_size=2,
+            num_epochs=1,
+            eval_metrics={"array_f1": array_f1},  # Use canonical name for detection
+            target_key="tags",
+            allow_complex_values=False,  # Explicit False
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            trainer = OrigamiTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_data=data,
+                config=config,
+            )
+
+            assert len(w) == 1
+            assert "allow_complex_values=False" in str(w[0].message)
+            assert "array_f1" in str(w[0].message)
+            assert trainer.evaluator.allow_complex_values is False
+
+
+class TestComplexValueMetricsRegistry:
+    """Tests for COMPLEX_VALUE_METRICS constant."""
+
+    def test_contains_expected_metrics(self):
+        """Test registry contains known complex-requiring metrics."""
+        from origami.training import COMPLEX_VALUE_METRICS
+
+        assert "array_f1" in COMPLEX_VALUE_METRICS
+        assert "array_jaccard" in COMPLEX_VALUE_METRICS
+        assert "object_key_accuracy" in COMPLEX_VALUE_METRICS
+
+    def test_does_not_contain_simple_metrics(self):
+        """Test registry does not contain simple metrics."""
+        from origami.training import COMPLEX_VALUE_METRICS
+
+        assert "accuracy" not in COMPLEX_VALUE_METRICS
+
+    def test_is_frozenset(self):
+        """Test registry is immutable frozenset."""
+        from origami.training import COMPLEX_VALUE_METRICS
+
+        assert isinstance(COMPLEX_VALUE_METRICS, frozenset)

@@ -12,9 +12,12 @@ from .callbacks import (
 from .collator import OrigamiDataCollator
 from .dataset import EvalDataset, UpscaledDataset
 from .metrics import (
+    COMPLEX_VALUE_METRICS,
     accuracy,
+    any_metric_requires_complex_values,
     array_f1,
     array_jaccard,
+    metric_requires_complex_values,
     object_key_accuracy,
 )
 from .trainer import EpochStats, OrigamiTrainer, TrainResult
@@ -35,8 +38,11 @@ __all__ = [
     "ProgressCallback",
     "TableLogCallback",
     # Metrics
+    "COMPLEX_VALUE_METRICS",
     "accuracy",
+    "any_metric_requires_complex_values",
     "array_f1",
     "array_jaccard",
+    "metric_requires_complex_values",
     "object_key_accuracy",
 ]

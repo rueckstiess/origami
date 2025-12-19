@@ -130,9 +130,7 @@ class JSONTokenizer:
         self.max_array_index = max_array_index
         self._pruning_stats: PruningStats | None = None
 
-    def fit(
-        self, objects: Iterable[dict], max_vocab_size: int = 0
-    ) -> "JSONTokenizer":
+    def fit(self, objects: Iterable[dict], max_vocab_size: int = 0) -> "JSONTokenizer":
         """Build vocabulary from a collection of JSON objects.
 
         Iterates through all objects, extracting keys and values to build

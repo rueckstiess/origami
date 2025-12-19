@@ -748,6 +748,69 @@ class TestPipelineEvaluate:
 
         assert "accuracy" in results
 
+    def test_evaluate_auto_detects_allow_complex_values(self):
+        """Test that evaluate auto-detects allow_complex_values from metrics."""
+        from origami.training import array_f1
+
+        torch.manual_seed(42)
+        data = [{"tags": ["a", "b"], "x": i} for i in range(30)]
+
+        config = OrigamiConfig(model=ModelConfig(d_model=32, n_layers=2))
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2)
+
+        # With array_f1 metric (using canonical name), should auto-enable complex values
+        # The metric should be computed without error (even if untrained model gives wrong predictions)
+        results = pipeline.evaluate(data[:5], target_key="tags", metrics={"array_f1": array_f1})
+
+        assert "array_f1" in results
+        assert isinstance(results["array_f1"], float)
+        assert 0.0 <= results["array_f1"] <= 1.0
+
+    def test_evaluate_explicit_allow_complex_values(self):
+        """Test that evaluate accepts explicit allow_complex_values."""
+        from origami.training import accuracy
+
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(model=ModelConfig(d_model=32, n_layers=2))
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2)
+
+        # Explicit True - should work for simple metrics too
+        results = pipeline.evaluate(
+            data[:5],
+            target_key="label",
+            metrics={"acc": accuracy},
+            allow_complex_values=True,
+        )
+
+        assert "acc" in results
+
+    def test_evaluate_explicit_false_overrides_auto_detect(self):
+        """Test that explicit False overrides auto-detection."""
+        from origami.training import array_f1
+
+        torch.manual_seed(42)
+        data = [{"tags": ["a", "b"], "x": i} for i in range(30)]
+
+        config = OrigamiConfig(model=ModelConfig(d_model=32, n_layers=2))
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2)
+
+        # Explicit False - array_f1 will likely return 0.0 since predictions are primitives
+        results = pipeline.evaluate(
+            data[:5],
+            target_key="tags",
+            metrics={"array_f1": array_f1},
+            allow_complex_values=False,
+        )
+
+        assert "array_f1" in results
+        # With allow_complex_values=False, predictions are primitives, so F1 will be 0
+        assert results["array_f1"] == 0.0
+
 
 class TestPipelineInverseTransform:
     """Tests for inverse transform functionality with NumericScaler."""
@@ -819,10 +882,7 @@ class TestPipelineInverseTransform:
         random.seed(42)
 
         # Data with nested high-cardinality numeric field
-        data = [
-            {"label": "A", "stats": {"value": random.random() * 1000}}
-            for _ in range(100)
-        ]
+        data = [{"label": "A", "stats": {"value": random.random() * 1000}} for _ in range(100)]
 
         config = OrigamiConfig(
             model=ModelConfig(d_model=32, n_layers=2, use_continuous_head=True),

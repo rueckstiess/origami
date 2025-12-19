@@ -416,9 +416,7 @@ class Vocabulary:
             value_frequency_threshold=threshold,
         )
 
-    def _rebuild_with_kept_values(
-        self, kept_values: list[tuple[ValueToken, int]]
-    ) -> None:
+    def _rebuild_with_kept_values(self, kept_values: list[tuple[ValueToken, int]]) -> None:
         """Rebuild vocabulary keeping only specified values.
 
         Reassigns contiguous IDs: grammar tokens (0-9) -> keys -> kept values.

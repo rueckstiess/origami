@@ -4,8 +4,65 @@ All metrics follow sklearn convention: (y_true: list, y_pred: list) -> float
 where y_true and y_pred are lists of JSON values (can be any type).
 """
 
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from typing import Any
+
+# Metrics that require allow_complex_values=True for correct predictions.
+# These metrics expect arrays or objects as predictions and will return 0.0
+# if the predictor only generates primitive values.
+COMPLEX_VALUE_METRICS: frozenset[str] = frozenset(
+    {
+        "array_f1",
+        "array_jaccard",
+        "object_key_accuracy",
+    }
+)
+
+
+# Type alias for metric functions
+MetricFn = Callable[[list[Any], list[Any]], float]
+
+
+def metric_requires_complex_values(fn: MetricFn) -> bool:
+    """Check if a metric function requires complex values (arrays/objects).
+
+    Uses the function's __name__ attribute to check against known complex-requiring
+    metrics. This allows detection to work even with aliased names like {"f1": array_f1}.
+
+    Args:
+        fn: A metric function following sklearn convention.
+
+    Returns:
+        True if the metric requires complex value predictions.
+
+    Example:
+        >>> metric_requires_complex_values(array_f1)
+        True
+        >>> metric_requires_complex_values(accuracy)
+        False
+    """
+    fn_name = getattr(fn, "__name__", None)
+    return fn_name in COMPLEX_VALUE_METRICS
+
+
+def any_metric_requires_complex_values(metrics: dict[str, MetricFn] | None) -> bool:
+    """Check if any metric in a dict requires complex values.
+
+    Args:
+        metrics: Dict mapping metric names to functions, or None.
+
+    Returns:
+        True if any metric requires complex value predictions.
+
+    Example:
+        >>> any_metric_requires_complex_values({"f1": array_f1, "acc": accuracy})
+        True
+        >>> any_metric_requires_complex_values({"acc": accuracy})
+        False
+    """
+    if not metrics:
+        return False
+    return any(metric_requires_complex_values(fn) for fn in metrics.values())
 
 
 def accuracy(y_true: list[Any], y_pred: list[Any]) -> float:
