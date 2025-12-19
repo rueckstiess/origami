@@ -36,6 +36,23 @@ AVAILABLE_METRICS = ["accuracy", "array_f1", "array_jaccard", "object_key_accura
     help="MongoDB collection name (required with mongodb:// URI).",
 )
 @click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+)
+@click.option(
     "-t",
     "--target-key",
     required=True,
@@ -66,6 +83,9 @@ def evaluate(
     data: str,
     db: str | None,
     collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
     target_key: str,
     metrics: tuple[str, ...],
     sample_size: int | None,
@@ -97,7 +117,9 @@ def evaluate(
 
     # Load test data
     click.echo(f"Loading test data from {data}...")
-    test_data = load_data(data, db=db, collection=collection)
+    test_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
     click.echo(f"  Loaded {len(test_data)} samples")
 
     # Build metrics dict

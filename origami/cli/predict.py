@@ -37,6 +37,23 @@ from origami.cli.data_loaders import load_data
     help="MongoDB collection name (required with mongodb:// URI).",
 )
 @click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+)
+@click.option(
     "-t",
     "--target-key",
     required=True,
@@ -77,6 +94,9 @@ def predict(
     data: str,
     db: str | None,
     collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
     target_key: str,
     output: str | None,
     output_format: str,
@@ -114,7 +134,9 @@ def predict(
 
     # Load input data
     click.echo(f"Loading data from {data}...", err=True)
-    input_data = load_data(data, db=db, collection=collection)
+    input_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
     click.echo(f"  Loaded {len(input_data)} samples", err=True)
 
     # Prepare inputs (set target to None)

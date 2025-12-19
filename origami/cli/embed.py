@@ -58,6 +58,23 @@ def detect_output_format(path: str) -> str:
     help="MongoDB collection name (required with mongodb:// URI).",
 )
 @click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+)
+@click.option(
     "-o",
     "--output",
     required=True,
@@ -94,6 +111,9 @@ def embed(
     data: str,
     db: str | None,
     collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
     output: str,
     pooling: str,
     target_key: str | None,
@@ -139,7 +159,9 @@ def embed(
 
     # Load input data
     click.echo(f"Loading data from {data}...")
-    input_data = load_data(data, db=db, collection=collection)
+    input_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
     click.echo(f"  Loaded {len(input_data)} samples")
 
     # Create embeddings

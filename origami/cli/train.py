@@ -145,6 +145,23 @@ def parse_set_params(set_params: tuple[str, ...]) -> dict:
     help="MongoDB collection name (required with mongodb:// URI).",
 )
 @click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning of training data.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit training data to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+)
+@click.option(
     "--val",
     default=None,
     help="Validation data file. Format auto-detected from extension.",
@@ -257,6 +274,9 @@ def train(
     data: str,
     db: str | None,
     collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
     val: str | None,
     val_collection: str | None,
     train_ratio: float | None,
@@ -311,7 +331,9 @@ def train(
 
     # Load training data
     click.echo(f"Loading training data from {data}...")
-    train_data = load_data(data, db=db, collection=collection)
+    train_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
     click.echo(f"  Loaded {len(train_data)} samples")
 
     # Load or split validation data
