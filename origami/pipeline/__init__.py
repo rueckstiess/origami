@@ -5,7 +5,7 @@ and performing inference with automatic preprocessing and inverse transforms.
 
 Example:
     ```python
-    from origami.pipeline import OrigamiPipeline, PipelineConfig
+    from origami.pipeline import OrigamiPipeline, OrigamiConfig
 
     # Simple training with defaults
     pipeline = OrigamiPipeline()
@@ -19,7 +19,8 @@ Example:
     ```
 """
 
-from .config import PipelineConfig
+from origami.config import OrigamiConfig
+
 from .pipeline import OrigamiPipeline
 
-__all__ = ["OrigamiPipeline", "PipelineConfig"]
+__all__ = ["OrigamiPipeline", "OrigamiConfig"]

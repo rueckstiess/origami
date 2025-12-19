@@ -14,51 +14,114 @@ if TYPE_CHECKING:
     pass
 
 
-def parse_set_params(set_params: tuple[str, ...]) -> dict:
-    """Parse --set KEY=VALUE parameters into a dictionary.
+def _parse_value(value: str):
+    """Parse a string value to its appropriate type.
 
-    Handles type conversion for common value types:
-    - integers, floats, booleans, None, strings
+    Handles: None, True, False, int, float, string.
+    """
+    if value.lower() == "none":
+        return None
+    elif value.lower() == "true":
+        return True
+    elif value.lower() == "false":
+        return False
+    else:
+        # Try int
+        try:
+            return int(value)
+        except ValueError:
+            pass
+
+        # Try float
+        try:
+            return float(value)
+        except ValueError:
+            pass
+
+        # Keep as string
+        return value
+
+
+# Mapping from flat parameter names to nested config paths
+_PARAM_SECTION_MAP = {
+    # Model params
+    "d_model": "model",
+    "n_heads": "model",
+    "n_layers": "model",
+    "d_ff": "model",
+    "dropout": "model",
+    "max_depth": "model",
+    "max_array_position": "model",
+    "kvpe_pooling": "model",
+    "backbone": "model",
+    "num_mixture_components": "model",
+    "use_grammar_constraints": "model",
+    "max_seq_length": "model",
+    # Training params
+    "batch_size": "training",
+    "learning_rate": "training",
+    "num_epochs": "training",
+    "warmup_steps": "training",
+    "weight_decay": "training",
+    "shuffle_keys": "training",
+    "upscale_factor": "training",
+    "save_every_n_epochs": "training",
+    "eval_strategy": "training",
+    "eval_steps": "training",
+    "eval_epochs": "training",
+    "eval_sample_size": "training",
+    "eval_on_train": "training",
+    "target_key": "training",
+    # Data params
+    "numeric_mode": "data",
+    "cat_threshold": "data",
+    "n_bins": "data",
+    "bin_strategy": "data",
+    "max_vocab_size": "data",
+}
+
+
+def parse_set_params(set_params: tuple[str, ...]) -> dict:
+    """Parse --set KEY=VALUE parameters into nested config dictionaries.
+
+    Supports both flat keys (auto-mapped to sections) and dot notation:
+    - --set d_model=256         -> {"model": {"d_model": 256}}
+    - --set model.d_model=256   -> {"model": {"d_model": 256}}
+    - --set training.batch_size=64 -> {"training": {"batch_size": 64}}
 
     Args:
         set_params: Tuple of "KEY=VALUE" strings
 
     Returns:
-        Dictionary of parameter names to values
+        Nested dict with "model", "training", "data" keys
     """
-    result = {}
+    result: dict = {"model": {}, "training": {}, "data": {}}
+
     for param in set_params:
         if "=" not in param:
             raise click.BadParameter(f"Invalid --set format: '{param}'. Use KEY=VALUE.")
 
         key, value = param.split("=", 1)
         key = key.strip()
-        value = value.strip()
+        value_parsed = _parse_value(value.strip())
 
-        # Type conversion
-        if value.lower() == "none":
-            result[key] = None
-        elif value.lower() == "true":
-            result[key] = True
-        elif value.lower() == "false":
-            result[key] = False
+        if "." in key:
+            # Dot notation: section.field
+            section, field = key.split(".", 1)
+            if section not in result:
+                raise click.BadParameter(
+                    f"Unknown config section: '{section}'. Valid: model, training, data."
+                )
+            result[section][field] = value_parsed
         else:
-            # Try int
-            try:
-                result[key] = int(value)
-                continue
-            except ValueError:
-                pass
-
-            # Try float
-            try:
-                result[key] = float(value)
-                continue
-            except ValueError:
-                pass
-
-            # Keep as string
-            result[key] = value
+            # Flat key - look up which section it belongs to
+            section = _PARAM_SECTION_MAP.get(key)
+            if section is None:
+                raise click.BadParameter(
+                    f"Unknown config parameter: '{key}'. Use --set section.field=value "
+                    f"or see documentation for valid parameters."
+                )
+            result[section][key] = value_parsed
 
     return result
 
@@ -235,14 +298,15 @@ def train(
     """
     import torch
 
-    from origami import OrigamiPipeline, PipelineConfig
+    from origami import OrigamiPipeline
+    from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
     from origami.training import TableLogCallback, accuracy
 
     # Set seeds
     random.seed(seed)
     torch.manual_seed(seed)
 
-    # Parse escape hatch parameters
+    # Parse escape hatch parameters (returns nested dict)
     extra_params = parse_set_params(set_params)
 
     # Load training data
@@ -270,42 +334,51 @@ def train(
         train_data = train_data[:split_idx]
         click.echo(f"  Split: {len(train_data)} train, {len(eval_data)} validation")
 
-    # Build config
-    config_kwargs = {
+    # Build nested config from CLI args
+    model_kwargs = {
         "d_model": d_model,
         "n_heads": n_heads,
         "n_layers": n_layers,
+        **extra_params.get("model", {}),
+    }
+
+    training_kwargs = {
         "batch_size": batch_size,
         "learning_rate": lr,
         "num_epochs": epochs,
-        "numeric_mode": numeric_mode,
+        **extra_params.get("training", {}),
     }
+
+    data_kwargs = {
+        "numeric_mode": numeric_mode,
+        **extra_params.get("data", {}),
+    }
+
+    # Enable continuous head when using scale mode
+    actual_numeric_mode = data_kwargs.get("numeric_mode", "none")
+    if actual_numeric_mode == "scale":
+        model_kwargs.setdefault("use_continuous_head", True)
 
     # Add evaluation config if target_key is provided
     if target_key:
-        config_kwargs["target_key"] = target_key
-        config_kwargs["eval_strategy"] = "epoch"
-        config_kwargs["eval_metrics"] = {"accuracy": accuracy}
+        training_kwargs["target_key"] = target_key
+        training_kwargs.setdefault("eval_strategy", "epoch")  # Default, but respect --set
+        training_kwargs.setdefault("eval_metrics", {"accuracy": accuracy})
         if eval_sample_size:
-            config_kwargs["eval_sample_size"] = eval_sample_size
-
-    # Apply escape hatch parameters
-    config_kwargs.update(extra_params)
+            training_kwargs["eval_sample_size"] = eval_sample_size
 
     try:
-        config = PipelineConfig(**config_kwargs)
+        config = OrigamiConfig(
+            model=ModelConfig(**model_kwargs),
+            training=TrainingConfig(**training_kwargs),
+            data=DataConfig(**data_kwargs),
+        )
     except (ValueError, TypeError) as e:
         raise click.BadParameter(f"Invalid configuration: {e}") from e
 
     if verbose:
         click.echo("\nConfiguration:")
-        click.echo(f"  d_model: {config.d_model}")
-        click.echo(f"  n_heads: {config.n_heads}")
-        click.echo(f"  n_layers: {config.n_layers}")
-        click.echo(f"  d_ff: {config.d_ff}")
-        click.echo(f"  numeric_mode: {config.numeric_mode}")
-        click.echo(f"  batch_size: {config.batch_size}")
-        click.echo(f"  learning_rate: {config.learning_rate}")
+        click.echo(config.to_yaml())
 
     # Create and train pipeline
     click.echo("\nTraining...")
@@ -329,6 +402,8 @@ def train(
     pipeline.save(output)
 
     # Report final stats
-    params = pipeline._model.get_num_parameters()
-    click.echo(f"  Model parameters: {params:,}")
+    if verbose:
+        params = pipeline._model.get_num_parameters()
+        click.echo(f"Model parameters: {params:,}")
+
     click.echo("Done!")

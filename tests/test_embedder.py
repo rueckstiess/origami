@@ -3,8 +3,9 @@
 import pytest
 import torch
 
+from origami.config import ModelConfig
 from origami.inference import OrigamiEmbedder
-from origami.model import OrigamiConfig, OrigamiModel
+from origami.model import OrigamiModel
 from origami.tokenizer import JSONTokenizer
 
 
@@ -24,8 +25,7 @@ def simple_tokenizer():
 @pytest.fixture
 def simple_model(simple_tokenizer):
     """Create a small model for testing."""
-    config = OrigamiConfig(
-        vocab_size=simple_tokenizer.vocab.size,
+    config = ModelConfig(
         d_model=32,
         n_heads=2,
         n_layers=1,
@@ -169,8 +169,7 @@ class TestOrigamiEmbedder:
 
     def test_always_uses_cpu(self, simple_tokenizer):
         """Test that embedder always runs on CPU for performance."""
-        config = OrigamiConfig(
-            vocab_size=simple_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -263,8 +262,7 @@ class TestEmbedderWithNestedData:
     @pytest.fixture
     def nested_model(self, nested_tokenizer):
         """Create a model for nested data."""
-        config = OrigamiConfig(
-            vocab_size=nested_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -321,8 +319,7 @@ class TestEmbedderWithArrays:
     @pytest.fixture
     def array_model(self, array_tokenizer):
         """Create a model for array data."""
-        config = OrigamiConfig(
-            vocab_size=array_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,

@@ -138,6 +138,10 @@ class Vocabulary:
         """Total number of tokens in the vocabulary."""
         return len(self._token_to_id)
 
+    def __len__(self) -> int:
+        """Total number of tokens in the vocabulary."""
+        return len(self._token_to_id)
+
     # Fixed grammar token IDs
     @property
     def start_id(self) -> int:

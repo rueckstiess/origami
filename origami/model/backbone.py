@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .config import OrigamiConfig
+from origami.config import ModelConfig
 
 
 class BackboneBase(nn.Module, ABC):
@@ -71,7 +71,7 @@ class TransformerBackbone(BackboneBase):
         norm: Final layer normalization
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig):
         """Initialize transformer backbone.
 
         Args:
@@ -198,7 +198,7 @@ class LSTMBackbone(BackboneBase):
     Implemented in Phase 6.
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig):
         """Initialize LSTM backbone.
 
         Args:
@@ -223,7 +223,7 @@ class MambaBackbone(BackboneBase):
     Implemented in Phase 6.
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig):
         """Initialize Mamba backbone.
 
         Args:
@@ -249,7 +249,7 @@ BACKBONE_CLASSES = {
 }
 
 
-def create_backbone(config: OrigamiConfig) -> BackboneBase:
+def create_backbone(config: ModelConfig) -> BackboneBase:
     """Create a backbone module based on configuration.
 
     Args:

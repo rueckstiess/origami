@@ -27,7 +27,7 @@ from .collator import OrigamiDataCollator
 from .dataset import EvalDataset, UpscaledDataset
 
 if TYPE_CHECKING:
-    from origami.model.config import TrainingConfig
+    from origami.config import TrainingConfig
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
@@ -134,7 +134,7 @@ class OrigamiTrainer:
                      computed automatically based on TrainingConfig settings.
             log_every_n_batches: Fire batch callbacks every N batches (default=1).
         """
-        from origami.model.config import TrainingConfig
+        from origami.config import TrainingConfig
 
         self.model = model
         self.tokenizer = tokenizer

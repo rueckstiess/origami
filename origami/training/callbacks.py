@@ -287,10 +287,7 @@ class ProgressCallback(TrainerCallback):
             self._pbar.close()
             self._pbar = None
         # Print interrupt message
-        print(
-            f"\nTraining interrupted at epoch {state.epoch + 1}, "
-            f"step {state.global_step}"
-        )
+        print(f"\nTraining interrupted at epoch {state.epoch + 1}, step {state.global_step}")
 
 
 class TableLogCallback(TrainerCallback):
@@ -304,10 +301,9 @@ class TableLogCallback(TrainerCallback):
 
     Example:
         ```python
-        from origami.training import OrigamiTrainer, TableLogCallback
-        from origami.model.config import TrainingConfig
+        from origami.training import OrigamiTrainer, TableLogCallback, accuracy
+        from origami.config import TrainingConfig
 
-        from origami.training import accuracy
         config = TrainingConfig(
             eval_strategy="steps",
             eval_steps=100,

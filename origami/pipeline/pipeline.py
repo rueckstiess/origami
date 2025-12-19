@@ -13,15 +13,13 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import torch
 
+from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
 from origami.inference import OrigamiEmbedder, OrigamiEvaluator, OrigamiGenerator, OrigamiPredictor
 from origami.inference.evaluator import MetricFn
-from origami.model import OrigamiConfig, OrigamiModel
-from origami.model.config import TrainingConfig
+from origami.model import OrigamiModel
 from origami.preprocessing import NumericDiscretizer, NumericScaler
 from origami.tokenizer import JSONTokenizer
 from origami.utils.device import auto_device
-
-from .config import PipelineConfig
 
 if TYPE_CHECKING:
     from origami.training import TrainResult
@@ -36,7 +34,7 @@ class OrigamiPipeline:
 
     Example - Training:
         ```python
-        from origami import OrigamiPipeline
+        from origami import OrigamiPipeline, OrigamiConfig, ModelConfig, DataConfig
 
         # Minimal - just works with defaults
         pipeline = OrigamiPipeline()
@@ -44,8 +42,10 @@ class OrigamiPipeline:
         pipeline.save("model.pt")
 
         # With continuous head for high-cardinality numerics
-        from origami import PipelineConfig
-        config = PipelineConfig(numeric_mode="scale", d_model=128)
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=128),
+            data=DataConfig(numeric_mode="scale"),
+        )
         pipeline = OrigamiPipeline(config)
         pipeline.fit(train_data, eval_data=eval_data, epochs=50)
         ```
@@ -71,13 +71,13 @@ class OrigamiPipeline:
         tokenizer: JSON tokenizer (available after fit/load)
     """
 
-    def __init__(self, config: PipelineConfig | None = None):
+    def __init__(self, config: OrigamiConfig | None = None):
         """Initialize pipeline.
 
         Args:
             config: Pipeline configuration. Uses sensible defaults if None.
         """
-        self.config = config or PipelineConfig()
+        self.config = config or OrigamiConfig()
 
         # Internal state - set during fit() or load()
         self._preprocessor: NumericScaler | NumericDiscretizer | None = None
@@ -190,7 +190,7 @@ class OrigamiPipeline:
         if not data:
             raise ValueError("Training data cannot be empty")
 
-        num_epochs = epochs if epochs is not None else self.config.num_epochs
+        num_epochs = epochs if epochs is not None else self.config.training.num_epochs
 
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
@@ -198,8 +198,8 @@ class OrigamiPipeline:
         # Step 2: Fit tokenizer on all preprocessed data
         all_processed = train_processed + (eval_processed or [])
         self._tokenizer = JSONTokenizer(
-            max_depth=self.config.max_depth,
-            max_array_index=self.config.max_array_position,
+            max_depth=self.config.model.max_depth,
+            max_array_index=self.config.model.max_array_position,
         )
         self._tokenizer.fit(all_processed)
 
@@ -216,22 +216,24 @@ class OrigamiPipeline:
             print(f"Training device: {self._training_device}")
 
         # Step 4: Create trainer and train
+        # Use training config directly, but override num_epochs if specified
         train_config = TrainingConfig(
-            batch_size=self.config.batch_size,
-            learning_rate=self.config.learning_rate,
+            batch_size=self.config.training.batch_size,
+            learning_rate=self.config.training.learning_rate,
             num_epochs=num_epochs,
-            warmup_steps=self.config.warmup_steps,
-            weight_decay=self.config.weight_decay,
-            upscale_factor=self.config.upscale_factor,
-            save_every_n_epochs=self.config.save_every_n_epochs,
+            warmup_steps=self.config.training.warmup_steps,
+            weight_decay=self.config.training.weight_decay,
+            upscale_factor=self.config.training.upscale_factor,
+            shuffle_keys=self.config.training.shuffle_keys,
+            save_every_n_epochs=self.config.training.save_every_n_epochs,
             # Evaluation
-            eval_strategy=self.config.eval_strategy,
-            eval_steps=self.config.eval_steps,
-            eval_epochs=self.config.eval_epochs,
-            eval_metrics=self.config.eval_metrics,
-            eval_sample_size=self.config.eval_sample_size,
-            eval_on_train=self.config.eval_on_train,
-            target_key=self.config.target_key,
+            eval_strategy=self.config.training.eval_strategy,
+            eval_steps=self.config.training.eval_steps,
+            eval_epochs=self.config.training.eval_epochs,
+            eval_metrics=self.config.training.eval_metrics,
+            eval_sample_size=self.config.training.eval_sample_size,
+            eval_on_train=self.config.training.eval_on_train,
+            target_key=self.config.training.target_key,
         )
 
         # Build callbacks list: default to ProgressCallback if not specified
@@ -246,7 +248,7 @@ class OrigamiPipeline:
             train_data=train_processed,
             eval_data=eval_processed,
             config=train_config,
-            shuffle=self.config.shuffle_keys,
+            shuffle=self.config.training.shuffle_keys,
             callbacks=all_callbacks if all_callbacks else None,
             device=self._training_device,
         )
@@ -279,57 +281,63 @@ class OrigamiPipeline:
         Returns:
             Tuple of (processed_train, processed_eval)
         """
-        if self.config.numeric_mode == "none":
+        if self.config.data.numeric_mode == "none":
             # No preprocessing
             self._preprocessor = None
             return train_data, eval_data
 
-        elif self.config.numeric_mode == "discretize":
+        elif self.config.data.numeric_mode == "discretize":
             # Discretize high-cardinality numerics into bins
             self._preprocessor = NumericDiscretizer(
-                cat_threshold=self.config.cat_threshold,
-                n_bins=self.config.n_bins,
-                strategy=self.config.bin_strategy,
+                cat_threshold=self.config.data.cat_threshold,
+                n_bins=self.config.data.n_bins,
+                strategy=self.config.data.bin_strategy,
             )
             train_processed = self._preprocessor.fit_transform(train_data)
             eval_processed = self._preprocessor.transform(eval_data) if eval_data else None
             return train_processed, eval_processed
 
-        elif self.config.numeric_mode == "scale":
+        elif self.config.data.numeric_mode == "scale":
             # Scale high-cardinality numerics for continuous head
             self._preprocessor = NumericScaler(
-                cat_threshold=self.config.cat_threshold,
+                cat_threshold=self.config.data.cat_threshold,
             )
             train_processed = self._preprocessor.fit_transform(train_data)
             eval_processed = self._preprocessor.transform(eval_data) if eval_data else None
             return train_processed, eval_processed
 
         else:
-            raise ValueError(f"Unknown numeric_mode: {self.config.numeric_mode}")
+            raise ValueError(f"Unknown numeric_mode: {self.config.data.numeric_mode}")
 
     def _create_model(self) -> OrigamiModel:
         """Create model with appropriate configuration."""
         assert self._tokenizer is not None, "Tokenizer must be fitted first"
 
-        # Determine if continuous head is needed
-        use_continuous_head = self.config.numeric_mode == "scale"
+        # Determine if continuous head is needed based on data config
+        use_continuous_head = self.config.data.numeric_mode == "scale"
 
-        model_config = OrigamiConfig(
-            vocab_size=self._tokenizer.vocab.size,
-            d_model=self.config.d_model,
-            n_heads=self.config.n_heads,
-            n_layers=self.config.n_layers,
-            d_ff=self.config.d_ff,
-            dropout=self.config.dropout,
-            max_depth=self.config.max_depth,
-            max_array_position=self.config.max_array_position,
-            kvpe_pooling=self.config.kvpe_pooling,
-            use_grammar_constraints=self.config.use_grammar_constraints,
+        # Create a copy of model config with continuous head setting
+        model_config = ModelConfig(
+            d_model=self.config.model.d_model,
+            n_heads=self.config.model.n_heads,
+            n_layers=self.config.model.n_layers,
+            d_ff=self.config.model.d_ff,
+            dropout=self.config.model.dropout,
+            max_depth=self.config.model.max_depth,
+            max_array_position=self.config.model.max_array_position,
+            kvpe_pooling=self.config.model.kvpe_pooling,
+            kvpe_pooling_kwargs=self.config.model.kvpe_pooling_kwargs,
+            backbone=self.config.model.backbone,
+            lstm_bidirectional=self.config.model.lstm_bidirectional,
+            lstm_num_layers=self.config.model.lstm_num_layers,
             use_continuous_head=use_continuous_head,
-            num_mixture_components=self.config.num_mixture_components,
+            num_mixture_components=self.config.model.num_mixture_components,
+            continuous_loss_weight=self.config.model.continuous_loss_weight,
+            use_grammar_constraints=self.config.model.use_grammar_constraints,
+            max_seq_length=self.config.model.max_seq_length,
         )
 
-        return OrigamiModel(model_config, vocab=self._tokenizer.vocab)
+        return OrigamiModel(model_config, self._tokenizer.vocab)
 
     def save(self, path: str | Path) -> None:
         """Save the complete pipeline to a file.
@@ -369,8 +377,14 @@ class OrigamiPipeline:
         """
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
-        # Reconstruct config
-        config = PipelineConfig(**checkpoint["config"])
+        # Reconstruct config (nested dataclasses)
+        config_dict = checkpoint["config"]
+        config = OrigamiConfig(
+            model=ModelConfig(**config_dict["model"]),
+            training=TrainingConfig(**config_dict["training"]),
+            data=DataConfig(**config_dict["data"]),
+            device=config_dict["device"],
+        )
         pipeline = cls(config)
 
         # Reconstruct preprocessor
@@ -383,8 +397,8 @@ class OrigamiPipeline:
         pipeline._tokenizer = cls._tokenizer_from_dict(checkpoint["tokenizer_state"])
 
         # Reconstruct model (stays on CPU - faster for inference)
-        model_config = OrigamiConfig(**checkpoint["model_config"])
-        pipeline._model = OrigamiModel(model_config, vocab=pipeline._tokenizer.vocab)
+        model_config = ModelConfig(**checkpoint["model_config"])
+        pipeline._model = OrigamiModel(model_config, pipeline._tokenizer.vocab)
         pipeline._model.load_state_dict(checkpoint["model_state_dict"])
         pipeline._model.eval()
 
@@ -541,7 +555,7 @@ class OrigamiPipeline:
         )
 
         # Inverse transform numeric fields if needed
-        if self._preprocessor is not None and self.config.numeric_mode == "scale":
+        if self._preprocessor is not None and self.config.data.numeric_mode == "scale":
             samples = [self._inverse_transform_object(s) for s in samples]
 
         return samples
@@ -593,7 +607,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         # Fall back to config target_key if not provided
-        effective_target_key = target_key or self.config.target_key
+        effective_target_key = target_key or self.config.training.target_key
 
         # Preprocess data
         processed = self._preprocess_for_inference(data)
@@ -859,4 +873,4 @@ class OrigamiPipeline:
 
     def __repr__(self) -> str:
         status = "fitted" if self._fitted else "not fitted"
-        return f"OrigamiPipeline(numeric_mode={self.config.numeric_mode!r}, {status})"
+        return f"OrigamiPipeline(numeric_mode={self.config.data.numeric_mode!r}, {status})"

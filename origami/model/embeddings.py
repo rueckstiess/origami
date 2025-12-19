@@ -7,9 +7,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from origami.config import ModelConfig
 from origami.position_encoding import KeyValuePositionEncoding
-
-from .config import OrigamiConfig
 
 
 class OrigamiEmbeddings(nn.Module):
@@ -37,23 +36,24 @@ class OrigamiEmbeddings(nn.Module):
     # NUM token ID is fixed at 9 in the vocabulary
     NUM_TOKEN_ID = 9
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig, vocab_size: int):
         """Initialize embedding layer.
 
         Args:
             config: Model configuration
+            vocab_size: Size of the vocabulary
         """
         super().__init__()
 
         self.config = config
 
         # Token embeddings (shared with KVPE for key position encoding)
-        self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
+        self.token_embedding = nn.Embedding(vocab_size, config.d_model)
 
         # KVPE with shared key embeddings
         self.kvpe = KeyValuePositionEncoding(
             d_model=config.d_model,
-            vocab_size=config.vocab_size,
+            vocab_size=vocab_size,
             max_depth=config.max_depth,
             max_array_index=config.max_array_position,
             pooling=config.kvpe_pooling,

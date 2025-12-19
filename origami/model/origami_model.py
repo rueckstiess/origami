@@ -12,14 +12,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from origami.config import ModelConfig
+from origami.tokenizer.vocabulary import Vocabulary
+
 from .backbone import create_backbone
-from .config import OrigamiConfig
 from .embeddings import OrigamiEmbeddings
 from .heads import ContinuousHead, DiscreteHead
 
 if TYPE_CHECKING:
     from origami.tokenizer.json_tokenizer import JSONTokenizer
-    from origami.tokenizer.vocabulary import Vocabulary
 
 
 @dataclass
@@ -60,25 +61,27 @@ class OrigamiModel(nn.Module):
         continuous_head: Optional MoG head for numeric values
     """
 
-    def __init__(self, config: OrigamiConfig, vocab: "Vocabulary | None" = None):
+    def __init__(self, config: ModelConfig, vocab: Vocabulary):
         """Initialize ORIGAMI model.
 
         Args:
-            config: Model configuration
-            vocab: Vocabulary instance (required if use_grammar_constraints=True)
+            config: Model architecture configuration
+            vocab: Vocabulary instance (required for embeddings and grammar)
         """
         super().__init__()
 
         self.config = config
+        self.vocab = vocab
+        vocab_size = len(vocab)
 
         # Embeddings (token + KVPE)
-        self.embeddings = OrigamiEmbeddings(config)
+        self.embeddings = OrigamiEmbeddings(config, vocab_size)
 
         # Backbone
         self.backbone = create_backbone(config)
 
         # Discrete head (always present)
-        self.discrete_head = DiscreteHead(config)
+        self.discrete_head = DiscreteHead(config, vocab_size)
 
         # Continuous head (optional)
         self.continuous_head: ContinuousHead | None = None
@@ -88,8 +91,6 @@ class OrigamiModel(nn.Module):
         # Grammar constraints PDA (optional)
         self._grammar_pda = None
         if config.use_grammar_constraints:
-            if vocab is None:
-                raise ValueError("vocab is required when use_grammar_constraints=True")
             from origami.constraints.json_grammar import JSONGrammarPDA
 
             self._grammar_pda = JSONGrammarPDA(vocab, max_depth=config.max_depth)
@@ -346,7 +347,6 @@ class OrigamiModel(nn.Module):
             ```
         """
         from origami.tokenizer import JSONTokenizer
-        from origami.tokenizer.vocabulary import Vocabulary
 
         path = Path(path)
         device = device or "cpu"
@@ -354,22 +354,25 @@ class OrigamiModel(nn.Module):
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
         # Reconstruct config
-        config = OrigamiConfig(**checkpoint["model_config"])
+        config = ModelConfig(**checkpoint["model_config"])
 
-        # Reconstruct tokenizer if saved
-        tokenizer = None
-        if "tokenizer_state" in checkpoint:
-            tokenizer_state = checkpoint["tokenizer_state"]
-            vocab = Vocabulary.from_dict(tokenizer_state["vocab"])
-            tokenizer = JSONTokenizer()
-            tokenizer.vocab = vocab
-            tokenizer.max_depth = tokenizer_state["max_depth"]
-            tokenizer.max_array_index = tokenizer_state["max_array_index"]
-            tokenizer._fitted = True
+        # Reconstruct tokenizer (required - vocab needed for model)
+        if "tokenizer_state" not in checkpoint:
+            raise ValueError(
+                "Checkpoint does not contain tokenizer state. "
+                "Model cannot be loaded without vocabulary."
+            )
 
-        # Create model with vocab for grammar constraints
-        vocab = tokenizer.vocab if tokenizer else None
-        model = cls(config, vocab=vocab)
+        tokenizer_state = checkpoint["tokenizer_state"]
+        vocab = Vocabulary.from_dict(tokenizer_state["vocab"])
+        tokenizer = JSONTokenizer()
+        tokenizer.vocab = vocab
+        tokenizer.max_depth = tokenizer_state["max_depth"]
+        tokenizer.max_array_index = tokenizer_state["max_array_index"]
+        tokenizer._fitted = True
+
+        # Create model with vocab
+        model = cls(config, vocab)
 
         # Load weights
         model.load_state_dict(checkpoint["model_state_dict"])

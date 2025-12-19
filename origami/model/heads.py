@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .config import OrigamiConfig
+from origami.config import ModelConfig
 
 
 class DiscreteHead(nn.Module):
@@ -20,15 +20,16 @@ class DiscreteHead(nn.Module):
         proj: Linear projection to vocabulary size
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig, vocab_size: int):
         """Initialize discrete head.
 
         Args:
             config: Model configuration
+            vocab_size: Size of the vocabulary
         """
         super().__init__()
 
-        self.proj = nn.Linear(config.d_model, config.vocab_size)
+        self.proj = nn.Linear(config.d_model, vocab_size)
 
     def forward(self, hidden: Tensor) -> Tensor:
         """Compute vocabulary logits.
@@ -53,7 +54,7 @@ class ContinuousHead(nn.Module):
     Implemented in Phase 6.
     """
 
-    def __init__(self, config: OrigamiConfig):
+    def __init__(self, config: ModelConfig):
         """Initialize continuous head.
 
         Args:

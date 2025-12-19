@@ -6,8 +6,9 @@ A transformer-based architecture for supervised learning on semi-structured JSON
 __version__ = "0.1.0"
 
 # Re-export key classes for convenience
-from origami.model import OrigamiConfig, OrigamiModel, OrigamiOutput
-from origami.pipeline import OrigamiPipeline, PipelineConfig
+from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
+from origami.model import OrigamiModel, OrigamiOutput
+from origami.pipeline import OrigamiPipeline
 from origami.tokenizer import EncodedBatch, JSONTokenizer, Vocabulary
 
 __all__ = [
@@ -15,9 +16,12 @@ __all__ = [
     "__version__",
     # Pipeline (recommended API)
     "OrigamiPipeline",
-    "PipelineConfig",
-    # Model (advanced usage)
+    # Configuration
     "OrigamiConfig",
+    "ModelConfig",
+    "TrainingConfig",
+    "DataConfig",
+    # Model (advanced usage)
     "OrigamiModel",
     "OrigamiOutput",
     # Tokenizer

@@ -3,7 +3,8 @@
 import pytest
 import torch
 
-from origami.model import OrigamiConfig, OrigamiModel
+from origami.config import ModelConfig
+from origami.model import OrigamiModel
 from origami.preprocessing import NumericScaler, ScaledNumeric
 from origami.tokenizer import JSONTokenizer
 from origami.training import OrigamiDataCollator
@@ -14,15 +15,14 @@ class TestContinuousHeadConfig:
 
     def test_config_defaults(self):
         """Test default continuous head config."""
-        config = OrigamiConfig(vocab_size=100)
+        config = ModelConfig()
         assert config.use_continuous_head is False
         assert config.num_mixture_components == 5
         assert config.continuous_loss_weight == -1.0  # Auto
 
     def test_config_enabled(self):
         """Test enabling continuous head."""
-        config = OrigamiConfig(
-            vocab_size=100,
+        config = ModelConfig(
             use_continuous_head=True,
             num_mixture_components=3,
             continuous_loss_weight=0.5,
@@ -48,8 +48,7 @@ class TestEmbeddingsWithNumeric:
 
     def test_embeddings_have_num_embedding(self, tokenizer):
         """Test embeddings module has num_embedding when enabled."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=True,
             d_model=64,
         )
@@ -60,8 +59,7 @@ class TestEmbeddingsWithNumeric:
 
     def test_embeddings_no_num_embedding_when_disabled(self, tokenizer):
         """Test embeddings don't have num_embedding when disabled."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=False,
             d_model=64,
         )
@@ -71,8 +69,7 @@ class TestEmbeddingsWithNumeric:
 
     def test_num_embedding_affects_output(self, tokenizer):
         """Test that numeric values affect embedding output."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=True,
             d_model=64,
         )
@@ -127,8 +124,7 @@ class TestModelWithContinuousHead:
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=True,
             num_mixture_components=3,
             d_model=64,
@@ -293,8 +289,7 @@ class TestEndToEndContinuousPipeline:
         tokenizer.fit(scaled_data)
 
         # 4. Create model with continuous head
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=True,
             num_mixture_components=3,
             d_model=32,
@@ -351,8 +346,7 @@ class TestEndToEndContinuousPipeline:
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=True,
             continuous_loss_weight=-1.0,  # Auto
             d_model=32,
@@ -416,8 +410,7 @@ class TestMixedDiscreteAndContinuous:
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             use_continuous_head=False,
             d_model=32,
             n_heads=2,

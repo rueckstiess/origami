@@ -165,19 +165,18 @@ top_k = predictor.predict_proba(obj, target_key, top_k=5)  # Returns: list[(Any,
 The `OrigamiPipeline` provides an end-to-end API for training and inference:
 
 ```python
-from origami import OrigamiPipeline, PipelineConfig
+from origami import OrigamiPipeline, OrigamiConfig, ModelConfig, TrainingConfig, DataConfig
 
-# Configure
-config = PipelineConfig(
-    d_model=64,
-    n_layers=4,
-    numeric_mode="scale",  # or "discretize" or "none"
-    cat_threshold=100,     # Fields with >100 unique values get preprocessed
+# Configure with nested structure
+config = OrigamiConfig(
+    model=ModelConfig(d_model=64, n_layers=4),
+    training=TrainingConfig(num_epochs=20),
+    data=DataConfig(numeric_mode="scale", cat_threshold=100),
 )
 
 # Train
 pipeline = OrigamiPipeline(config)
-pipeline.fit(train_data, eval_data=eval_data, epochs=20)
+pipeline.fit(train_data, eval_data=eval_data)
 
 # Predict
 value = pipeline.predict({"a": 1, "b": None}, target_key="b")
@@ -217,7 +216,6 @@ origami/
 │   └── pooling.py         # Pooling strategies
 ├── model/               # Model components
 │   ├── origami_model.py   # Main model
-│   ├── config.py          # Configuration
 │   ├── embeddings.py      # Embedding layer
 │   ├── backbone.py        # Transformer backbone
 │   └── heads.py           # Output heads (discrete + continuous MoG)
@@ -229,8 +227,8 @@ origami/
 │   ├── embedder.py        # Embedding extraction
 │   └── evaluator.py       # Unified loss and metrics evaluation
 ├── pipeline/            # High-level API
-│   ├── pipeline.py        # OrigamiPipeline end-to-end API
-│   └── config.py          # PipelineConfig
+│   └── pipeline.py        # OrigamiPipeline end-to-end API
+├── config.py            # All config classes (ModelConfig, TrainingConfig, DataConfig, OrigamiConfig)
 ├── training/            # Training components
 │   ├── trainer.py         # Training loop
 │   ├── dataset.py         # Dataset classes
@@ -403,7 +401,10 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 | Class | Responsibility |
 |-------|---------------|
 | `OrigamiPipeline` | End-to-end API: preprocessing, training, inference, save/load |
-| `PipelineConfig` | Unified configuration for pipeline |
+| `OrigamiConfig` | Root configuration composing model, training, and data configs |
+| `ModelConfig` | Model architecture parameters (d_model, n_layers, etc.) |
+| `TrainingConfig` | Training hyperparameters (batch_size, learning_rate, etc.) |
+| `DataConfig` | Data preprocessing parameters (numeric_mode, cat_threshold, etc.) |
 | `JSONTokenizer` | Tokenize JSON objects, manage vocabulary |
 | `OrigamiModel` | Main model with embeddings, backbone, heads |
 | `KeyValuePositionEncoding` | Encode paths through JSON structure |
@@ -422,31 +423,57 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 
 ## Configuration
 
-### OrigamiConfig (Model)
+Configuration uses nested dataclasses. The root `OrigamiConfig` composes `ModelConfig`, `TrainingConfig`, and `DataConfig`:
+
+### ModelConfig (Model Architecture)
 ```python
-OrigamiConfig(
-    vocab_size=1000,
-    d_model=256,
-    n_heads=8,
-    n_layers=6,
-    d_ff=1024,
-    max_depth=8,
+ModelConfig(
+    d_model=128,          # Hidden dimension
+    n_heads=4,            # Attention heads
+    n_layers=4,           # Transformer layers
+    d_ff=512,             # Feedforward dimension
     dropout=0.1,
-    pooling_type="sum",  # or "weighted", "rotary", "gru", "transformer"
+    max_depth=32,         # Maximum JSON nesting depth
+    kvpe_pooling="sum",   # KVPE pooling: "sum", "weighted", "rotary", "gru", "transformer"
+    backbone="transformer",  # "transformer", "lstm", "mamba"
+    num_mixture_components=5,  # MoG components for continuous output
     use_grammar_constraints=True,
 )
 ```
 
-### TrainingConfig
+### TrainingConfig (Training Hyperparameters)
 ```python
 TrainingConfig(
     batch_size=32,
-    learning_rate=1e-4,
+    learning_rate=1e-3,
     num_epochs=10,
     warmup_steps=1000,
-    gradient_clip=1.0,
+    weight_decay=0.01,
+    shuffle_keys=True,     # Key-order shuffling augmentation
+    target_key=None,       # Target field for prediction tasks
 )
 ```
+
+### DataConfig (Data Preprocessing)
+```python
+DataConfig(
+    numeric_mode="none",   # "none", "discretize", or "scale"
+    cat_threshold=100,     # Fields with >N unique values get preprocessed
+    n_bins=20,             # Number of bins for discretization
+)
+```
+
+### OrigamiConfig (Root - Nested Composition)
+```python
+OrigamiConfig(
+    model=ModelConfig(d_model=256, n_layers=6),
+    training=TrainingConfig(batch_size=64, num_epochs=20),
+    data=DataConfig(numeric_mode="scale"),
+    device="auto",  # "auto", "cpu", "cuda", "mps"
+)
+```
+
+Note: `vocab_size` is not in config - the model derives it from `len(vocab)` when constructed.
 
 ## Implementation Status
 
@@ -495,7 +522,7 @@ def tokenizer(self):
 ### Testing Grammar Constraints
 ```python
 def test_grammar(self):
-    config = OrigamiConfig(..., use_grammar_constraints=True)
+    config = ModelConfig(use_grammar_constraints=True)
     model = OrigamiModel(config, vocab=tokenizer.vocab)
     # Grammar only applied when labels provided
     output = model(..., labels=labels)

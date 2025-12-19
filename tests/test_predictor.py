@@ -3,8 +3,9 @@
 import pytest
 import torch
 
+from origami.config import ModelConfig
 from origami.inference import OrigamiPredictor
-from origami.model import OrigamiConfig, OrigamiModel
+from origami.model import OrigamiModel
 from origami.tokenizer import JSONTokenizer
 
 
@@ -26,8 +27,7 @@ def simple_model(simple_tokenizer):
     """Create a small model for testing."""
     # Seed for reproducible model weights
     torch.manual_seed(42)
-    config = OrigamiConfig(
-        vocab_size=simple_tokenizer.vocab.size,
+    config = ModelConfig(
         d_model=32,
         n_heads=2,
         n_layers=1,
@@ -134,8 +134,7 @@ class TestOrigamiPredictor:
 
     def test_always_uses_cpu(self, simple_tokenizer):
         """Test that predictor always runs on CPU for performance."""
-        config = OrigamiConfig(
-            vocab_size=simple_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -179,8 +178,7 @@ class TestPredictorWithNestedData:
     def nested_model(self, nested_tokenizer):
         """Create a model for nested data."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=nested_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -244,8 +242,7 @@ class TestPredictorWithArrayData:
     def array_model(self, array_tokenizer):
         """Create a model for array data."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=array_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -320,8 +317,7 @@ class TestPredictorBatchVariations:
     def varied_model(self, varied_tokenizer):
         """Create model for varied data."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=varied_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -401,8 +397,7 @@ class TestPredictorComplexValues:
     def complex_model(self, complex_tokenizer):
         """Create model for complex data."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=complex_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -461,8 +456,7 @@ class TestPredictorRobustness:
     def multi_type_model(self, multi_type_tokenizer):
         """Create model for multi-type data."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=multi_type_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -542,8 +536,7 @@ class TestPredictorIntegration:
     def integration_model(self, integration_tokenizer):
         """Create model for integration testing."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=integration_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -595,8 +588,7 @@ class TestAllowComplexValues:
     def model_with_complex(self, tokenizer_with_complex):
         """Create model for complex value testing."""
         torch.manual_seed(42)
-        config = OrigamiConfig(
-            vocab_size=tokenizer_with_complex.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,

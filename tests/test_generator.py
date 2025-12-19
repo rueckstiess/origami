@@ -3,9 +3,10 @@
 import pytest
 import torch
 
+from origami.config import ModelConfig
 from origami.inference import OrigamiGenerator
 from origami.inference.generator import PathState
-from origami.model import OrigamiConfig, OrigamiModel
+from origami.model import OrigamiModel
 from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
 from origami.tokenizer import JSONTokenizer
 from origami.tokenizer.json_tokenizer import EncodedBatch
@@ -27,8 +28,7 @@ def simple_tokenizer():
 @pytest.fixture
 def simple_model(simple_tokenizer):
     """Create a small model for testing."""
-    config = OrigamiConfig(
-        vocab_size=simple_tokenizer.vocab.size,
+    config = ModelConfig(
         d_model=32,
         n_heads=2,
         n_layers=1,
@@ -325,8 +325,7 @@ class TestOrigamiGenerator:
 
     def test_always_uses_cpu(self, simple_tokenizer):
         """Test that generator always runs on CPU for performance."""
-        config = OrigamiConfig(
-            vocab_size=simple_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -418,8 +417,7 @@ class TestGeneratorWithNestedData:
     @pytest.fixture
     def nested_model(self, nested_tokenizer):
         """Create a model for nested data."""
-        config = OrigamiConfig(
-            vocab_size=nested_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -456,8 +454,7 @@ class TestGeneratorWithArrays:
     @pytest.fixture
     def array_model(self, array_tokenizer):
         """Create a model for array data."""
-        config = OrigamiConfig(
-            vocab_size=array_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -531,8 +528,7 @@ class TestDecodeValueTokens:
         tokenizer = JSONTokenizer()
         tokenizer.fit([{"flag": True}, {"flag": False}])
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -570,8 +566,7 @@ class TestGenerateFromTensorsAdvanced:
     @pytest.fixture
     def model(self, tokenizer):
         """Create model for advanced tests."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -742,8 +737,7 @@ class TestGeneratorGrammarConstraints:
     @pytest.fixture
     def constrained_model(self, constrained_tokenizer):
         """Create model with grammar constraints enabled."""
-        config = OrigamiConfig(
-            vocab_size=constrained_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -816,8 +810,7 @@ class TestGeneratorEdgeCases:
     @pytest.fixture
     def edge_model(self, edge_tokenizer):
         """Create model for edge case tests."""
-        config = OrigamiConfig(
-            vocab_size=edge_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,

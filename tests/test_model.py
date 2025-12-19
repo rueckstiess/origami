@@ -9,14 +9,13 @@ TODO:
 import pytest
 import torch
 
+from origami.config import ModelConfig, TrainingConfig
 from origami.model import (
     ContinuousHead,
     DiscreteHead,
-    OrigamiConfig,
     OrigamiEmbeddings,
     OrigamiModel,
     OrigamiOutput,
-    TrainingConfig,
     TransformerBackbone,
     create_backbone,
 )
@@ -27,18 +26,17 @@ from origami.utils import available_devices as get_available_devices
 AVAILABLE_DEVICES = get_available_devices()
 
 
-class TestOrigamiConfig:
-    """Tests for OrigamiConfig."""
+class TestModelConfig:
+    """Tests for ModelConfig."""
 
     def test_default_values(self):
         """Test that default values are sensible."""
-        config = OrigamiConfig(vocab_size=100)
+        config = ModelConfig()
 
-        assert config.vocab_size == 100
-        assert config.d_model == 256
-        assert config.n_heads == 8
-        assert config.n_layers == 6
-        assert config.d_ff == 1024
+        assert config.d_model == 128
+        assert config.n_heads == 4
+        assert config.n_layers == 4
+        assert config.d_ff == 512
         assert config.dropout == 0.1
         assert config.backbone == "transformer"
         assert config.kvpe_pooling == "sum"
@@ -47,31 +45,22 @@ class TestOrigamiConfig:
         assert config.use_continuous_head is False
         assert config.use_grammar_constraints is True
 
-    def test_validation_vocab_size(self):
-        """Test that vocab_size must be positive."""
-        with pytest.raises(ValueError, match="vocab_size must be positive"):
-            OrigamiConfig(vocab_size=0)
-
-        with pytest.raises(ValueError, match="vocab_size must be positive"):
-            OrigamiConfig(vocab_size=-10)
-
     def test_validation_d_model_divisible_by_n_heads(self):
         """Test that d_model must be divisible by n_heads."""
         with pytest.raises(ValueError, match="d_model.*must be divisible by n_heads"):
-            OrigamiConfig(vocab_size=100, d_model=256, n_heads=7)
+            ModelConfig(d_model=256, n_heads=7)
 
     def test_validation_dropout_range(self):
         """Test that dropout must be in [0, 1]."""
         with pytest.raises(ValueError, match="dropout must be in"):
-            OrigamiConfig(vocab_size=100, dropout=-0.1)
+            ModelConfig(dropout=-0.1)
 
         with pytest.raises(ValueError, match="dropout must be in"):
-            OrigamiConfig(vocab_size=100, dropout=1.5)
+            ModelConfig(dropout=1.5)
 
     def test_custom_pooling_kwargs(self):
         """Test that pooling kwargs are passed correctly."""
-        config = OrigamiConfig(
-            vocab_size=100,
+        config = ModelConfig(
             kvpe_pooling="gru",
             kvpe_pooling_kwargs={"num_layers": 2},
         )
@@ -88,7 +77,7 @@ class TestTrainingConfig:
 
         assert config.learning_rate == 1e-3
         assert config.batch_size == 32
-        assert config.num_epochs == 100
+        assert config.num_epochs == 10
         assert config.shuffle_keys is True
         assert config.upscale_factor == 1
 
@@ -96,16 +85,18 @@ class TestTrainingConfig:
 class TestOrigamiEmbeddings:
     """Tests for OrigamiEmbeddings."""
 
+    VOCAB_SIZE = 100
+
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4)
+        return ModelConfig(d_model=64, n_heads=4)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct output shape."""
-        embeddings = OrigamiEmbeddings(config)
+        embeddings = OrigamiEmbeddings(config, self.VOCAB_SIZE)
 
         batch_size, seq_len = 2, 10
-        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+        input_ids = torch.randint(0, self.VOCAB_SIZE, (batch_size, seq_len))
         path_types = torch.zeros(batch_size, seq_len, config.max_depth, dtype=torch.long)
         path_ids = torch.zeros(batch_size, seq_len, config.max_depth, dtype=torch.long)
         path_lengths = torch.zeros(batch_size, seq_len, dtype=torch.long)
@@ -116,7 +107,7 @@ class TestOrigamiEmbeddings:
 
     def test_shared_key_embeddings(self, config):
         """Test that key embeddings are shared with token embeddings."""
-        embeddings = OrigamiEmbeddings(config)
+        embeddings = OrigamiEmbeddings(config, self.VOCAB_SIZE)
 
         # The KVPE should share embeddings with token layer
         assert embeddings.kvpe._shared_key_embeddings is embeddings.token_embedding
@@ -124,10 +115,10 @@ class TestOrigamiEmbeddings:
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_forward_on_device(self, config, device):
         """Test forward pass on different devices."""
-        embeddings = OrigamiEmbeddings(config).to(device)
+        embeddings = OrigamiEmbeddings(config, self.VOCAB_SIZE).to(device)
 
         batch_size, seq_len = 2, 10
-        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device=device)
+        input_ids = torch.randint(0, self.VOCAB_SIZE, (batch_size, seq_len), device=device)
         path_types = torch.zeros(
             batch_size, seq_len, config.max_depth, dtype=torch.long, device=device
         )
@@ -147,7 +138,7 @@ class TestTransformerBackbone:
 
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4, n_layers=2, d_ff=128)
+        return ModelConfig(d_model=64, n_heads=4, n_layers=2, d_ff=128)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct output shape."""
@@ -205,25 +196,27 @@ class TestTransformerBackbone:
 class TestDiscreteHead:
     """Tests for DiscreteHead."""
 
+    VOCAB_SIZE = 100
+
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4)
+        return ModelConfig(d_model=64, n_heads=4)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct logit shape."""
-        head = DiscreteHead(config)
+        head = DiscreteHead(config, self.VOCAB_SIZE)
 
         batch_size, seq_len = 2, 10
         hidden = torch.randn(batch_size, seq_len, config.d_model)
 
         logits = head(hidden)
 
-        assert logits.shape == (batch_size, seq_len, config.vocab_size)
+        assert logits.shape == (batch_size, seq_len, self.VOCAB_SIZE)
 
     @pytest.mark.parametrize("device", AVAILABLE_DEVICES)
     def test_forward_on_device(self, config, device):
         """Test forward pass on different devices."""
-        head = DiscreteHead(config).to(device)
+        head = DiscreteHead(config, self.VOCAB_SIZE).to(device)
 
         batch_size, seq_len = 2, 10
         hidden = torch.randn(batch_size, seq_len, config.d_model, device=device)
@@ -231,7 +224,7 @@ class TestDiscreteHead:
         logits = head(hidden)
 
         assert logits.device.type == device.type
-        assert logits.shape == (batch_size, seq_len, config.vocab_size)
+        assert logits.shape == (batch_size, seq_len, self.VOCAB_SIZE)
 
 
 class TestContinuousHead:
@@ -239,7 +232,7 @@ class TestContinuousHead:
 
     @pytest.fixture
     def config(self):
-        return OrigamiConfig(vocab_size=100, d_model=64, n_heads=4, num_mixture_components=5)
+        return ModelConfig(d_model=64, n_heads=4, num_mixture_components=5)
 
     def test_forward_shape(self, config):
         """Test that forward produces correct MoG parameter shapes."""
@@ -370,8 +363,7 @@ class TestOrigamiModel:
 
     @pytest.fixture
     def config(self, tokenizer):
-        return OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        return ModelConfig(
             d_model=64,
             n_heads=4,
             n_layers=2,
@@ -398,7 +390,7 @@ class TestOrigamiModel:
 
         assert isinstance(output, OrigamiOutput)
         assert output.loss is None
-        assert output.logits.shape == (1, batch.input_ids.size(1), config.vocab_size)
+        assert output.logits.shape == (1, batch.input_ids.size(1), tokenizer.vocab.size)
         assert output.hidden_states.shape == (1, batch.input_ids.size(1), config.d_model)
         assert output.continuous_params is None
 
@@ -443,7 +435,7 @@ class TestOrigamiModel:
 
         batch_size = len(objects)
         seq_len = batch.input_ids.size(1)
-        assert output.logits.shape == (batch_size, seq_len, config.vocab_size)
+        assert output.logits.shape == (batch_size, seq_len, tokenizer.vocab.size)
 
     def test_attention_mask_affects_loss(self, config, tokenizer):
         """Test that attention_mask properly excludes padding from loss.
@@ -645,8 +637,7 @@ class TestOrigamiModel:
 
     def test_continuous_head_enabled(self, tokenizer):
         """Test model with continuous head enabled."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=64,
             n_heads=4,
             n_layers=2,
@@ -679,8 +670,7 @@ class TestOrigamiModel:
 
     def test_continuous_loss_computation(self, tokenizer):
         """Test that continuous loss is computed when numeric values provided."""
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=64,
             n_heads=4,
             n_layers=2,
@@ -861,26 +851,259 @@ class TestCreateBackbone:
 
     def test_create_transformer(self):
         """Test creating transformer backbone."""
-        config = OrigamiConfig(vocab_size=100, backbone="transformer")
+        config = ModelConfig(backbone="transformer")
         backbone = create_backbone(config)
         assert isinstance(backbone, TransformerBackbone)
 
     def test_create_lstm_not_implemented(self):
         """Test that LSTM backbone raises NotImplementedError."""
-        config = OrigamiConfig(vocab_size=100, backbone="lstm")
+        config = ModelConfig(backbone="lstm")
         with pytest.raises(NotImplementedError):
             create_backbone(config)
 
     def test_create_mamba_not_implemented(self):
         """Test that Mamba backbone raises NotImplementedError."""
-        config = OrigamiConfig(vocab_size=100, backbone="mamba")
+        config = ModelConfig(backbone="mamba")
         with pytest.raises(NotImplementedError):
             create_backbone(config)
 
     def test_create_unknown_raises(self):
         """Test that unknown backbone type raises ValueError."""
         # Need to bypass dataclass validation
-        config = OrigamiConfig(vocab_size=100)
+        config = ModelConfig()
         config.backbone = "unknown"  # type: ignore
         with pytest.raises(ValueError, match="Unknown backbone type"):
             create_backbone(config)
+
+
+class TestOrigamiModelSaveLoad:
+    """Tests for OrigamiModel save() and load() methods."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        """Create a simple tokenizer for testing."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(
+            [
+                {"name": "Alice", "age": 30},
+                {"name": "Bob", "age": 25},
+            ]
+        )
+        return tokenizer
+
+    @pytest.fixture
+    def model_and_tokenizer(self, tokenizer):
+        """Create a model with tokenizer."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        return model, tokenizer
+
+    def test_save_and_load(self, model_and_tokenizer, tmp_path):
+        """Test saving and loading a model."""
+        model, tokenizer = model_and_tokenizer
+        checkpoint_path = tmp_path / "model.pt"
+
+        # Save model with tokenizer
+        model.save(checkpoint_path, tokenizer)
+
+        # Load model
+        loaded_model, loaded_tokenizer = OrigamiModel.load(checkpoint_path)
+
+        # Verify model config matches
+        assert loaded_model.config.d_model == model.config.d_model
+        assert loaded_model.config.n_heads == model.config.n_heads
+        assert loaded_model.config.n_layers == model.config.n_layers
+
+        # Verify tokenizer is restored
+        assert loaded_tokenizer is not None
+        assert loaded_tokenizer.vocab.size == tokenizer.vocab.size
+        assert loaded_tokenizer.max_depth == tokenizer.max_depth
+
+    def test_save_creates_parent_dirs(self, model_and_tokenizer, tmp_path):
+        """Test that save() creates parent directories if needed."""
+        model, tokenizer = model_and_tokenizer
+        checkpoint_path = tmp_path / "nested" / "dir" / "model.pt"
+
+        model.save(checkpoint_path, tokenizer)
+
+        assert checkpoint_path.exists()
+
+    def test_load_without_tokenizer_raises(self, model_and_tokenizer, tmp_path):
+        """Test that loading checkpoint without tokenizer raises error."""
+        model, _ = model_and_tokenizer
+        checkpoint_path = tmp_path / "model_no_tokenizer.pt"
+
+        # Save without tokenizer (manually create incomplete checkpoint)
+        torch.save(
+            {
+                "model_config": {"d_model": 32, "n_heads": 2, "n_layers": 1},
+                "model_state_dict": model.state_dict(),
+            },
+            checkpoint_path,
+        )
+
+        with pytest.raises(ValueError, match="does not contain tokenizer state"):
+            OrigamiModel.load(checkpoint_path)
+
+    def test_load_to_specific_device(self, model_and_tokenizer, tmp_path):
+        """Test loading model to a specific device."""
+        model, tokenizer = model_and_tokenizer
+        checkpoint_path = tmp_path / "model.pt"
+
+        model.save(checkpoint_path, tokenizer)
+
+        loaded_model, _ = OrigamiModel.load(checkpoint_path, device="cpu")
+        assert next(loaded_model.parameters()).device == torch.device("cpu")
+
+    def test_weights_preserved_after_load(self, model_and_tokenizer, tmp_path):
+        """Test that model weights are preserved after save/load."""
+        model, tokenizer = model_and_tokenizer
+        checkpoint_path = tmp_path / "model.pt"
+
+        # Get original weights
+        original_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+        model.save(checkpoint_path, tokenizer)
+        loaded_model, _ = OrigamiModel.load(checkpoint_path)
+
+        # Compare weights
+        for key in original_state:
+            assert torch.allclose(
+                original_state[key], loaded_model.state_dict()[key]
+            ), f"Weights mismatch for {key}"
+
+
+class TestOrigamiModelGrammar:
+    """Tests for grammar-related functionality."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        """Create a simple tokenizer for testing."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"a": 1, "b": 2}])
+        return tokenizer
+
+    def test_compute_grammar_mask_disabled(self, tokenizer):
+        """Test compute_grammar_mask returns None when grammar is disabled."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            use_grammar_constraints=False,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        input_ids = torch.randint(0, tokenizer.vocab.size, (1, 10))
+        mask = model.compute_grammar_mask(input_ids)
+
+        assert mask is None
+
+    def test_compute_grammar_mask_enabled(self, tokenizer):
+        """Test compute_grammar_mask returns valid mask when enabled."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            use_grammar_constraints=True,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
+            [{"a": 1}]
+        )
+        mask = model.compute_grammar_mask(batch.input_ids)
+
+        assert mask is not None
+        assert mask.shape == (1, batch.input_ids.size(1), tokenizer.vocab.size)
+        assert mask.dtype == torch.bool
+
+
+class TestOrigamiModelContinuousLossWeight:
+    """Tests for continuous loss weight configuration."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        """Create a tokenizer for testing."""
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"value": 1.5}, {"value": 2.5}])
+        return tokenizer
+
+    def test_fixed_continuous_loss_weight(self, tokenizer):
+        """Test that fixed continuous_loss_weight is used when set."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            use_continuous_head=True,
+            continuous_loss_weight=0.5,  # Fixed weight
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
+            [{"value": 1}]
+        )
+        seq_len = batch.input_ids.shape[1]
+
+        # Create numeric values and mask
+        numeric_values = torch.randn(1, seq_len)
+        numeric_mask = torch.zeros(1, seq_len, dtype=torch.bool)
+        numeric_mask[0, 2] = True  # Mark one position as NUM
+
+        output = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.input_ids,
+            numeric_values=numeric_values,
+            numeric_mask=numeric_mask,
+        )
+
+        # Loss should be computed
+        assert output.loss is not None
+
+    def test_auto_continuous_loss_weight(self, tokenizer):
+        """Test auto-calculated continuous loss weight (default -1)."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            use_continuous_head=True,
+            continuous_loss_weight=-1.0,  # Auto-calculate (default)
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects(
+            [{"value": 1}]
+        )
+        seq_len = batch.input_ids.shape[1]
+
+        # Create numeric values and mask with multiple NUM positions
+        numeric_values = torch.randn(1, seq_len)
+        numeric_mask = torch.zeros(1, seq_len, dtype=torch.bool)
+        numeric_mask[0, 2:5] = True  # Mark several positions
+
+        output = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.input_ids,
+            numeric_values=numeric_values,
+            numeric_mask=numeric_mask,
+        )
+
+        # Loss should be computed with auto-calculated weight
+        assert output.loss is not None

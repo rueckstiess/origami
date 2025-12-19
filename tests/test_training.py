@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from origami.model import OrigamiConfig, OrigamiModel, TrainingConfig
+from origami.config import ModelConfig, TrainingConfig
+from origami.model import OrigamiModel
 from origami.tokenizer import JSONTokenizer
 from origami.training import (
     EpochStats,
@@ -363,8 +364,7 @@ class TestLeftPadding:
 
     def test_model_forward_with_left_padded_batch(self, lp_tokenizer):
         """Test that model forward pass works correctly with left-padded batches."""
-        config = OrigamiConfig(
-            vocab_size=lp_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -394,7 +394,7 @@ class TestLeftPadding:
 
         # Output should have correct shape
         batch_size, seq_len = batch.input_ids.shape
-        assert output.logits.shape == (batch_size, seq_len, config.vocab_size)
+        assert output.logits.shape == (batch_size, seq_len, lp_tokenizer.vocab.size)
 
         # No NaN in outputs for real (non-PAD) positions
         # PAD positions may have NaN due to all-masked attention (softmax of all -inf)
@@ -405,8 +405,7 @@ class TestLeftPadding:
 
     def test_training_loss_with_left_padded_batch(self, lp_tokenizer):
         """Test that training loss computation works with left-padded batches."""
-        config = OrigamiConfig(
-            vocab_size=lp_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -444,8 +443,7 @@ class TestLeftPadding:
 
     def test_grammar_constraints_with_left_padding(self, lp_tokenizer):
         """Test that grammar constraints work correctly with left-padded sequences."""
-        config = OrigamiConfig(
-            vocab_size=lp_tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -548,8 +546,7 @@ class TestOrigamiTrainer:
             ]
         )
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -768,8 +765,7 @@ class TestOrigamiTrainer:
         tokenizer = JSONTokenizer()
         tokenizer.fit([{"name": "Alice", "age": 30}])
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -886,8 +882,7 @@ class TestEndToEndTraining:
         tokenizer.fit(train_data + eval_data)
 
         # Create small model for fast tests
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -978,8 +973,7 @@ class TestEndToEndTraining:
         tokenizer = JSONTokenizer()
         tokenizer.fit(train_data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -1034,8 +1028,7 @@ class TestEndToEndTraining:
         tokenizer = JSONTokenizer()
         tokenizer.fit(train_data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -1101,8 +1094,7 @@ class TestEvaluator:
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -1204,8 +1196,7 @@ class TestEvaluationScheduling:
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        config = OrigamiConfig(
-            vocab_size=tokenizer.vocab.size,
+        config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
@@ -1406,3 +1397,250 @@ class TestEvaluationScheduling:
             # Best checkpoint should exist
             best_path = Path(tmpdir) / "best.pt"
             assert best_path.exists()
+
+
+class TestCallbacks:
+    """Tests for training callbacks."""
+
+    @pytest.fixture
+    def trainer_setup(self):
+        """Set up trainer for callback tests."""
+        data = [{"label": "A", "x": i} for i in range(20)]
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+
+        return model, tokenizer, data
+
+    def test_progress_callback_on_interrupt(self, trainer_setup):
+        """Test ProgressCallback.on_interrupt closes progress bar."""
+        from origami.training import ProgressCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        callback = ProgressCallback()
+        state = TrainResult(epoch=2, global_step=50)
+
+        # Simulate having an open progress bar
+        callback._pbar = None  # Simulate no active pbar
+
+        # Call on_interrupt (should not raise even without pbar)
+        callback.on_interrupt(trainer, state, None)
+
+    def test_table_log_callback_step_logging(self, trainer_setup, capsys):
+        """Test TableLogCallback prints at specified intervals."""
+        from origami.training import TableLogCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        callback = TableLogCallback(print_every=5)
+        state = TrainResult(epoch=0, global_step=5)
+        state.current_batch_loss = 2.5
+        state.current_lr = 0.001
+
+        # Simulate batch start and end
+        callback.on_batch_begin(trainer, state, None)
+        callback.on_batch_end(trainer, state, None)
+
+        captured = capsys.readouterr()
+        assert "step: 5" in captured.out
+        assert "loss: 2.5" in captured.out
+
+    def test_table_log_callback_skips_non_interval(self, trainer_setup, capsys):
+        """Test TableLogCallback skips non-interval steps."""
+        from origami.training import TableLogCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        callback = TableLogCallback(print_every=10)
+        state = TrainResult(epoch=0, global_step=7)
+        state.current_batch_loss = 2.5
+        state.current_lr = 0.001
+
+        callback.on_batch_begin(trainer, state, None)
+        callback.on_batch_end(trainer, state, None)
+
+        captured = capsys.readouterr()
+        # Should not print anything since step 7 is not a multiple of 10
+        assert "step:" not in captured.out
+
+    def test_table_log_callback_evaluate_epoch_mode(self, trainer_setup, capsys):
+        """Test TableLogCallback stores eval metrics for epoch-based logging."""
+        from origami.training import TableLogCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1, eval_strategy="epoch")
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        callback = TableLogCallback(print_every=1)
+
+        # First, fire evaluation (epoch mode)
+        state = TrainResult(epoch=0, global_step=5)
+        callback.on_evaluate(trainer, state, {"val_loss": 1.234})
+
+        # Metrics should be stored for next batch print
+        assert callback._pending_eval_metrics is not None
+        assert callback._pending_eval_metrics["val_loss"] == 1.234
+
+    def test_table_log_callback_on_interrupt(self, trainer_setup, capsys):
+        """Test TableLogCallback.on_interrupt prints message."""
+        from origami.training import TableLogCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        callback = TableLogCallback(print_every=1)
+        state = TrainResult(epoch=2, global_step=50, interrupted=True)
+
+        callback.on_interrupt(trainer, state, None)
+
+        captured = capsys.readouterr()
+        assert "interrupted" in captured.out.lower()
+        assert "epoch 2" in captured.out
+
+    def test_table_log_callback_step_eval_combined(self, trainer_setup, capsys):
+        """Test TableLogCallback combines batch and eval on step-based eval."""
+        from origami.training import TableLogCallback, TrainResult
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(
+            batch_size=4, num_epochs=1, eval_strategy="steps", eval_steps=10
+        )
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+        )
+
+        callback = TableLogCallback(print_every=10)
+        state = TrainResult(epoch=0, global_step=10)
+        state.current_batch_loss = 2.5
+        state.current_lr = 0.001
+
+        # on_batch_end should defer printing
+        callback.on_batch_begin(trainer, state, None)
+        callback.on_batch_end(trainer, state, None)
+
+        # Check that batch parts are deferred
+        assert callback._pending_batch_parts is not None
+
+        # Now on_evaluate should print combined
+        callback.on_evaluate(trainer, state, {"val_loss": 1.5, "val_acc": 0.8})
+
+        captured = capsys.readouterr()
+        # Should have both batch info and eval metrics on same line
+        assert "step: 10" in captured.out
+        assert "val_loss" in captured.out
+
+    def test_callback_handler_batch_throttling(self, trainer_setup):
+        """Test CallbackHandler batch-level throttling."""
+        from origami.training import TrainResult
+        from origami.training.callbacks import CallbackHandler, TrainerCallback
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        batch_begins = []
+        batch_ends = []
+
+        class TestCallback(TrainerCallback):
+            def on_batch_begin(self, trainer, state, payload):
+                batch_begins.append(state.global_step)
+
+            def on_batch_end(self, trainer, state, payload):
+                batch_ends.append(state.global_step)
+
+        handler = CallbackHandler([TestCallback()], log_every_n_batches=3)
+
+        # Fire batch events
+        for step in range(1, 10):
+            state = TrainResult(global_step=step)
+            handler.fire_event("on_batch_begin", trainer, state)
+            handler.fire_event("on_batch_end", trainer, state)
+
+        # Only steps 3, 6, 9 should fire (every 3rd batch)
+        assert batch_begins == [3, 6, 9]
+        assert batch_ends == [3, 6, 9]
+
+    def test_callback_handler_epoch_resets_batch_count(self, trainer_setup):
+        """Test that epoch_begin resets batch count in handler."""
+        from origami.training import TrainResult
+        from origami.training.callbacks import CallbackHandler, TrainerCallback
+
+        model, tokenizer, data = trainer_setup
+
+        config = TrainingConfig(batch_size=4, num_epochs=1)
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            config=config,
+        )
+
+        handler = CallbackHandler([TrainerCallback()], log_every_n_batches=3)
+
+        state = TrainResult(global_step=1)
+
+        # Fire batch events to increment counter
+        for _ in range(5):
+            handler.fire_event("on_batch_begin", trainer, state)
+
+        # Epoch begin should reset
+        handler.fire_event("on_epoch_begin", trainer, state)
+        assert handler._batch_count == 0
