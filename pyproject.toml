@@ -29,12 +29,6 @@ dev = [
 mongodb = [
     "pymongo>=4.0",
 ]
-hf = [
-    "transformers>=4.30",
-]
-mamba = [
-    "mamba-ssm",
-]
 
 [build-system]
 requires = ["hatchling"]

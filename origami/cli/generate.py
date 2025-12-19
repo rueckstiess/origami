@@ -73,6 +73,12 @@ import click
     show_default=True,
     help="Maximum sequence length for generation.",
 )
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
 def generate(
     model: str,
     count: int,
@@ -83,6 +89,7 @@ def generate(
     output: str | None,
     batch_size: int,
     max_length: int,
+    verbose: bool,
 ) -> None:
     """Generate synthetic data from a trained model.
 
@@ -105,6 +112,10 @@ def generate(
     # Load model
     click.echo(f"Loading model from {model}...", err=True)
     pipeline = OrigamiPipeline.load(model)
+
+    if verbose:
+        click.echo("\nConfiguration:", err=True)
+        click.echo(pipeline.config.to_yaml(), err=True)
 
     # Generate samples
     click.echo(f"Generating {count} samples...", err=True)

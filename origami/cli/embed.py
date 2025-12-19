@@ -83,6 +83,12 @@ def detect_output_format(path: str) -> str:
     is_flag=True,
     help="Disable L2 normalization of embeddings.",
 )
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
 def embed(
     model: str,
     data: str,
@@ -92,6 +98,7 @@ def embed(
     pooling: str,
     target_key: str | None,
     no_normalize: bool,
+    verbose: bool,
 ) -> None:
     """Create embeddings for input data.
 
@@ -125,6 +132,10 @@ def embed(
     # Load model
     click.echo(f"Loading model from {model}...")
     pipeline = OrigamiPipeline.load(model)
+
+    if verbose:
+        click.echo("\nConfiguration:")
+        click.echo(pipeline.config.to_yaml())
 
     # Load input data
     click.echo(f"Loading data from {data}...")

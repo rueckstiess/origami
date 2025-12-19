@@ -21,6 +21,7 @@ from .vocabulary import (
     UNK_VALUE,
     GrammarToken,
     KeyToken,
+    PruningStats,
     Token,
     TokenType,
     ValueToken,
@@ -43,6 +44,7 @@ __all__ = [
     "path_to_string",
     # Vocabulary and tokens
     "Vocabulary",
+    "PruningStats",
     "Token",
     "TokenType",
     "GrammarToken",

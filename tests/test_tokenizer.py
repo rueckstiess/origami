@@ -642,3 +642,132 @@ class TestUnknownTokenHandling:
         tokenizer.fit([{"key": "value"}])
 
         assert tokenizer.vocab.frozen
+
+
+class TestTokenizerMaxVocabSize:
+    """Tests for max_vocab_size vocabulary pruning."""
+
+    def test_fit_with_max_vocab_size(self):
+        """fit() with max_vocab_size should prune vocabulary."""
+        # Create data with many unique values
+        data = [{"key": f"value_{i}"} for i in range(20)]
+
+        tokenizer = JSONTokenizer()
+        # Grammar(10) + key(1) + values(5) = 16
+        tokenizer.fit(data, max_vocab_size=16)
+
+        assert tokenizer.vocab.size == 16
+        assert tokenizer.pruning_stats is not None
+        assert tokenizer.pruning_stats.num_values_pruned == 15  # 20 - 5 = 15
+
+    def test_fit_without_max_vocab_size(self):
+        """fit() without max_vocab_size should keep all tokens."""
+        data = [{"key": v} for v in ["a", "b", "c"]]
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        assert tokenizer.pruning_stats is None
+        assert tokenizer.vocab.size == 14  # Grammar(10) + key(1) + values(3)
+
+    def test_pruned_values_map_to_unk(self):
+        """Pruned values should encode to UNK_VALUE."""
+        # Create data with frequency distribution
+        data = [{"k": "common"}] * 10 + [{"k": "rare"}]
+
+        tokenizer = JSONTokenizer()
+        # Grammar(10) + key(1) + value(1) = 12, so "rare" gets pruned
+        tokenizer.fit(data, max_vocab_size=12)
+
+        # Tokenize with the rare value
+        instance = tokenizer.tokenize({"k": "rare"})
+        ids = tokenizer.encode_tokens(instance)
+
+        # "rare" should map to UNK_VALUE
+        assert tokenizer.vocab.unk_value_id in ids
+
+    def test_common_values_preserved(self):
+        """Most frequent values should be preserved."""
+        # Create data with clear frequency hierarchy
+        data = []
+        for _ in range(100):
+            data.append({"k": "very_common"})
+        for _ in range(10):
+            data.append({"k": "common"})
+        for _ in range(1):
+            data.append({"k": "rare"})
+
+        tokenizer = JSONTokenizer()
+        # Grammar(10) + key(1) + values(2) = 13
+        tokenizer.fit(data, max_vocab_size=13)
+
+        # very_common and common should be preserved
+        instance = tokenizer.tokenize({"k": "very_common"})
+        ids = tokenizer.encode_tokens(instance)
+        assert tokenizer.vocab.unk_value_id not in ids
+
+        instance = tokenizer.tokenize({"k": "common"})
+        ids = tokenizer.encode_tokens(instance)
+        assert tokenizer.vocab.unk_value_id not in ids
+
+        # rare should map to UNK
+        instance = tokenizer.tokenize({"k": "rare"})
+        ids = tokenizer.encode_tokens(instance)
+        assert tokenizer.vocab.unk_value_id in ids
+
+    def test_all_keys_preserved(self):
+        """All keys should be preserved regardless of max_vocab_size."""
+        data = [{"key1": "v1"}, {"key2": "v2"}, {"key3": "v3"}]
+
+        tokenizer = JSONTokenizer()
+        # Grammar(10) + keys(3) + values(0) = 13
+        tokenizer.fit(data, max_vocab_size=13)
+
+        # All keys should work
+        for key in ["key1", "key2", "key3"]:
+            instance = tokenizer.tokenize({key: "new_val"})
+            ids = tokenizer.encode_tokens(instance)
+            # Key should NOT be UNK
+            assert tokenizer.vocab.unk_key_id not in ids
+
+    def test_max_vocab_size_too_small_raises(self):
+        """max_vocab_size too small for grammar+keys should raise."""
+        data = [{"k1": "v"}, {"k2": "v"}, {"k3": "v"}]
+
+        tokenizer = JSONTokenizer()
+        # Need grammar(10) + keys(3) = 13 minimum
+        with pytest.raises(ValueError, match="too small"):
+            tokenizer.fit(data, max_vocab_size=12)
+
+    def test_pruning_stats_serialization(self):
+        """Saved tokenizer should preserve pruning stats."""
+        data = [{"k": "common"}] * 10 + [{"k": "rare"}]
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data, max_vocab_size=12)
+
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+            path = Path(f.name)
+
+        try:
+            tokenizer.save(path)
+            loaded = JSONTokenizer.load(path)
+
+            assert loaded.pruning_stats is not None
+            assert loaded.pruning_stats.num_values_pruned == 1
+        finally:
+            path.unlink()
+
+    def test_refit_clears_pruning_stats(self):
+        """Re-fitting tokenizer should clear previous pruning stats."""
+        tokenizer = JSONTokenizer()
+
+        # First fit with pruning
+        data1 = [{"k": f"v{i}"} for i in range(10)]
+        tokenizer.fit(data1, max_vocab_size=12)
+        assert tokenizer.pruning_stats is not None
+
+        # Second fit without pruning
+        data2 = [{"k": "v"}]
+        tokenizer.fit(data2)
+        assert tokenizer.pruning_stats is None

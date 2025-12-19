@@ -806,6 +806,57 @@ class TestPipelineInverseTransform:
         except Exception:
             pass  # Untrained model may not complete
 
+    def test_inverse_transform_uses_full_path_for_nested_fields(self):
+        """Test that inverse transform uses full path (foo.bar) not just leaf key (bar).
+
+        This is a regression test for a bug where _create_inverse_transform_fn
+        used target_key.split(".")[-1] (leaf key) instead of the full path,
+        which would fail to find the scaler for nested fields.
+        """
+        import random
+
+        torch.manual_seed(42)
+        random.seed(42)
+
+        # Data with nested high-cardinality numeric field
+        data = [
+            {"label": "A", "stats": {"value": random.random() * 1000}}
+            for _ in range(100)
+        ]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2, use_continuous_head=True),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10),
+            training=TrainingConfig(num_epochs=2),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2)
+
+        # Verify the scaler uses full path "stats.value", not just "value"
+        assert "stats.value" in pipeline._preprocessor.scaled_fields
+        assert "value" not in pipeline._preprocessor.scaled_fields
+
+        # The inverse transform function should work with full nested path
+        inverse_fn = pipeline._create_inverse_transform_fn()
+        assert inverse_fn is not None
+
+        # Test inverse transform with a scaled z-score value
+        # z-score of ~1.0 should map to approximately mean + 1*std
+        stats = pipeline._preprocessor.get_scaler_stats("stats.value")
+        test_zscore = 1.0
+        expected_approx = stats["mean"] + test_zscore * stats["std"]
+
+        result = inverse_fn(test_zscore, "stats.value")
+        assert abs(result - expected_approx) < 0.01, (
+            f"Inverse transform failed: expected ~{expected_approx}, got {result}"
+        )
+
+        # Verify leaf key alone would NOT work (field not found, returns unchanged)
+        result_leaf = inverse_fn(test_zscore, "value")
+        assert result_leaf == test_zscore, (
+            "Leaf key 'value' should not match; value should pass through unchanged"
+        )
+
 
 class TestPipelinePreprocessorSerialization:
     """Tests for preprocessor serialization edge cases."""

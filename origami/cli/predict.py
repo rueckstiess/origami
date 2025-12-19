@@ -66,6 +66,12 @@ from origami.cli.data_loaders import load_data
     show_default=True,
     help="Batch size for inference.",
 )
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
 def predict(
     model: str,
     data: str,
@@ -75,6 +81,7 @@ def predict(
     output: str | None,
     output_format: str,
     batch_size: int,
+    verbose: bool,
 ) -> None:
     """Predict target values for input data.
 
@@ -100,6 +107,10 @@ def predict(
     # Load model
     click.echo(f"Loading model from {model}...", err=True)
     pipeline = OrigamiPipeline.load(model)
+
+    if verbose:
+        click.echo("\nConfiguration:", err=True)
+        click.echo(pipeline.config.to_yaml(), err=True)
 
     # Load input data
     click.echo(f"Loading data from {data}...", err=True)

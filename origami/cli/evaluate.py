@@ -55,6 +55,12 @@ AVAILABLE_METRICS = ["accuracy", "array_f1", "array_jaccard", "object_key_accura
     default=None,
     help="Evaluate on random sample of N examples.",
 )
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
 def evaluate(
     model: str,
     data: str,
@@ -63,6 +69,7 @@ def evaluate(
     target_key: str,
     metrics: tuple[str, ...],
     sample_size: int | None,
+    verbose: bool,
 ) -> None:
     """Evaluate a trained Origami model.
 
@@ -83,6 +90,10 @@ def evaluate(
     # Load model
     click.echo(f"Loading model from {model}...")
     pipeline = OrigamiPipeline.load(model)
+
+    if verbose:
+        click.echo("\nConfiguration:")
+        click.echo(pipeline.config.to_yaml())
 
     # Load test data
     click.echo(f"Loading test data from {data}...")

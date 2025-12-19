@@ -201,10 +201,21 @@ class OrigamiPipeline:
             max_depth=self.config.model.max_depth,
             max_array_index=self.config.model.max_array_position,
         )
-        self._tokenizer.fit(all_processed)
+        self._tokenizer.fit(
+            all_processed, max_vocab_size=self.config.data.max_vocab_size
+        )
 
         if verbose:
             print(f"Vocabulary size: {self._tokenizer.vocab.size}")
+            if (
+                self._tokenizer.pruning_stats
+                and self._tokenizer.pruning_stats.num_values_pruned > 0
+            ):
+                stats = self._tokenizer.pruning_stats
+                print(
+                    f"  Pruned {stats.num_values_pruned} rare values "
+                    f"(frequency threshold: {stats.value_frequency_threshold})"
+                )
 
         # Step 3: Create model and move to training device
         self._model = self._create_model()
@@ -790,16 +801,13 @@ class OrigamiPipeline:
             return None
 
         def inverse_transform(value, target_key: str):
-            # Get the leaf key for inverse transform
-            leaf_key = target_key.split(".")[-1]
-
-            # Check if this field was scaled
-            if leaf_key not in self._preprocessor.scaled_fields:
+            # Check if this field was scaled (using full path, not leaf key)
+            if target_key not in self._preprocessor.scaled_fields:
                 return value
 
             # Only transform numeric values
             if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return self._preprocessor.inverse_transform_value(leaf_key, value)
+                return self._preprocessor.inverse_transform_value(target_key, value)
             return value
 
         return inverse_transform

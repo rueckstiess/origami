@@ -111,6 +111,33 @@ numeric_values = [..., 0, 1.23, ...]  # Scaled value stored separately
 # MoG head predicts distribution for next NUM value
 ```
 
+### 6. Vocabulary Size Limiting (max_vocab_size)
+Large datasets can create vocabularies with many rare values. The `max_vocab_size` config limits vocabulary by pruning least-frequent ValueTokens:
+
+```python
+DataConfig(max_vocab_size=10000)  # Limit to 10k tokens
+```
+
+**Pruning rules:**
+- Grammar tokens (IDs 0-9) are ALWAYS preserved - required for JSON syntax
+- KeyTokens are ALWAYS preserved - needed for KVPE and NumericScaler inverse_transform
+- ValueTokens are pruned by frequency (least frequent first)
+- Pruned values encode to `UNK_VALUE` (ID 8) during tokenization
+
+```python
+# After fitting with max_vocab_size, access pruning statistics:
+tokenizer.fit(data, max_vocab_size=5000)
+stats = tokenizer.pruning_stats
+print(f"Pruned {stats.num_values_pruned} values")
+print(f"Frequency threshold: {stats.value_frequency_threshold}")
+
+# Vocabulary also provides frequency inspection methods:
+vocab.get_value_frequencies()  # Returns dict[Any, int]
+vocab.get_most_common_values(10)  # Returns list[(value, count)]
+```
+
+If `max_vocab_size` is smaller than `num_grammar_tokens + num_keys`, a `ValueError` is raised.
+
 ## Inference Architecture
 
 ### Generator Contains ALL Generation Logic
@@ -239,6 +266,13 @@ origami/
 │   ├── numeric_scaler.py      # StandardScaler for continuous numerics
 │   ├── numeric_discretizer.py # Binning high-cardinality numerics
 │   └── target_field.py        # Target field utilities
+├── cli/                 # Command-line interface
+│   ├── main.py             # Entry point and train command
+│   ├── predict.py          # Predict subcommand
+│   ├── generate.py         # Generate subcommand
+│   ├── evaluate.py         # Evaluate subcommand
+│   ├── embed.py            # Embed subcommand
+│   └── data_loaders.py     # Shared data loading utilities
 └── utils/               # Utilities
     └── device.py          # Device management
 ```
@@ -287,6 +321,27 @@ uv run pytest tests/ --cov=origami
 ### Training Example
 ```bash
 uv run python examples/train_jsonl.py --data datasets/car.jsonl --target-key target
+```
+
+### CLI Commands (origami)
+```bash
+# Train a model
+origami train -d data.jsonl -t label -o model.pt
+
+# Predict values
+origami predict -m model.pt -d input.jsonl -t label
+
+# Generate synthetic data
+origami generate -m model.pt -n 100 -o samples.jsonl
+
+# Evaluate model performance
+origami evaluate -m model.pt -d test.jsonl -t label --metrics accuracy
+
+# Create embeddings
+origami embed -m model.pt -d data.jsonl -o embeddings.npy
+
+# All commands support -v/--verbose to display model configuration
+origami predict -m model.pt -d input.jsonl -t label -v
 ```
 
 ## Common Pitfalls and Mistakes
@@ -420,6 +475,8 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 | `UpscaledDataset` | Data augmentation via key-order shuffling |
 | `NumericScaler` | StandardScaler for continuous numeric fields |
 | `NumericDiscretizer` | Bin numeric fields into categories |
+| `Vocabulary` | Token storage with frequency tracking and pruning support |
+| `PruningStats` | Statistics from vocabulary pruning (original/pruned size, threshold) |
 
 ## Configuration
 
@@ -460,6 +517,7 @@ DataConfig(
     numeric_mode="none",   # "none", "discretize", or "scale"
     cat_threshold=100,     # Fields with >N unique values get preprocessed
     n_bins=20,             # Number of bins for discretization
+    max_vocab_size=0,      # Max vocabulary size (0 = unlimited). Prunes rare ValueTokens.
 )
 ```
 
@@ -490,6 +548,8 @@ Note: `vocab_size` is not in config - the model derives it from `len(vocab)` whe
 - OrigamiPipeline end-to-end API
 - Unified prediction API with predict/predict_batch/predict_proba
 - Pipeline.evaluate() for loss and metrics computation
+- Vocabulary pruning with max_vocab_size and frequency tracking
+- CLI with train, predict, generate, evaluate, embed subcommands
 
 ### Partial
 - LSTM/Mamba backbones (stubs only)

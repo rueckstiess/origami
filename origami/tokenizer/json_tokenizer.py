@@ -27,6 +27,7 @@ from .vocabulary import (
     OBJ_START,
     START,
     KeyToken,
+    PruningStats,
     Token,
     ValueToken,
     Vocabulary,
@@ -127,8 +128,11 @@ class JSONTokenizer:
         self.vocab = vocab if vocab is not None else Vocabulary()
         self.max_depth = max_depth
         self.max_array_index = max_array_index
+        self._pruning_stats: PruningStats | None = None
 
-    def fit(self, objects: Iterable[dict]) -> "JSONTokenizer":
+    def fit(
+        self, objects: Iterable[dict], max_vocab_size: int = 0
+    ) -> "JSONTokenizer":
         """Build vocabulary from a collection of JSON objects.
 
         Iterates through all objects, extracting keys and values to build
@@ -142,19 +146,37 @@ class JSONTokenizer:
 
         Args:
             objects: Iterable of JSON-like dictionaries.
+            max_vocab_size: Maximum vocabulary size. 0 = unlimited.
+                If set, prunes rare values after building vocabulary.
 
         Returns:
             self, for method chaining.
+
+        Raises:
+            ValueError: If max_vocab_size is too small for all grammar + keys.
         """
         # Create fresh vocabulary if re-fitting
         if self.vocab.frozen:
             self.vocab = Vocabulary()
+            self._pruning_stats = None
 
         for obj in objects:
             self._fit_value(obj)
+
+        # Prune vocabulary if max_vocab_size is set
+        if max_vocab_size > 0:
+            self._pruning_stats = self.vocab.prune_to_size(max_vocab_size)
+        else:
+            self._pruning_stats = None
+
         # Freeze vocabulary so unknown tokens map to UNK at inference time
         self.vocab.freeze()
         return self
+
+    @property
+    def pruning_stats(self) -> PruningStats | None:
+        """Statistics from vocabulary pruning, if max_vocab_size was used."""
+        return self._pruning_stats
 
     def _fit_value(self, value: Any) -> None:
         """Recursively add all keys and values from a JSON value."""
@@ -396,6 +418,7 @@ class JSONTokenizer:
                     "vocab": self.vocab,
                     "max_depth": self.max_depth,
                     "max_array_index": self.max_array_index,
+                    "pruning_stats": self._pruning_stats,
                 },
                 f,
             )
@@ -412,6 +435,7 @@ class JSONTokenizer:
             max_depth=data["max_depth"],
             max_array_index=data["max_array_index"],
         )
+        tokenizer._pruning_stats = data.get("pruning_stats")  # Backwards compat
         return tokenizer
 
     def __repr__(self) -> str:
