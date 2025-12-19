@@ -12,6 +12,8 @@ from origami.training.metrics import (
     accuracy,
     array_f1,
     array_jaccard,
+    array_precision,
+    array_recall,
     object_key_accuracy,
 )
 
@@ -93,6 +95,140 @@ class TestMetrics:
         assert array_f1([[]], [[]]) == 1.0
         assert array_f1([["a"]], [[]]) == 0.0
         assert array_f1([[]], [["a"]]) == 0.0
+
+    def test_array_f1_non_list_prediction(self):
+        """Test array_f1 with non-list predictions."""
+        y_true = [["a", "b"]]
+        y_pred = ["wrong"]
+        assert array_f1(y_true, y_pred) == 0.0
+
+        # Equal non-lists return 1.0
+        y_true = ["same"]
+        y_pred = ["same"]
+        assert array_f1(y_true, y_pred) == 1.0
+
+    def test_array_precision_exact(self):
+        """Test array_precision with exact matches."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["a", "b", "c"]]
+        assert array_precision(y_true, y_pred) == 1.0
+
+    def test_array_precision_order_independent(self):
+        """Test array_precision is order-independent."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["c", "b", "a"]]
+        assert array_precision(y_true, y_pred) == 1.0
+
+    def test_array_precision_partial_overlap(self):
+        """Test array_precision with partial overlap."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["a", "b", "d"]]  # 2/3 of predictions are correct
+        assert array_precision(y_true, y_pred) == pytest.approx(2 / 3)
+
+    def test_array_precision_subset_prediction(self):
+        """Test array_precision when prediction is subset of true."""
+        y_true = [["a", "b", "c", "d"]]
+        y_pred = [["a", "b"]]  # All predictions correct, but missing some
+        # Precision = 2/2 = 1.0 (all predictions are correct)
+        assert array_precision(y_true, y_pred) == 1.0
+
+    def test_array_precision_superset_prediction(self):
+        """Test array_precision when prediction is superset of true."""
+        y_true = [["a", "b"]]
+        y_pred = [["a", "b", "c", "d"]]  # Extra wrong predictions
+        # Precision = 2/4 = 0.5 (half of predictions are correct)
+        assert array_precision(y_true, y_pred) == 0.5
+
+    def test_array_precision_no_overlap(self):
+        """Test array_precision with no overlap."""
+        y_true = [["a", "b"]]
+        y_pred = [["c", "d"]]
+        assert array_precision(y_true, y_pred) == 0.0
+
+    def test_array_precision_empty_arrays(self):
+        """Test array_precision with empty arrays."""
+        assert array_precision([[]], [[]]) == 1.0
+        assert array_precision([["a"]], [[]]) == 0.0
+        assert array_precision([[]], [["a"]]) == 0.0
+
+    def test_array_precision_non_list_prediction(self):
+        """Test array_precision with non-list predictions."""
+        y_true = [["a", "b"]]
+        y_pred = ["wrong"]
+        assert array_precision(y_true, y_pred) == 0.0
+
+        y_true = ["same"]
+        y_pred = ["same"]
+        assert array_precision(y_true, y_pred) == 1.0
+
+    def test_array_recall_exact(self):
+        """Test array_recall with exact matches."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["a", "b", "c"]]
+        assert array_recall(y_true, y_pred) == 1.0
+
+    def test_array_recall_order_independent(self):
+        """Test array_recall is order-independent."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["c", "b", "a"]]
+        assert array_recall(y_true, y_pred) == 1.0
+
+    def test_array_recall_partial_overlap(self):
+        """Test array_recall with partial overlap."""
+        y_true = [["a", "b", "c"]]
+        y_pred = [["a", "b", "d"]]  # 2/3 of true values found
+        assert array_recall(y_true, y_pred) == pytest.approx(2 / 3)
+
+    def test_array_recall_subset_prediction(self):
+        """Test array_recall when prediction is subset of true."""
+        y_true = [["a", "b", "c", "d"]]
+        y_pred = [["a", "b"]]  # Missing some true values
+        # Recall = 2/4 = 0.5 (only half of true values found)
+        assert array_recall(y_true, y_pred) == 0.5
+
+    def test_array_recall_superset_prediction(self):
+        """Test array_recall when prediction is superset of true."""
+        y_true = [["a", "b"]]
+        y_pred = [["a", "b", "c", "d"]]  # All true values found plus extras
+        # Recall = 2/2 = 1.0 (all true values are found)
+        assert array_recall(y_true, y_pred) == 1.0
+
+    def test_array_recall_no_overlap(self):
+        """Test array_recall with no overlap."""
+        y_true = [["a", "b"]]
+        y_pred = [["c", "d"]]
+        assert array_recall(y_true, y_pred) == 0.0
+
+    def test_array_recall_empty_arrays(self):
+        """Test array_recall with empty arrays."""
+        assert array_recall([[]], [[]]) == 1.0
+        assert array_recall([["a"]], [[]]) == 0.0
+        assert array_recall([[]], [["a"]]) == 0.0
+
+    def test_array_recall_non_list_prediction(self):
+        """Test array_recall with non-list predictions."""
+        y_true = [["a", "b"]]
+        y_pred = ["wrong"]
+        assert array_recall(y_true, y_pred) == 0.0
+
+        y_true = ["same"]
+        y_pred = ["same"]
+        assert array_recall(y_true, y_pred) == 1.0
+
+    def test_precision_recall_f1_relationship(self):
+        """Test that F1 is the harmonic mean of precision and recall."""
+        y_true = [["a", "b", "c", "d"]]
+        y_pred = [["a", "b", "e", "f"]]  # 2 correct, 2 wrong, 2 missing
+
+        p = array_precision(y_true, y_pred)  # 2/4 = 0.5
+        r = array_recall(y_true, y_pred)  # 2/4 = 0.5
+        f1 = array_f1(y_true, y_pred)
+
+        expected_f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+        assert f1 == pytest.approx(expected_f1)
+        assert p == pytest.approx(0.5)
+        assert r == pytest.approx(0.5)
+        assert f1 == pytest.approx(0.5)
 
     def test_array_jaccard_exact(self):
         """Test array_jaccard with exact matches."""

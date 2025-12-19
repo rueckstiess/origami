@@ -577,6 +577,7 @@ class OrigamiPipeline:
         sample_size: int | None = None,
         batch_size: int = 32,
         allow_complex_values: bool | None = None,
+        verbose: bool = False,
     ) -> dict[str, float]:
         """Evaluate the model on data.
 
@@ -595,6 +596,7 @@ class OrigamiPipeline:
             batch_size: Batch size for evaluation.
             allow_complex_values: Whether to allow complex values (objects/arrays)
                 during predictions. If None (default), auto-detected based on metrics.
+            verbose: If True, show progress bars during evaluation.
 
         Returns:
             Dict mapping metric names to their values. Always includes "loss".
@@ -649,6 +651,7 @@ class OrigamiPipeline:
             metrics=metrics,
             sample_size=sample_size,
             batch_size=batch_size,
+            verbose=verbose,
         )
 
     def embed(

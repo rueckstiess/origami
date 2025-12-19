@@ -13,6 +13,8 @@ from typing import Any
 COMPLEX_VALUE_METRICS: frozenset[str] = frozenset(
     {
         "array_f1",
+        "array_precision",
+        "array_recall",
         "array_jaccard",
         "object_key_accuracy",
     }
@@ -125,6 +127,58 @@ def array_f1(y_true: list[list], y_pred: list[list]) -> float:
     return sum(f1_scores) / len(f1_scores)
 
 
+def array_precision(y_true: list[list], y_pred: list[list]) -> float:
+    """Average precision treating arrays as sets.
+
+    For each (true_array, pred_array) pair, computes set-based precision:
+    - Precision = |pred ∩ true| / |pred|
+
+    Ignores element order and duplicates within arrays.
+
+    Args:
+        y_true: List of true arrays.
+        y_pred: List of predicted arrays.
+
+    Returns:
+        Average precision across all pairs (0.0 to 1.0).
+    """
+    if len(y_true) == 0:
+        return 1.0
+
+    precision_scores = []
+    for true_arr, pred_arr in zip(y_true, y_pred, strict=True):
+        precision = _set_precision(true_arr, pred_arr)
+        precision_scores.append(precision)
+
+    return sum(precision_scores) / len(precision_scores)
+
+
+def array_recall(y_true: list[list], y_pred: list[list]) -> float:
+    """Average recall treating arrays as sets.
+
+    For each (true_array, pred_array) pair, computes set-based recall:
+    - Recall = |pred ∩ true| / |true|
+
+    Ignores element order and duplicates within arrays.
+
+    Args:
+        y_true: List of true arrays.
+        y_pred: List of predicted arrays.
+
+    Returns:
+        Average recall across all pairs (0.0 to 1.0).
+    """
+    if len(y_true) == 0:
+        return 1.0
+
+    recall_scores = []
+    for true_arr, pred_arr in zip(y_true, y_pred, strict=True):
+        recall = _set_recall(true_arr, pred_arr)
+        recall_scores.append(recall)
+
+    return sum(recall_scores) / len(recall_scores)
+
+
 def _set_f1(true_arr: list, pred_arr: list) -> float:
     """Compute F1 score between two arrays treated as sets."""
     # Handle non-list predictions (e.g., model predicted wrong type)
@@ -147,6 +201,44 @@ def _set_f1(true_arr: list, pred_arr: list) -> float:
     if precision + recall == 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
+
+
+def _set_precision(true_arr: list, pred_arr: list) -> float:
+    """Compute precision between two arrays treated as sets."""
+    # Handle non-list predictions (e.g., model predicted wrong type)
+    if not isinstance(true_arr, list) or not isinstance(pred_arr, list):
+        return 1.0 if true_arr == pred_arr else 0.0
+
+    # Convert to comparable sets (handle unhashable elements)
+    true_set = _to_comparable_set(true_arr)
+    pred_set = _to_comparable_set(pred_arr)
+
+    if len(pred_set) == 0 and len(true_set) == 0:
+        return 1.0
+    if len(pred_set) == 0:
+        return 0.0
+
+    intersection = len(true_set & pred_set)
+    return intersection / len(pred_set)
+
+
+def _set_recall(true_arr: list, pred_arr: list) -> float:
+    """Compute recall between two arrays treated as sets."""
+    # Handle non-list predictions (e.g., model predicted wrong type)
+    if not isinstance(true_arr, list) or not isinstance(pred_arr, list):
+        return 1.0 if true_arr == pred_arr else 0.0
+
+    # Convert to comparable sets (handle unhashable elements)
+    true_set = _to_comparable_set(true_arr)
+    pred_set = _to_comparable_set(pred_arr)
+
+    if len(pred_set) == 0 and len(true_set) == 0:
+        return 1.0
+    if len(true_set) == 0:
+        return 0.0
+
+    intersection = len(true_set & pred_set)
+    return intersection / len(true_set)
 
 
 def _to_comparable_set(arr: list) -> set:

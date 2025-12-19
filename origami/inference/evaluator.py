@@ -5,11 +5,12 @@ metrics on the same data samples, supporting step-based and post-training evalua
 """
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from origami.training.collator import OrigamiDataCollator
 from origami.training.dataset import EvalDataset
@@ -63,6 +64,7 @@ class OrigamiEvaluator:
         tokenizer: "JSONTokenizer",
         target_key: str | None = None,
         inverse_transform: Callable[[str, Any], Any] | None = None,
+        allow_complex_values: bool = False,
     ):
         """Initialize evaluator.
 
@@ -74,11 +76,14 @@ class OrigamiEvaluator:
             inverse_transform: Optional function to transform predicted values
                 back to original scale. Signature: (leaf_key, value) -> value.
                 Used for continuous numeric fields that were scaled during preprocessing.
+            allow_complex_values: Whether to allow complex values (objects/arrays)
+                during predictions. Default False for backward compatibility.
         """
         self.model = model
         self.tokenizer = tokenizer
         self.target_key = target_key
         self.inverse_transform = inverse_transform
+        self.allow_complex_values = allow_complex_values
         self._predictor: OrigamiPredictor | None = None
 
     @property
@@ -92,6 +97,8 @@ class OrigamiEvaluator:
         metrics: dict[str, MetricFn] | None = None,
         sample_size: int | None = None,
         batch_size: int = 32,
+        allow_complex_values: bool | None = None,
+        verbose: bool = False,
     ) -> dict[str, float]:
         """Compute loss and any additional metrics on the same data sample.
 
@@ -104,6 +111,8 @@ class OrigamiEvaluator:
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
             batch_size: Batch size for loss computation and prediction.
+            allow_complex_values: If provided, overrides the instance default.
+            verbose: If True, show progress bars during evaluation.
 
         Returns:
             Dict mapping metric names to their values. Always includes "loss".
@@ -118,17 +127,24 @@ class OrigamiEvaluator:
                 "Pass target_key to OrigamiEvaluator constructor."
             )
 
+        # Resolve allow_complex_values (parameter overrides instance default)
+        effective_allow_complex = (
+            allow_complex_values if allow_complex_values is not None else self.allow_complex_values
+        )
+
         # Sample data if requested
         sample = self._sample_data(data, sample_size)
 
         results: dict[str, float] = {}
 
         # Always compute loss
-        results["loss"] = self._compute_loss(sample, batch_size)
+        results["loss"] = self._compute_loss(sample, batch_size, verbose=verbose)
 
         # Compute prediction-based metrics if any provided
         if metrics:
-            y_true, y_pred = self._get_predictions(sample, batch_size)
+            y_true, y_pred = self._get_predictions(
+                sample, batch_size, effective_allow_complex, verbose=verbose
+            )
             for name, metric_fn in metrics.items():
                 results[name] = metric_fn(y_true, y_pred)
 
@@ -140,8 +156,16 @@ class OrigamiEvaluator:
             return data
         return random.sample(data, sample_size)
 
+    def _wrap_progress(
+        self, iterable: Iterator, total: int, desc: str, verbose: bool
+    ) -> Iterator:
+        """Wrap an iterator with tqdm if verbose, otherwise return as-is."""
+        if verbose:
+            return tqdm(iterable, total=total, desc=desc)
+        return iterable
+
     @torch.no_grad()
-    def _compute_loss(self, data: list[dict], batch_size: int) -> float:
+    def _compute_loss(self, data: list[dict], batch_size: int, verbose: bool = False) -> float:
         """Compute average loss over data with grammar constraints.
 
         This mirrors the trainer's evaluate() method to ensure consistent
@@ -166,8 +190,9 @@ class OrigamiEvaluator:
 
         total_loss = 0.0
         num_batches = 0
+        num_total_batches = (len(data) + batch_size - 1) // batch_size
 
-        for batch in loader:
+        for batch in self._wrap_progress(loader, num_total_batches, "Computing loss", verbose):
             # Compute grammar mask for proper loss evaluation
             grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
 
@@ -192,10 +217,22 @@ class OrigamiEvaluator:
 
         return total_loss / max(1, num_batches)
 
-    def _get_predictions(self, data: list[dict], batch_size: int) -> tuple[list[Any], list[Any]]:
+    def _get_predictions(
+        self,
+        data: list[dict],
+        batch_size: int,
+        allow_complex_values: bool = False,
+        verbose: bool = False,
+    ) -> tuple[list[Any], list[Any]]:
         """Get true values and predictions for all samples.
 
         Uses CPU for prediction as it's faster for autoregressive generation.
+
+        Args:
+            data: List of JSON objects to predict on.
+            batch_size: Batch size for prediction.
+            allow_complex_values: Whether to allow complex values (objects/arrays).
+            verbose: If True, show progress bar during prediction.
         """
         if self.target_key is None:
             raise ValueError("target_key required for predictions")
@@ -216,6 +253,8 @@ class OrigamiEvaluator:
             data,
             target_key=self.target_key,
             batch_size=batch_size,
+            allow_complex_values=allow_complex_values,
+            verbose=verbose,
         )
 
         return y_true, y_pred
@@ -230,6 +269,7 @@ def evaluate(
     sample_size: int | None = None,
     batch_size: int = 32,
     inverse_transform: Callable[[str, Any], Any] | None = None,
+    allow_complex_values: bool = False,
 ) -> dict[str, float]:
     """Convenience function for one-shot evaluation.
 
@@ -244,6 +284,8 @@ def evaluate(
         sample_size: If set, randomly sample this many examples.
         batch_size: Batch size for evaluation.
         inverse_transform: Optional function to transform predicted values.
+        allow_complex_values: Whether to allow complex values (objects/arrays)
+            during predictions. Default False.
 
     Returns:
         Dict mapping metric names to their values. Always includes "loss".
@@ -266,7 +308,9 @@ def evaluate(
         print(f"Accuracy: {results['acc']:.2%}")
         ```
     """
-    evaluator = OrigamiEvaluator(model, tokenizer, target_key, inverse_transform)
+    evaluator = OrigamiEvaluator(
+        model, tokenizer, target_key, inverse_transform, allow_complex_values
+    )
     return evaluator.evaluate(
         data,
         metrics=metrics,

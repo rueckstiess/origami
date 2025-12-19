@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
+from tqdm.auto import tqdm
 
 from origami.preprocessing import move_target_last
 from origami.tokenizer.vocabulary import ValueToken
@@ -122,6 +123,7 @@ class OrigamiPredictor:
         target_key: str,
         batch_size: int = 32,
         allow_complex_values: bool = False,
+        verbose: bool = False,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
@@ -134,13 +136,19 @@ class OrigamiPredictor:
             allow_complex_values: If False (default), restrict to primitive values
                 only (strings, numbers, booleans, null). If True, allow objects
                 and arrays which may require multiple tokens to generate.
+            verbose: If True, show progress bar during prediction.
 
         Returns:
             List of predicted values
         """
         results: list[Any] = []
 
-        for start in range(0, len(objects), batch_size):
+        num_batches = (len(objects) + batch_size - 1) // batch_size
+        batch_iter = range(0, len(objects), batch_size)
+        if verbose:
+            batch_iter = tqdm(batch_iter, total=num_batches, desc="Predicting")
+
+        for start in batch_iter:
             batch_objects = objects[start : start + batch_size]
 
             # 1. Reorder to place target key last (maximum context)

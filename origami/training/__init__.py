@@ -17,6 +17,8 @@ from .metrics import (
     any_metric_requires_complex_values,
     array_f1,
     array_jaccard,
+    array_precision,
+    array_recall,
     metric_requires_complex_values,
     object_key_accuracy,
 )
@@ -43,6 +45,8 @@ __all__ = [
     "any_metric_requires_complex_values",
     "array_f1",
     "array_jaccard",
+    "array_precision",
+    "array_recall",
     "metric_requires_complex_values",
     "object_key_accuracy",
 ]
