@@ -374,20 +374,16 @@ class OrigamiGenerator:
             states = self._init_path_states_from_tokens(seq_tokens, num_samples=1)
             path_states.append(states[0])
 
-        # Initialize grammar state for each sequence from their prefixes
-        # init_state_from_tokens returns state AFTER processing the prefix,
-        # along with the valid mask for the NEXT token
+        # Initialize grammar state for all sequences in parallel from their prefixes
+        # init_state_from_tokens_batch returns state AFTER processing the prefix
         grammar_state = None
         initial_depths = None
         next_valid_mask = None  # Valid mask for the next token to generate
         if self._grammar_pda is not None:
-            grammar_states = []
-            for i in range(original_batch_size):
-                mask = current_attention_mask[i]
-                seq_tokens = current_ids[i][mask]
-                state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
-                grammar_states.append(state)
-            grammar_state = self._stack_grammar_states(grammar_states)
+            # Use batched initialization - much faster than per-sequence loop
+            grammar_state = self._grammar_pda.init_state_from_tokens_batch(
+                current_ids, current_attention_mask, self.device
+            )
             # Record initial depths for stop_after_value
             initial_depths = grammar_state[1].clone()
             # Get valid mask for next token (state is already after processing prefix)
@@ -644,15 +640,10 @@ class OrigamiGenerator:
 
         # 3. Apply grammar constraints
         if self._grammar_pda is not None:
-            # Initialize grammar state from the full sequence
-            batch_size = batch.input_ids.size(0)
-            grammar_states = []
-            for i in range(batch_size):
-                mask = batch.attention_mask[i]
-                seq_tokens = batch.input_ids[i][mask]
-                state = self._grammar_pda.init_state_from_tokens(seq_tokens, 1, self.device)
-                grammar_states.append(state)
-            grammar_state = self._stack_grammar_states(grammar_states)
+            # Initialize grammar state from the full sequence (batched for efficiency)
+            grammar_state = self._grammar_pda.init_state_from_tokens_batch(
+                batch.input_ids, batch.attention_mask, self.device
+            )
 
             # Get valid next tokens based on grammar state
             last_token = batch.input_ids[:, -1]

@@ -299,6 +299,64 @@ class JSONGrammarPDA:
 
         return stack, depth, awaiting_value, seen_start, root_closed, ended
 
+    def init_state_from_tokens_batch(
+        self,
+        token_ids: Tensor,  # (batch, seq_len) left-padded sequences
+        attention_mask: Tensor,  # (batch, seq_len) True for real tokens
+        device: torch.device,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Initialize PDA state for a batch of sequences in parallel.
+
+        This is much faster than calling init_state_from_tokens for each
+        sequence individually, as it processes all sequences together.
+
+        Args:
+            token_ids: Batch of token IDs (batch, seq_len), left-padded
+            attention_mask: Boolean mask (batch, seq_len), True for real tokens
+            device: Device for output tensors
+
+        Returns:
+            Tuple of (stack, depth, awaiting_value, seen_start, root_closed, ended)
+            each with shape (batch,) or (batch, max_depth) for stack.
+        """
+        batch_size, seq_len = token_ids.shape
+
+        # Initialize batch state
+        stack = torch.zeros(batch_size, self.max_depth, dtype=torch.long, device=device)
+        depth = torch.zeros(batch_size, dtype=torch.long, device=device)
+        awaiting_value = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        seen_start = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        root_closed = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        ended = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+        # Process each position in parallel across the batch
+        # For left-padded sequences, PAD tokens won't affect state
+        # because we use torch.where with attention_mask
+        for t in range(seq_len):
+            tokens_at_t = token_ids[:, t]  # (batch,)
+            mask_at_t = attention_mask[:, t]  # (batch,)
+
+            # Skip if all tokens at this position are padding
+            if not mask_at_t.any():
+                continue
+
+            # Compute new state for this position
+            new_state = self._update_state(
+                tokens_at_t, stack, depth, awaiting_value, seen_start, root_closed, ended
+            )
+            new_stack, new_depth, new_awaiting, new_seen, new_root_closed, new_ended = new_state
+
+            # Only update state for non-padded positions
+            mask_expanded = mask_at_t.unsqueeze(1).expand(-1, self.max_depth)
+            stack = torch.where(mask_expanded, new_stack, stack)
+            depth = torch.where(mask_at_t, new_depth, depth)
+            awaiting_value = torch.where(mask_at_t, new_awaiting, awaiting_value)
+            seen_start = torch.where(mask_at_t, new_seen, seen_start)
+            root_closed = torch.where(mask_at_t, new_root_closed, root_closed)
+            ended = torch.where(mask_at_t, new_ended, ended)
+
+        return stack, depth, awaiting_value, seen_start, root_closed, ended
+
     def apply_constraints(
         self,
         logits: Tensor,  # (batch, seq_len, vocab_size)

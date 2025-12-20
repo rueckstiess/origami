@@ -6,7 +6,10 @@ performing inference with automatic preprocessing and inverse transforms.
 
 from __future__ import annotations
 
+import cProfile
+import pstats
 from dataclasses import asdict
+from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -472,6 +475,7 @@ class OrigamiPipeline:
         target_key: str,
         batch_size: int = 32,
         allow_complex_values: bool = False,
+        profile: bool = False,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
@@ -482,6 +486,7 @@ class OrigamiPipeline:
             allow_complex_values: If False (default), restrict to primitive values
                 only (strings, numbers, booleans, null). If True, allow objects
                 and arrays which may require multiple tokens to generate.
+            profile: If True, run with cProfile and print timing statistics.
 
         Returns:
             List of predicted values (one per object).
@@ -495,10 +500,23 @@ class OrigamiPipeline:
         # Get or create predictor (has inverse_transform_fn configured if needed)
         predictor = self._get_predictor()
 
+        if profile:
+            profiler = cProfile.Profile()
+            profiler.enable()
+
         # Run prediction (Predictor handles inverse transform internally)
-        return predictor.predict_batch(
+        results = predictor.predict_batch(
             processed, target_key, batch_size=batch_size, allow_complex_values=allow_complex_values
         )
+
+        if profile:
+            profiler.disable()
+            stream = StringIO()
+            stats = pstats.Stats(profiler, stream=stream)
+            stats.strip_dirs().sort_stats("cumulative").print_stats(50)
+            print(stream.getvalue())
+
+        return results
 
     def predict_proba(
         self,
