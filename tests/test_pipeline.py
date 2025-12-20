@@ -16,18 +16,20 @@ class TestOrigamiConfigNested:
 
     def test_default_config(self):
         """Test default configuration values."""
-        config = OrigamiConfig()
+        config = OrigamiConfig(training=TrainingConfig(num_epochs=10))
         assert config.model.d_model == 128
         assert config.model.n_heads == 4
         assert config.model.n_layers == 4
         assert config.data.numeric_mode == "none"
         assert config.training.batch_size == 32
+        assert config.training.num_epochs == 10
 
     def test_custom_config(self):
         """Test custom configuration values."""
         config = OrigamiConfig(
             model=ModelConfig(d_model=256, n_heads=8),
             data=DataConfig(numeric_mode="scale", cat_threshold=50),
+            training=TrainingConfig(num_epochs=5),
         )
         assert config.model.d_model == 256
         assert config.model.n_heads == 8
@@ -155,9 +157,9 @@ class TestOrigamiConfigNested:
             TrainingConfig(learning_rate=-0.001)
 
     def test_config_validation_num_epochs(self):
-        """Test that num_epochs must be >= 1."""
+        """Test that num_epochs must be >= 0."""
         with pytest.raises(ValueError, match="num_epochs"):
-            TrainingConfig(num_epochs=0)
+            TrainingConfig(num_epochs=-1)
 
     def test_config_validation_max_vocab_size(self):
         """Test that max_vocab_size must be >= 0."""
@@ -321,6 +323,30 @@ class TestPipelineSaveLoad:
             assert isinstance(loaded._preprocessor, NumericDiscretizer)
         finally:
             path.unlink()
+
+    def test_state_dict_roundtrip(self, fitted_pipeline):
+        """Test state_dict and from_state_dict preserve state."""
+        state = fitted_pipeline.state_dict()
+
+        # Verify state dict structure
+        assert "version" in state
+        assert "config" in state
+        assert "model_state_dict" in state
+        assert "tokenizer_state" in state
+
+        # Reconstruct from state dict
+        loaded = OrigamiPipeline.from_state_dict(state)
+
+        assert loaded._fitted
+        assert loaded._model is not None
+        assert loaded._tokenizer is not None
+        assert loaded.config.model.d_model == fitted_pipeline.config.model.d_model
+
+    def test_state_dict_unfitted_raises(self):
+        """Test that state_dict on unfitted pipeline raises error."""
+        pipeline = OrigamiPipeline()
+        with pytest.raises(RuntimeError, match="fitted"):
+            pipeline.state_dict()
 
     def test_save_unfitted_raises(self):
         """Test that saving unfitted pipeline raises error."""

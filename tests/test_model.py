@@ -73,7 +73,7 @@ class TestTrainingConfig:
 
     def test_default_values(self):
         """Test default training config values."""
-        config = TrainingConfig()
+        config = TrainingConfig(num_epochs=10)
 
         assert config.learning_rate == 1e-3
         assert config.batch_size == 32

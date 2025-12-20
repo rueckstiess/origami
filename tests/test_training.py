@@ -563,10 +563,12 @@ class TestOrigamiTrainer:
         model, tokenizer = model_and_tokenizer
         train_data = [{"name": "Alice", "age": 30}]
 
+        config = TrainingConfig(num_epochs=1)
         trainer = OrigamiTrainer(
             model=model,
             tokenizer=tokenizer,
             train_data=train_data,
+            config=config,
         )
 
         assert trainer.model is model
@@ -580,11 +582,13 @@ class TestOrigamiTrainer:
         train_data = [{"name": "Alice", "age": 30}]
         eval_data = [{"name": "Bob", "age": 25}]
 
+        config = TrainingConfig(num_epochs=1)
         trainer = OrigamiTrainer(
             model=model,
             tokenizer=tokenizer,
             train_data=train_data,
             eval_data=eval_data,
+            config=config,
         )
 
         assert trainer.eval_dataset is not None
@@ -595,7 +599,7 @@ class TestOrigamiTrainer:
         model, tokenizer = model_and_tokenizer
         train_data = [{"name": "Alice", "age": 30}]
 
-        config = TrainingConfig(upscale_factor=10)
+        config = TrainingConfig(num_epochs=1, upscale_factor=10)
         trainer = OrigamiTrainer(
             model=model,
             tokenizer=tokenizer,
@@ -684,13 +688,12 @@ class TestOrigamiTrainer:
         train_data = [{"name": "Alice", "age": 30}] * 4
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = TrainingConfig(batch_size=2, num_epochs=2)
+            config = TrainingConfig(batch_size=2, num_epochs=2, checkpoint_dir=tmpdir)
             trainer = OrigamiTrainer(
                 model=model,
                 tokenizer=tokenizer,
                 train_data=train_data,
                 config=config,
-                checkpoint_dir=tmpdir,
             )
 
             # Train a bit
@@ -717,10 +720,12 @@ class TestOrigamiTrainer:
         model, tokenizer = model_and_tokenizer
         train_data = [{"name": "Alice", "age": 30}]
 
+        config = TrainingConfig(num_epochs=1)
         trainer = OrigamiTrainer(
             model=model,
             tokenizer=tokenizer,
             train_data=train_data,
+            config=config,
         )
 
         with pytest.raises(ValueError, match="No checkpoint directory"):
@@ -900,13 +905,6 @@ class TestEndToEndTraining:
                 learning_rate=1e-2,
                 upscale_factor=2,  # 2x upscaling for augmentation
                 save_every_n_epochs=3,
-            )
-            trainer = OrigamiTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_data=train_data,
-                eval_data=eval_data,
-                config=train_config,
                 checkpoint_dir=tmpdir,
             )
 
@@ -930,7 +928,6 @@ class TestEndToEndTraining:
                 train_data=train_data,
                 eval_data=eval_data,
                 config=train_config,
-                checkpoint_dir=tmpdir,
                 callbacks=[MetricsTracker()],
             )
 
@@ -1237,9 +1234,14 @@ class TestEvaluationScheduling:
         trainer.train()
 
         # With 20 samples, batch_size=4, drop_last=True: 5 batches per epoch
-        # Should evaluate at steps 2, 4 (not at 0 or 5 since drop_last=True may affect)
+        # Should evaluate at steps 2, 4 during training
+        # Plus a final evaluation at step 5 (end of training)
         assert len(eval_steps_fired) >= 1
-        assert all(step % 2 == 0 for step in eval_steps_fired)
+        # All interval evaluations should be at even steps
+        interval_evals = [s for s in eval_steps_fired if s != trainer.state.global_step]
+        assert all(step % 2 == 0 for step in interval_evals)
+        # Final evaluation happens at the last step
+        assert eval_steps_fired[-1] == trainer.state.global_step
 
     def test_epoch_based_evaluation_every_n_epochs(self, setup):
         """Test evaluation fires at epoch intervals."""
@@ -1381,6 +1383,7 @@ class TestEvaluationScheduling:
                 batch_size=4,
                 num_epochs=3,
                 eval_strategy="epoch",
+                checkpoint_dir=tmpdir,
                 # No eval_metrics = just loss
             )
 
@@ -1390,7 +1393,6 @@ class TestEvaluationScheduling:
                 train_data=data,
                 eval_data=data[:4],
                 config=config,
-                checkpoint_dir=tmpdir,
             )
             trainer.train()
 
@@ -1579,70 +1581,6 @@ class TestCallbacks:
         assert "step: 10" in captured.out
         assert "val_loss" in captured.out
 
-    def test_callback_handler_batch_throttling(self, trainer_setup):
-        """Test CallbackHandler batch-level throttling."""
-        from origami.training import TrainResult
-        from origami.training.callbacks import CallbackHandler, TrainerCallback
-
-        model, tokenizer, data = trainer_setup
-
-        config = TrainingConfig(batch_size=4, num_epochs=1)
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=data,
-            config=config,
-        )
-
-        batch_begins = []
-        batch_ends = []
-
-        class TestCallback(TrainerCallback):
-            def on_batch_begin(self, trainer, state, payload):
-                batch_begins.append(state.global_step)
-
-            def on_batch_end(self, trainer, state, payload):
-                batch_ends.append(state.global_step)
-
-        handler = CallbackHandler([TestCallback()], log_every_n_batches=3)
-
-        # Fire batch events
-        for step in range(1, 10):
-            state = TrainResult(global_step=step)
-            handler.fire_event("on_batch_begin", trainer, state)
-            handler.fire_event("on_batch_end", trainer, state)
-
-        # Only steps 3, 6, 9 should fire (every 3rd batch)
-        assert batch_begins == [3, 6, 9]
-        assert batch_ends == [3, 6, 9]
-
-    def test_callback_handler_epoch_resets_batch_count(self, trainer_setup):
-        """Test that epoch_begin resets batch count in handler."""
-        from origami.training import TrainResult
-        from origami.training.callbacks import CallbackHandler, TrainerCallback
-
-        model, tokenizer, data = trainer_setup
-
-        config = TrainingConfig(batch_size=4, num_epochs=1)
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=data,
-            config=config,
-        )
-
-        handler = CallbackHandler([TrainerCallback()], log_every_n_batches=3)
-
-        state = TrainResult(global_step=1)
-
-        # Fire batch events to increment counter
-        for _ in range(5):
-            handler.fire_event("on_batch_begin", trainer, state)
-
-        # Epoch begin should reset
-        handler.fire_event("on_epoch_begin", trainer, state)
-        assert handler._batch_count == 0
-
 
 class TestAllowComplexValues:
     """Tests for allow_complex_values in training."""
@@ -1663,15 +1601,15 @@ class TestAllowComplexValues:
 
     def test_training_config_default_is_none(self):
         """Test that TrainingConfig.allow_complex_values defaults to None."""
-        config = TrainingConfig()
+        config = TrainingConfig(num_epochs=1)
         assert config.allow_complex_values is None
 
     def test_training_config_explicit_values(self):
         """Test setting explicit True/False values."""
-        config_true = TrainingConfig(allow_complex_values=True)
+        config_true = TrainingConfig(num_epochs=1, allow_complex_values=True)
         assert config_true.allow_complex_values is True
 
-        config_false = TrainingConfig(allow_complex_values=False)
+        config_false = TrainingConfig(num_epochs=1, allow_complex_values=False)
         assert config_false.allow_complex_values is False
 
     def test_auto_detect_enables_for_array_f1(self, trainer_setup):

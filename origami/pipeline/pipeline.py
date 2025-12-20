@@ -15,10 +15,10 @@ import torch
 
 from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
 from origami.inference import OrigamiEmbedder, OrigamiEvaluator, OrigamiGenerator, OrigamiPredictor
-from origami.inference.evaluator import MetricFn
 from origami.model import OrigamiModel
 from origami.preprocessing import NumericDiscretizer, NumericScaler
 from origami.tokenizer import JSONTokenizer
+from origami.training.metrics import MetricSpec
 from origami.utils.device import auto_device
 
 if TYPE_CHECKING:
@@ -176,7 +176,7 @@ class OrigamiPipeline:
         Args:
             data: Training data as list of JSON-like dictionaries
             eval_data: Optional evaluation data for validation during training
-            epochs: Number of training epochs. Overrides config if provided.
+            epochs: Number of training epochs. Overrides config.training.num_epochs if provided.
             verbose: Whether to print training info (vocab size, model params, device)
             callbacks: List of TrainerCallback instances for monitoring/customization.
                 If None (default), uses [ProgressCallback()] for progress bars.
@@ -235,6 +235,7 @@ class OrigamiPipeline:
             upscale_factor=self.config.training.upscale_factor,
             shuffle_keys=self.config.training.shuffle_keys,
             save_every_n_epochs=self.config.training.save_every_n_epochs,
+            checkpoint_dir=self.config.training.checkpoint_dir,
             # Evaluation
             eval_strategy=self.config.training.eval_strategy,
             eval_steps=self.config.training.eval_steps,
@@ -257,7 +258,6 @@ class OrigamiPipeline:
             train_data=train_processed,
             eval_data=eval_processed,
             config=train_config,
-            shuffle=self.config.training.shuffle_keys,
             callbacks=all_callbacks if all_callbacks else None,
             device=self._training_device,
         )
@@ -348,6 +348,74 @@ class OrigamiPipeline:
 
         return OrigamiModel(model_config, self._tokenizer.vocab)
 
+    def state_dict(self) -> dict:
+        """Get complete state dict for serialization.
+
+        Returns a dictionary containing all state needed to reconstruct
+        the pipeline: model weights, tokenizer, preprocessor, and config.
+
+        Returns:
+            State dictionary suitable for torch.save()
+
+        Raises:
+            RuntimeError: If pipeline hasn't been fitted
+        """
+        self._check_fitted()
+
+        return {
+            "version": "1.0",
+            "config": asdict(self.config),
+            "model_state_dict": self._model.state_dict(),
+            "model_config": asdict(self._model.config),
+            "tokenizer_state": self._tokenizer_to_dict(),
+            "preprocessor_type": self._get_preprocessor_type(),
+            "preprocessor_state": self._preprocessor_to_dict(),
+        }
+
+    @classmethod
+    def from_state_dict(cls, state_dict: dict) -> OrigamiPipeline:
+        """Create pipeline from state dict.
+
+        Reconstructs a complete pipeline from a state dictionary,
+        including model, tokenizer, preprocessor, and config.
+
+        Args:
+            state_dict: State dictionary from state_dict() or torch.load()
+
+        Returns:
+            Loaded OrigamiPipeline ready for inference
+        """
+        # Reconstruct config (nested dataclasses)
+        config_dict = state_dict["config"]
+        config = OrigamiConfig(
+            model=ModelConfig(**config_dict["model"]),
+            training=TrainingConfig(**config_dict["training"]),
+            data=DataConfig(**config_dict["data"]),
+            device=config_dict["device"],
+        )
+        pipeline = cls(config)
+
+        # Reconstruct preprocessor
+        pipeline._preprocessor = cls._load_preprocessor(
+            state_dict["preprocessor_type"],
+            state_dict["preprocessor_state"],
+        )
+
+        # Reconstruct tokenizer
+        pipeline._tokenizer = cls._tokenizer_from_dict(state_dict["tokenizer_state"])
+
+        # Reconstruct model (stays on CPU - faster for inference)
+        model_config = ModelConfig(**state_dict["model_config"])
+        pipeline._model = OrigamiModel(model_config, pipeline._tokenizer.vocab)
+        pipeline._model.load_state_dict(state_dict["model_state_dict"])
+        pipeline._model.eval()
+
+        # Set training device for potential future fit() calls
+        pipeline._training_device = pipeline._resolve_device()
+
+        pipeline._fitted = True
+        return pipeline
+
     def save(self, path: str | Path) -> None:
         """Save the complete pipeline to a file.
 
@@ -360,19 +428,7 @@ class OrigamiPipeline:
         Raises:
             RuntimeError: If pipeline hasn't been fitted
         """
-        self._check_fitted()
-
-        checkpoint = {
-            "version": "1.0",
-            "config": asdict(self.config),
-            "model_state_dict": self._model.state_dict(),
-            "model_config": asdict(self._model.config),
-            "tokenizer_state": self._tokenizer_to_dict(),
-            "preprocessor_type": self._get_preprocessor_type(),
-            "preprocessor_state": self._preprocessor_to_dict(),
-        }
-
-        torch.save(checkpoint, path)
+        torch.save(self.state_dict(), path)
 
     @classmethod
     def load(cls, path: str | Path) -> OrigamiPipeline:
@@ -384,38 +440,8 @@ class OrigamiPipeline:
         Returns:
             Loaded OrigamiPipeline ready for inference
         """
-        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-
-        # Reconstruct config (nested dataclasses)
-        config_dict = checkpoint["config"]
-        config = OrigamiConfig(
-            model=ModelConfig(**config_dict["model"]),
-            training=TrainingConfig(**config_dict["training"]),
-            data=DataConfig(**config_dict["data"]),
-            device=config_dict["device"],
-        )
-        pipeline = cls(config)
-
-        # Reconstruct preprocessor
-        pipeline._preprocessor = cls._load_preprocessor(
-            checkpoint["preprocessor_type"],
-            checkpoint["preprocessor_state"],
-        )
-
-        # Reconstruct tokenizer
-        pipeline._tokenizer = cls._tokenizer_from_dict(checkpoint["tokenizer_state"])
-
-        # Reconstruct model (stays on CPU - faster for inference)
-        model_config = ModelConfig(**checkpoint["model_config"])
-        pipeline._model = OrigamiModel(model_config, pipeline._tokenizer.vocab)
-        pipeline._model.load_state_dict(checkpoint["model_state_dict"])
-        pipeline._model.eval()
-
-        # Set training device for potential future fit() calls
-        pipeline._training_device = pipeline._resolve_device()
-
-        pipeline._fitted = True
-        return pipeline
+        state_dict = torch.load(path, map_location="cpu", weights_only=False)
+        return cls.from_state_dict(state_dict)
 
     def predict(
         self,
@@ -573,7 +599,7 @@ class OrigamiPipeline:
         self,
         data: list[dict],
         target_key: str | None = None,
-        metrics: dict[str, MetricFn] | None = None,
+        metrics: dict[str, MetricSpec] | None = None,
         sample_size: int | None = None,
         batch_size: int = 32,
         allow_complex_values: bool | None = None,
@@ -588,9 +614,8 @@ class OrigamiPipeline:
             target_key: Key to predict for prediction-based metrics.
                 Falls back to config.target_key if not provided.
                 Required if metrics are provided.
-            metrics: Dict mapping metric names to functions. Each function should
-                follow sklearn convention: (y_true, y_pred) -> float.
-                Example: {"acc": accuracy}. Loss is always computed.
+            metrics: Dict mapping prefixes to metric names or functions.
+                Example: {"acc": "accuracy"}. Loss is always computed.
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
             batch_size: Batch size for evaluation.
@@ -603,8 +628,6 @@ class OrigamiPipeline:
 
         Example:
             ```python
-            from origami.training import accuracy
-
             # Just loss
             results = pipeline.evaluate(test_data)
             print(f"Loss: {results['loss']:.4f}")
@@ -613,7 +636,7 @@ class OrigamiPipeline:
             results = pipeline.evaluate(
                 test_data,
                 target_key="label",
-                metrics={"acc": accuracy},
+                metrics={"acc": "accuracy"},
             )
             print(f"Accuracy: {results['acc']:.2%}")
             ```
@@ -660,7 +683,8 @@ class OrigamiPipeline:
         pooling: Literal["mean", "max", "last", "target"] = "mean",
         target_key: str | None = None,
         normalize: bool = True,
-    ) -> np.ndarray:
+        enable_grad: bool = False,
+    ) -> np.ndarray | torch.Tensor:
         """Get embedding for a JSON object.
 
         Args:
@@ -668,12 +692,19 @@ class OrigamiPipeline:
             pooling: Pooling strategy ("mean", "max", "last", "target")
             target_key: Required if pooling="target"
             normalize: Whether to L2-normalize the embedding
+            enable_grad: If True, compute gradients and return tensor.
+                If False (default), return numpy array for inference.
 
         Returns:
-            Embedding as numpy array of shape (d_model,)
+            Embedding as numpy array of shape (d_model,) if enable_grad=False,
+            or torch.Tensor if enable_grad=True.
         """
         embeddings = self.embed_batch(
-            [obj], pooling=pooling, target_key=target_key, normalize=normalize
+            [obj],
+            pooling=pooling,
+            target_key=target_key,
+            normalize=normalize,
+            enable_grad=enable_grad,
         )
         return embeddings[0]
 
@@ -683,7 +714,8 @@ class OrigamiPipeline:
         pooling: Literal["mean", "max", "last", "target"] = "mean",
         target_key: str | None = None,
         normalize: bool = True,
-    ) -> np.ndarray:
+        enable_grad: bool = False,
+    ) -> np.ndarray | torch.Tensor:
         """Get embeddings for multiple JSON objects.
 
         Args:
@@ -691,9 +723,12 @@ class OrigamiPipeline:
             pooling: Pooling strategy
             target_key: Required if pooling="target"
             normalize: Whether to L2-normalize embeddings
+            enable_grad: If True, compute gradients and return tensor.
+                If False (default), return numpy array for inference.
 
         Returns:
-            Embeddings as numpy array of shape (batch_size, d_model)
+            Embeddings as numpy array of shape (batch_size, d_model) if enable_grad=False,
+            or torch.Tensor if enable_grad=True.
         """
         self._check_fitted()
 
@@ -704,8 +739,13 @@ class OrigamiPipeline:
         embedder = self._get_embedder(pooling)
 
         # Get embeddings
-        embeddings = embedder.embed_batch(processed, target_key=target_key, normalize=normalize)
+        embeddings = embedder.embed_batch(
+            processed, target_key=target_key, normalize=normalize, enable_grad=enable_grad
+        )
 
+        # Return tensor for gradient computation, numpy for inference
+        if enable_grad:
+            return embeddings
         return embeddings.cpu().numpy()
 
     def _check_fitted(self) -> None:
@@ -823,7 +863,7 @@ class OrigamiPipeline:
     def _resolve_allow_complex_values(
         self,
         explicit_value: bool | None,
-        metrics: dict[str, MetricFn] | None,
+        metrics: dict[str, MetricSpec] | None,
     ) -> bool:
         """Resolve allow_complex_values with auto-detection.
 

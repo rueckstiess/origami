@@ -324,50 +324,6 @@ class TestCallbackHandler:
 
         assert events == ["cb1", "cb2"]
 
-    def test_log_every_n_batches(self):
-        """Test that batch callbacks respect log_every_n_batches."""
-        batch_events = []
-
-        class TestCallback(TrainerCallback):
-            def on_batch_end(self, trainer, state, metrics):
-                batch_events.append("batch_end")
-
-        handler = CallbackHandler([TestCallback()], log_every_n_batches=2)
-
-        # Simulate 5 batches
-        for _ in range(5):
-            handler.fire_event("on_batch_begin", None, None, None)
-            handler.fire_event("on_batch_end", None, None, None)
-
-        # Should only fire on batches 2 and 4 (every 2nd batch)
-        assert len(batch_events) == 2
-
-    def test_batch_count_resets_on_epoch(self):
-        """Test that batch count resets at epoch start."""
-        batch_events = []
-
-        class TestCallback(TrainerCallback):
-            def on_batch_end(self, trainer, state, metrics):
-                batch_events.append("batch_end")
-
-        handler = CallbackHandler([TestCallback()], log_every_n_batches=2)
-
-        # Epoch 1: 3 batches
-        for _ in range(3):
-            handler.fire_event("on_batch_begin", None, None, None)
-            handler.fire_event("on_batch_end", None, None, None)
-
-        # Reset at epoch start
-        handler.fire_event("on_epoch_begin", None, None, None)
-
-        # Epoch 2: 3 batches
-        for _ in range(3):
-            handler.fire_event("on_batch_begin", None, None, None)
-            handler.fire_event("on_batch_end", None, None, None)
-
-        # Should fire on batch 2 of each epoch (2 total)
-        assert len(batch_events) == 2
-
 
 class TestProgressCallback:
     """Tests for ProgressCallback."""

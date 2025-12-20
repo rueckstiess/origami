@@ -193,9 +193,7 @@ def parse_projection(projection_json: str) -> dict[str, int]:
 
     # Check for mixed inclusion/exclusion
     if len(values) > 1:
-        raise click.BadParameter(
-            "Cannot mix inclusion (1) and exclusion (0) in projection"
-        )
+        raise click.BadParameter("Cannot mix inclusion (1) and exclusion (0) in projection")
 
     return projection
 
@@ -365,9 +363,7 @@ def load_data(
             raise click.BadParameter("--db is required for MongoDB data source")
         if not collection:
             raise click.BadParameter("-c/--collection is required for MongoDB data source")
-        return load_mongodb(
-            path, db, collection, skip=skip, limit=limit, projection=projection
-        )
+        return load_mongodb(path, db, collection, skip=skip, limit=limit, projection=projection)
 
     # Validate file exists
     if not Path(path).exists():

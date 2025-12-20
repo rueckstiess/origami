@@ -8,14 +8,13 @@ Provides inference modes for trained ORIGAMI models:
 """
 
 from .embedder import OrigamiEmbedder
-from .evaluator import MetricFn, OrigamiEvaluator, evaluate
+from .evaluator import OrigamiEvaluator, evaluate
 from .generator import OrigamiGenerator
 from .predictor import OrigamiPredictor
 from .utils import GenerationError, find_target_positions
 
 __all__ = [
     "GenerationError",
-    "MetricFn",
     "OrigamiEmbedder",
     "OrigamiEvaluator",
     "OrigamiGenerator",

@@ -18,15 +18,16 @@ def move_target_last(obj: dict[str, Any], target_key: str) -> dict[str, Any]:
     This ensures the model sees all other fields before predicting the target,
     maximizing the context available for prediction.
 
+    If the target key doesn't exist, it is inserted with None as the value.
+    This is useful for creating embeddings for prediction where the target
+    value is unknown. For nested keys, intermediate dicts are created as needed.
+
     Args:
         obj: Input JSON object (not mutated)
         target_key: Dot-separated key path (e.g., "foo" or "foo.bar.baz")
 
     Returns:
-        New dict with target key moved to end at each level
-
-    Raises:
-        KeyError: If target_key path doesn't exist in obj
+        New dict with target key moved/inserted at end at each level
 
     Example:
         >>> obj = {"a": 1, "b": 2, "c": 3}
@@ -36,6 +37,14 @@ def move_target_last(obj: dict[str, Any], target_key: str) -> dict[str, Any]:
         >>> obj = {"x": {"p": 1, "q": 2}, "y": 3}
         >>> move_target_last(obj, "x.p")
         {"y": 3, "x": {"q": 2, "p": 1}}
+
+        >>> obj = {"a": 1}
+        >>> move_target_last(obj, "b")
+        {"a": 1, "b": None}
+
+        >>> obj = {"a": 1}
+        >>> move_target_last(obj, "x.y")
+        {"a": 1, "x": {"y": None}}
     """
     if not target_key:
         raise ValueError("target_key cannot be empty")
@@ -47,12 +56,15 @@ def move_target_last(obj: dict[str, Any], target_key: str) -> dict[str, Any]:
 def _move_key_last_recursive(obj: dict[str, Any], key_parts: list[str]) -> dict[str, Any]:
     """Recursively move key to last position at each level.
 
+    If the key doesn't exist, it is inserted with None as the value.
+    For nested keys, intermediate dicts are created as needed.
+
     Args:
         obj: Current object level
         key_parts: Remaining key path parts
 
     Returns:
-        New dict with key moved to end
+        New dict with key moved/inserted at end
     """
     if not key_parts:
         return obj
@@ -60,12 +72,18 @@ def _move_key_last_recursive(obj: dict[str, Any], key_parts: list[str]) -> dict[
     current_key = key_parts[0]
     remaining_parts = key_parts[1:]
 
-    if current_key not in obj:
-        raise KeyError(f"Key '{current_key}' not found in object")
-
     # Build new dict with current_key last
     result = {}
-    target_value = obj[current_key]
+
+    # Get target value, defaulting to empty dict if there are remaining parts, else None
+    if current_key in obj:
+        target_value = obj[current_key]
+    elif remaining_parts:
+        # Need to create nested structure
+        target_value = {}
+    else:
+        # Leaf key - insert None as placeholder
+        target_value = None
 
     # Add all other keys first
     for key, value in obj.items():

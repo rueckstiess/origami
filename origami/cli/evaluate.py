@@ -5,9 +5,7 @@ from __future__ import annotations
 import click
 
 from origami.cli.data_loaders import load_data
-
-# Available metrics
-AVAILABLE_METRICS = ["accuracy", "array_f1", "array_jaccard", "object_key_accuracy"]
+from origami.training.metrics import list_metrics
 
 
 @click.command()
@@ -50,7 +48,7 @@ AVAILABLE_METRICS = ["accuracy", "array_f1", "array_jaccard", "object_key_accura
 @click.option(
     "--project",
     default=None,
-    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
 )
 @click.option(
     "-t",
@@ -61,7 +59,7 @@ AVAILABLE_METRICS = ["accuracy", "array_f1", "array_jaccard", "object_key_accura
 @click.option(
     "--metrics",
     multiple=True,
-    type=click.Choice(AVAILABLE_METRICS),
+    type=click.Choice(list_metrics()),
     default=["accuracy"],
     show_default=True,
     help="Metrics to compute. Can be specified multiple times.",
@@ -105,7 +103,6 @@ def evaluate(
       origami evaluate -m model.pt -d test.jsonl -t label --sample-size 500
     """
     from origami import OrigamiPipeline
-    from origami import training as training_module
 
     # Load model
     click.echo(f"Loading model from {model}...")
@@ -122,13 +119,8 @@ def evaluate(
     )
     click.echo(f"  Loaded {len(test_data)} samples")
 
-    # Build metrics dict
-    metrics_dict = {}
-    for metric_name in metrics:
-        metric_fn = getattr(training_module, metric_name, None)
-        if metric_fn is None:
-            raise click.BadParameter(f"Unknown metric: {metric_name}")
-        metrics_dict[metric_name] = metric_fn
+    # Build metrics dict (use metric name as both prefix and value)
+    metrics_dict = {name: name for name in metrics}
 
     # Run evaluation
     click.echo("\nEvaluating...")

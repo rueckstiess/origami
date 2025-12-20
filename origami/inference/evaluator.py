@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 
 from origami.training.collator import OrigamiDataCollator
 from origami.training.dataset import EvalDataset
+from origami.training.metrics import MetricSpec, resolve_metrics
 
 from .predictor import OrigamiPredictor
 
@@ -21,21 +22,16 @@ if TYPE_CHECKING:
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import JSONTokenizer
 
-# Type alias for metric functions (sklearn convention)
-MetricFn = Callable[[list[Any], list[Any]], float]
-
 
 class OrigamiEvaluator:
     """Unified evaluation for loss and prediction-based metrics.
 
     Loss is always computed. Additional prediction-based metrics can be provided
-    as a dict mapping names to metric functions. All metrics are computed on the
+    as a dict mapping prefixes to metric names. All metrics are computed on the
     same data sample for consistency.
 
     Example:
         ```python
-        from origami.training import accuracy
-
         evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
 
         # Just loss (default, fast)
@@ -45,7 +41,7 @@ class OrigamiEvaluator:
         # Loss + custom metrics
         results = evaluator.evaluate(
             data=test_data,
-            metrics={"acc": accuracy},
+            metrics={"acc": "accuracy"},
             sample_size=100,
         )
         print(f"Loss: {results['loss']:.4f}")
@@ -94,7 +90,7 @@ class OrigamiEvaluator:
     def evaluate(
         self,
         data: list[dict],
-        metrics: dict[str, MetricFn] | None = None,
+        metrics: dict[str, MetricSpec] | None = None,
         sample_size: int | None = None,
         batch_size: int = 32,
         allow_complex_values: bool | None = None,
@@ -104,9 +100,8 @@ class OrigamiEvaluator:
 
         Args:
             data: List of JSON objects to evaluate on
-            metrics: Dict mapping metric names to functions. Each function should
-                follow sklearn convention: (y_true, y_pred) -> float.
-                Example: {"acc": accuracy, "f1": array_f1}
+            metrics: Dict mapping prefixes to metric names or functions.
+                Example: {"acc": "accuracy", "f1": "array_f1"}
                 Loss is always computed automatically.
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
@@ -127,6 +122,9 @@ class OrigamiEvaluator:
                 "Pass target_key to OrigamiEvaluator constructor."
             )
 
+        # Resolve metrics from string names to functions
+        resolved_metrics = resolve_metrics(metrics) if metrics else None
+
         # Resolve allow_complex_values (parameter overrides instance default)
         effective_allow_complex = (
             allow_complex_values if allow_complex_values is not None else self.allow_complex_values
@@ -141,11 +139,11 @@ class OrigamiEvaluator:
         results["loss"] = self._compute_loss(sample, batch_size, verbose=verbose)
 
         # Compute prediction-based metrics if any provided
-        if metrics:
+        if resolved_metrics:
             y_true, y_pred = self._get_predictions(
                 sample, batch_size, effective_allow_complex, verbose=verbose
             )
-            for name, metric_fn in metrics.items():
+            for name, metric_fn in resolved_metrics.items():
                 results[name] = metric_fn(y_true, y_pred)
 
         return results
@@ -156,9 +154,7 @@ class OrigamiEvaluator:
             return data
         return random.sample(data, sample_size)
 
-    def _wrap_progress(
-        self, iterable: Iterator, total: int, desc: str, verbose: bool
-    ) -> Iterator:
+    def _wrap_progress(self, iterable: Iterator, total: int, desc: str, verbose: bool) -> Iterator:
         """Wrap an iterator with tqdm if verbose, otherwise return as-is."""
         if verbose:
             return tqdm(iterable, total=total, desc=desc)
@@ -265,7 +261,7 @@ def evaluate(
     tokenizer: "JSONTokenizer",
     data: list[dict],
     target_key: str | None = None,
-    metrics: dict[str, MetricFn] | None = None,
+    metrics: dict[str, MetricSpec] | None = None,
     sample_size: int | None = None,
     batch_size: int = 32,
     inverse_transform: Callable[[str, Any], Any] | None = None,
@@ -279,8 +275,8 @@ def evaluate(
         data: List of JSON objects to evaluate on
         target_key: Key to predict for prediction-based metrics.
             Required if metrics are provided.
-        metrics: Dict mapping metric names to functions.
-            Example: {"acc": accuracy}. Loss is always computed.
+        metrics: Dict mapping prefixes to metric names or functions.
+            Example: {"acc": "accuracy"}. Loss is always computed.
         sample_size: If set, randomly sample this many examples.
         batch_size: Batch size for evaluation.
         inverse_transform: Optional function to transform predicted values.
@@ -293,7 +289,6 @@ def evaluate(
     Example:
         ```python
         from origami.inference import evaluate
-        from origami.training import accuracy
 
         # Just loss
         results = evaluate(model, tokenizer, test_data)
@@ -303,7 +298,7 @@ def evaluate(
         results = evaluate(
             model, tokenizer, test_data,
             target_key="label",
-            metrics={"acc": accuracy}
+            metrics={"acc": "accuracy"}
         )
         print(f"Accuracy: {results['acc']:.2%}")
         ```

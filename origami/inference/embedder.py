@@ -3,6 +3,7 @@
 Extracts dense vector embeddings from JSON documents using a trained ORIGAMI model.
 """
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Literal
 
 import torch
@@ -84,12 +85,12 @@ class OrigamiEmbedder:
         """Get the model's current device dynamically."""
         return next(self.model.parameters()).device
 
-    @torch.no_grad()
     def embed(
         self,
         obj: dict,
         target_key: str | None = None,
         normalize: bool = True,
+        enable_grad: bool = False,
     ) -> Tensor:
         """Embed a single JSON object.
 
@@ -97,6 +98,8 @@ class OrigamiEmbedder:
             obj: JSON object to embed
             target_key: Required if pooling="target". Dot-separated key path.
             normalize: Whether to L2-normalize the embedding
+            enable_grad: If True, compute gradients for fine-tuning.
+                If False (default), use torch.no_grad() for inference.
 
         Returns:
             Embedding tensor of shape (d_model,)
@@ -104,16 +107,18 @@ class OrigamiEmbedder:
         Raises:
             ValueError: If pooling="target" but target_key not provided
         """
-        embeddings = self.embed_batch([obj], target_key=target_key, normalize=normalize)
+        embeddings = self.embed_batch(
+            [obj], target_key=target_key, normalize=normalize, enable_grad=enable_grad
+        )
         return embeddings[0]
 
-    @torch.no_grad()
     def embed_batch(
         self,
         objects: list[dict],
         target_key: str | None = None,
         normalize: bool = True,
         batch_size: int = 32,
+        enable_grad: bool = False,
     ) -> Tensor:
         """Embed multiple JSON objects.
 
@@ -125,6 +130,8 @@ class OrigamiEmbedder:
                         All objects in batch use the same target_key.
             normalize: Whether to L2-normalize embeddings
             batch_size: Number of objects to process in parallel
+            enable_grad: If True, compute gradients for fine-tuning.
+                If False (default), use torch.no_grad() for inference.
 
         Returns:
             Embedding tensor of shape (len(objects), d_model)
@@ -135,52 +142,56 @@ class OrigamiEmbedder:
         if self.pooling == "target" and target_key is None:
             raise ValueError("target_key is required when pooling='target'")
 
+        # Use no_grad for inference, nullcontext for training with gradients
+        grad_context = nullcontext() if enable_grad else torch.no_grad()
+
         all_embeddings = []
 
-        for start in range(0, len(objects), batch_size):
-            batch_objects = objects[start : start + batch_size]
+        with grad_context:
+            for start in range(0, len(objects), batch_size):
+                batch_objects = objects[start : start + batch_size]
 
-            # Reorder if target pooling
-            if self.pooling == "target":
-                batch_objects = [move_target_last(obj, target_key) for obj in batch_objects]
+                # Reorder if target pooling
+                if self.pooling == "target":
+                    batch_objects = [move_target_last(obj, target_key) for obj in batch_objects]
 
-            # Create batch using collator
-            batch = self._collator.collate_objects(batch_objects, shuffle=False)
-            batch = batch.to(self.device)
+                # Create batch using collator
+                batch = self._collator.collate_objects(batch_objects, shuffle=False)
+                batch = batch.to(self.device)
 
-            # Forward pass
-            output = self.model(
-                input_ids=batch.input_ids,
-                path_types=batch.path_types,
-                path_ids=batch.path_ids,
-                path_lengths=batch.path_lengths,
-                attention_mask=batch.attention_mask,
-                numeric_values=batch.numeric_values,
-            )
-
-            hidden_states = output.hidden_states  # (batch, seq_len, d_model)
-
-            # Apply pooling strategy
-            if self.pooling == "mean":
-                embeddings = self._mean_pool(hidden_states, batch.attention_mask)
-            elif self.pooling == "max":
-                embeddings = self._max_pool(hidden_states, batch.attention_mask)
-            elif self.pooling == "last":
-                embeddings = self._last_pool(hidden_states, batch.attention_mask)
-            elif self.pooling == "target":
-                embeddings = self._target_pool(
-                    hidden_states,
-                    batch.input_ids,
-                    target_key,  # type: ignore
+                # Forward pass
+                output = self.model(
+                    input_ids=batch.input_ids,
+                    path_types=batch.path_types,
+                    path_ids=batch.path_ids,
+                    path_lengths=batch.path_lengths,
+                    attention_mask=batch.attention_mask,
+                    numeric_values=batch.numeric_values,
                 )
-            else:
-                raise ValueError(f"Unknown pooling strategy: {self.pooling}")
 
-            # Normalize if requested
-            if normalize:
-                embeddings = F.normalize(embeddings, p=2, dim=-1)
+                hidden_states = output.hidden_states  # (batch, seq_len, d_model)
 
-            all_embeddings.append(embeddings)
+                # Apply pooling strategy
+                if self.pooling == "mean":
+                    embeddings = self._mean_pool(hidden_states, batch.attention_mask)
+                elif self.pooling == "max":
+                    embeddings = self._max_pool(hidden_states, batch.attention_mask)
+                elif self.pooling == "last":
+                    embeddings = self._last_pool(hidden_states, batch.attention_mask)
+                elif self.pooling == "target":
+                    embeddings = self._target_pool(
+                        hidden_states,
+                        batch.input_ids,
+                        target_key,  # type: ignore
+                    )
+                else:
+                    raise ValueError(f"Unknown pooling strategy: {self.pooling}")
+
+                # Normalize if requested
+                if normalize:
+                    embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+                all_embeddings.append(embeddings)
 
         return torch.cat(all_embeddings, dim=0)
 

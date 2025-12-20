@@ -127,20 +127,13 @@ class TrainerCallback:
 class CallbackHandler:
     """Manages multiple callbacks and dispatches events."""
 
-    def __init__(
-        self,
-        callbacks: list[TrainerCallback],
-        log_every_n_batches: int = 1,
-    ):
+    def __init__(self, callbacks: list[TrainerCallback]):
         """Initialize callback handler.
 
         Args:
             callbacks: List of callbacks to manage.
-            log_every_n_batches: Fire batch callbacks every N batches (default=1).
         """
         self.callbacks = callbacks
-        self.log_every_n_batches = log_every_n_batches
-        self._batch_count = 0
 
     def fire_event(
         self,
@@ -160,17 +153,6 @@ class CallbackHandler:
                 - on_evaluate: dict[str, float]
                 - Other events: None
         """
-        # Handle batch-level throttling
-        if event == "on_batch_begin":
-            self._batch_count += 1
-            if self._batch_count % self.log_every_n_batches != 0:
-                return
-        elif event == "on_batch_end":
-            if self._batch_count % self.log_every_n_batches != 0:
-                return
-        elif event == "on_epoch_begin":
-            self._batch_count = 0  # Reset batch count at epoch start
-
         for callback in self.callbacks:
             method = getattr(callback, event, None)
             if method is not None:

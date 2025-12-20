@@ -110,19 +110,42 @@ class TestMoveTargetLast:
         assert result["list"] == [1, 2, 3]
         assert result["nested"] == {"x": 1}
 
-    def test_key_not_found_raises(self):
-        """Test that missing key raises KeyError."""
+    def test_missing_key_inserted_with_none(self):
+        """Test that missing key is inserted with None value."""
         obj = {"a": 1, "b": 2}
+        result = move_target_last(obj, "missing")
 
-        with pytest.raises(KeyError, match="Key 'missing' not found"):
-            move_target_last(obj, "missing")
+        # missing should be last with None value
+        assert list(result.keys()) == ["a", "b", "missing"]
+        assert result["missing"] is None
 
-    def test_nested_key_not_found_raises(self):
-        """Test that missing nested key raises KeyError."""
+    def test_missing_nested_key_inserted_with_none(self):
+        """Test that missing nested key is inserted with None value."""
         obj = {"outer": {"a": 1}}
+        result = move_target_last(obj, "outer.missing")
 
-        with pytest.raises(KeyError, match="Key 'missing' not found"):
-            move_target_last(obj, "outer.missing")
+        # outer should be last, missing should be last within outer
+        assert list(result.keys()) == ["outer"]
+        assert list(result["outer"].keys()) == ["a", "missing"]
+        assert result["outer"]["missing"] is None
+
+    def test_missing_intermediate_key_creates_nested_structure(self):
+        """Test that missing intermediate keys create nested dicts."""
+        obj = {"a": 1}
+        result = move_target_last(obj, "x.y.z")
+
+        # x should be last at root
+        assert list(result.keys()) == ["a", "x"]
+        # nested structure should be created
+        assert result["x"] == {"y": {"z": None}}
+
+    def test_missing_root_key_with_nested_path(self):
+        """Test missing root key when target is nested."""
+        obj = {"existing": "value"}
+        result = move_target_last(obj, "new.nested")
+
+        assert list(result.keys()) == ["existing", "new"]
+        assert result["new"] == {"nested": None}
 
     def test_nested_path_through_non_dict_raises(self):
         """Test that path through non-dict value raises KeyError."""

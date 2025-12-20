@@ -159,7 +159,7 @@ def parse_set_params(set_params: tuple[str, ...]) -> dict:
 @click.option(
     "--project",
     default=None,
-    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
 )
 @click.option(
     "--val",

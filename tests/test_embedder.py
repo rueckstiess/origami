@@ -350,3 +350,76 @@ class TestEmbedderWithArrays:
 
         assert embeddings.shape == (2, array_model.config.d_model)
         assert not torch.isnan(embeddings).any()
+
+
+class TestEmbedderGradients:
+    """Tests for gradient computation with enable_grad parameter."""
+
+    def test_enable_grad_false_no_gradients(self, simple_model, simple_tokenizer):
+        """Test that enable_grad=False (default) does not compute gradients."""
+        embedder = OrigamiEmbedder(simple_model, simple_tokenizer, pooling="mean")
+
+        obj = {"name": "Alice", "age": 30, "city": "NYC"}
+        embedding = embedder.embed(obj, enable_grad=False)
+
+        # Embedding should not require grad
+        assert not embedding.requires_grad
+
+    def test_enable_grad_true_computes_gradients(self, simple_model, simple_tokenizer):
+        """Test that enable_grad=True computes gradients for fine-tuning."""
+        # Enable grad on model parameters
+        for param in simple_model.parameters():
+            param.requires_grad = True
+
+        embedder = OrigamiEmbedder(simple_model, simple_tokenizer, pooling="mean")
+
+        obj = {"name": "Alice", "age": 30, "city": "NYC"}
+        embedding = embedder.embed(obj, enable_grad=True)
+
+        # Embedding should require grad
+        assert embedding.requires_grad
+
+        # Should be able to compute loss and backprop
+        loss = embedding.sum()
+        loss.backward()
+
+        # At least some model parameters should have gradients
+        # (not all parameters may be used in the forward pass)
+        params_with_grad = [p for p in simple_model.parameters() if p.grad is not None]
+        assert len(params_with_grad) > 0, "No parameters received gradients"
+
+    def test_enable_grad_batch(self, simple_model, simple_tokenizer):
+        """Test enable_grad works with batch embedding."""
+        for param in simple_model.parameters():
+            param.requires_grad = True
+
+        embedder = OrigamiEmbedder(simple_model, simple_tokenizer, pooling="mean")
+
+        objects = [
+            {"name": "Alice", "age": 30, "city": "NYC"},
+            {"name": "Bob", "age": 25, "city": "LA"},
+        ]
+
+        # Without grad
+        embeddings_no_grad = embedder.embed_batch(objects, enable_grad=False)
+        assert not embeddings_no_grad.requires_grad
+
+        # With grad
+        embeddings_with_grad = embedder.embed_batch(objects, enable_grad=True)
+        assert embeddings_with_grad.requires_grad
+
+    def test_enable_grad_target_pooling(self, simple_model, simple_tokenizer):
+        """Test enable_grad works with target pooling."""
+        for param in simple_model.parameters():
+            param.requires_grad = True
+
+        embedder = OrigamiEmbedder(simple_model, simple_tokenizer, pooling="target")
+
+        obj = {"name": "Alice", "age": 30, "city": "NYC"}
+        embedding = embedder.embed(obj, target_key="city", enable_grad=True)
+
+        assert embedding.requires_grad
+
+        # Backprop should work
+        loss = embedding.sum()
+        loss.backward()

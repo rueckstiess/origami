@@ -13,14 +13,18 @@ from .collator import OrigamiDataCollator
 from .dataset import EvalDataset, UpscaledDataset
 from .metrics import (
     COMPLEX_VALUE_METRICS,
+    METRIC_REGISTRY,
     accuracy,
     any_metric_requires_complex_values,
     array_f1,
     array_jaccard,
     array_precision,
     array_recall,
+    get_metric,
+    list_metrics,
     metric_requires_complex_values,
     object_key_accuracy,
+    resolve_metrics,
 )
 from .trainer import EpochStats, OrigamiTrainer, TrainResult
 
@@ -41,12 +45,16 @@ __all__ = [
     "TableLogCallback",
     # Metrics
     "COMPLEX_VALUE_METRICS",
+    "METRIC_REGISTRY",
     "accuracy",
     "any_metric_requires_complex_values",
     "array_f1",
     "array_jaccard",
     "array_precision",
     "array_recall",
+    "get_metric",
+    "list_metrics",
     "metric_requires_complex_values",
     "object_key_accuracy",
+    "resolve_metrics",
 ]

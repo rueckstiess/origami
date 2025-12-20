@@ -51,7 +51,7 @@ from origami.cli.data_loaders import load_data
 @click.option(
     "--project",
     default=None,
-    help='MongoDB-style projection. Include: \'{"a": 1}\'. Exclude: \'{"x": 0}\'.',
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
 )
 @click.option(
     "-t",

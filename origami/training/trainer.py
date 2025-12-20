@@ -6,7 +6,7 @@ Provides training utilities with support for:
 - Mixed discrete + continuous loss
 - Learning rate scheduling with warmup
 - Callback system for monitoring and customization
-- Step-based and epoch-based evaluation scheduling
+- Step-based and epoch-based evaluation scheduling (within epochs)
 """
 
 import math
@@ -113,10 +113,7 @@ class OrigamiTrainer:
         eval_data: list[dict] | None = None,
         config: "TrainingConfig | None" = None,
         device: torch.device | None = None,
-        checkpoint_dir: str | Path | None = None,
-        shuffle: bool = True,
         callbacks: list[TrainerCallback] | None = None,
-        log_every_n_batches: int = 1,
     ):
         """Initialize trainer.
 
@@ -127,13 +124,9 @@ class OrigamiTrainer:
             eval_data: Optional list of JSON objects for evaluation
             config: Training configuration (uses defaults if None)
             device: Device for training (auto-detects if None)
-            checkpoint_dir: Directory for saving checkpoints
-            shuffle: Whether to shuffle key order during training (default True).
-                     If False, upscaling is disabled since it would just duplicate samples.
             callbacks: List of TrainerCallback instances for monitoring/customization.
                      Use ProgressCallback for progress bars. Evaluation metrics are
                      computed automatically based on TrainingConfig settings.
-            log_every_n_batches: Fire batch callbacks every N batches (default=1).
         """
         from origami.config import TrainingConfig
 
@@ -146,7 +139,9 @@ class OrigamiTrainer:
         self.model.to(self.device)
 
         # Checkpoint directory
-        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self.checkpoint_dir = (
+            Path(self.config.checkpoint_dir) if self.config.checkpoint_dir else None
+        )
         if self.checkpoint_dir:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -159,7 +154,7 @@ class OrigamiTrainer:
             train_data,
             tokenizer,
             upscale_factor=self.config.upscale_factor,
-            shuffle=shuffle,
+            shuffle=self.config.shuffle_keys,
         )
         self.eval_dataset = EvalDataset(eval_data, tokenizer) if eval_data else None
 
@@ -178,7 +173,7 @@ class OrigamiTrainer:
         )
 
         # Calculate total training steps for scheduler
-        steps_per_epoch = len(self.train_dataset) // self.config.batch_size
+        steps_per_epoch = max(1, len(self.train_dataset) // self.config.batch_size)
         self.total_steps = steps_per_epoch * self.config.num_epochs
 
         # Create scheduler with linear warmup
@@ -188,9 +183,7 @@ class OrigamiTrainer:
         self.state = TrainResult()
 
         # Callback handler
-        self.callback_handler = CallbackHandler(
-            callbacks or [], log_every_n_batches=log_every_n_batches
-        )
+        self.callback_handler = CallbackHandler(callbacks or [])
 
         # Create evaluator for unified evaluation (lazy import to avoid circular)
         from origami.inference import OrigamiEvaluator
@@ -373,9 +366,9 @@ class OrigamiTrainer:
         try:
             for epoch in range(self.config.num_epochs):
                 self.state.epoch = epoch
-                metrics = self._train_epoch()
+                epoch_stats = self._train_epoch()
 
-                self.callback_handler.fire_event("on_epoch_end", self, self.state, metrics)
+                self.callback_handler.fire_event("on_epoch_end", self, self.state, epoch_stats)
 
                 # Epoch-based evaluation (using unified system)
                 if self._should_evaluate_epoch():
@@ -385,10 +378,11 @@ class OrigamiTrainer:
                 if self.checkpoint_dir and (epoch + 1) % self.config.save_every_n_epochs == 0:
                     self.save_checkpoint(f"epoch_{epoch + 1}")
 
-            # Final evaluation if we haven't evaluated at the last epoch
-            if self.config.eval_strategy == "epoch" and self.eval_data:
-                last_epoch_had_eval = self.config.num_epochs % self.config.eval_epochs == 0
-                if not last_epoch_had_eval:
+            # Final evaluation if we haven't evaluated recently
+            if self.config.eval_strategy != "no" and self.eval_data:
+                # Check if we should run final eval (avoid duplicate if just evaluated)
+                should_run_final_eval = self.state.global_step != self._last_eval_step
+                if should_run_final_eval:
                     self._run_evaluation_and_checkpoint()
 
             # Training completed normally
@@ -409,7 +403,7 @@ class OrigamiTrainer:
         """Train for one epoch.
 
         Returns:
-            Training metrics for the epoch
+            Training statistics for the epoch
         """
         self.model.train()
 

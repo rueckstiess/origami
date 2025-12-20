@@ -2,6 +2,17 @@
 
 All metrics follow sklearn convention: (y_true: list, y_pred: list) -> float
 where y_true and y_pred are lists of JSON values (can be any type).
+
+Metrics can be specified by name (string) using the METRIC_REGISTRY. This allows
+configuration via CLI and config files where function references aren't possible.
+
+Example:
+    # Using string names (recommended for config files and CLI)
+    metrics = {"acc": "accuracy", "f1": "array_f1"}
+    resolved = resolve_metrics(metrics)
+
+    # Direct function references (still works for Python API)
+    metrics = {"acc": accuracy, "f1": array_f1}
 """
 
 from collections.abc import Callable, Hashable
@@ -24,47 +35,59 @@ COMPLEX_VALUE_METRICS: frozenset[str] = frozenset(
 # Type alias for metric functions
 MetricFn = Callable[[list[Any], list[Any]], float]
 
+# Metrics can be specified as strings or functions
+MetricSpec = str | MetricFn
 
-def metric_requires_complex_values(fn: MetricFn) -> bool:
-    """Check if a metric function requires complex values (arrays/objects).
 
-    Uses the function's __name__ attribute to check against known complex-requiring
-    metrics. This allows detection to work even with aliased names like {"f1": array_f1}.
+def _get_metric_name(metric: MetricSpec) -> str:
+    """Get the canonical metric name from a string or function."""
+    if isinstance(metric, str):
+        return metric
+    return getattr(metric, "__name__", "")
+
+
+def metric_requires_complex_values(metric: MetricSpec) -> bool:
+    """Check if a metric requires complex values (arrays/objects).
+
+    Works with both string metric names and function references.
 
     Args:
-        fn: A metric function following sklearn convention.
+        metric: A metric name (string) or function.
 
     Returns:
         True if the metric requires complex value predictions.
 
     Example:
+        >>> metric_requires_complex_values("array_f1")
+        True
         >>> metric_requires_complex_values(array_f1)
         True
-        >>> metric_requires_complex_values(accuracy)
+        >>> metric_requires_complex_values("accuracy")
         False
     """
-    fn_name = getattr(fn, "__name__", None)
-    return fn_name in COMPLEX_VALUE_METRICS
+    return _get_metric_name(metric) in COMPLEX_VALUE_METRICS
 
 
-def any_metric_requires_complex_values(metrics: dict[str, MetricFn] | None) -> bool:
+def any_metric_requires_complex_values(metrics: dict[str, MetricSpec] | None) -> bool:
     """Check if any metric in a dict requires complex values.
 
+    Works with both string metric names and function references.
+
     Args:
-        metrics: Dict mapping metric names to functions, or None.
+        metrics: Dict mapping prefixes to metric names/functions, or None.
 
     Returns:
         True if any metric requires complex value predictions.
 
     Example:
-        >>> any_metric_requires_complex_values({"f1": array_f1, "acc": accuracy})
+        >>> any_metric_requires_complex_values({"f1": "array_f1", "acc": "accuracy"})
         True
         >>> any_metric_requires_complex_values({"acc": accuracy})
         False
     """
     if not metrics:
         return False
-    return any(metric_requires_complex_values(fn) for fn in metrics.values())
+    return any(metric_requires_complex_values(m) for m in metrics.values())
 
 
 def accuracy(y_true: list[Any], y_pred: list[Any]) -> float:
@@ -338,3 +361,82 @@ def _key_accuracy(true_obj: dict, pred_obj: dict) -> float:
             correct += 1
 
     return correct / len(true_obj)
+
+
+# Registry mapping metric names to functions.
+# This enables string-based metric specification in configs and CLI.
+METRIC_REGISTRY: dict[str, MetricFn] = {
+    "accuracy": accuracy,
+    "array_f1": array_f1,
+    "array_precision": array_precision,
+    "array_recall": array_recall,
+    "array_jaccard": array_jaccard,
+    "object_key_accuracy": object_key_accuracy,
+}
+
+
+def get_metric(name: str) -> MetricFn:
+    """Get a metric function by name.
+
+    Args:
+        name: The metric name (e.g., "accuracy", "array_f1").
+
+    Returns:
+        The metric function.
+
+    Raises:
+        ValueError: If the metric name is not recognized.
+
+    Example:
+        >>> fn = get_metric("accuracy")
+        >>> fn([1, 2, 3], [1, 2, 3])
+        1.0
+    """
+    if name not in METRIC_REGISTRY:
+        available = ", ".join(sorted(METRIC_REGISTRY.keys()))
+        raise ValueError(f"Unknown metric: '{name}'. Available metrics: {available}")
+    return METRIC_REGISTRY[name]
+
+
+def resolve_metrics(metrics: dict[str, MetricSpec]) -> dict[str, MetricFn]:
+    """Resolve a dict of metric specifications to functions.
+
+    Accepts both string metric names and direct function references.
+    This allows gradual migration from function-based to string-based configs.
+
+    Args:
+        metrics: Dict mapping prefixes to metric names or functions.
+            Example: {"acc": "accuracy", "f1": array_f1}
+
+    Returns:
+        Dict mapping the same prefixes to metric functions.
+
+    Raises:
+        ValueError: If a string metric name is not recognized.
+
+    Example:
+        >>> metrics = {"acc": "accuracy", "f1": "array_f1"}
+        >>> resolved = resolve_metrics(metrics)
+        >>> resolved["acc"]([1, 2, 3], [1, 2, 3])
+        1.0
+    """
+    result: dict[str, MetricFn] = {}
+    for prefix, metric in metrics.items():
+        if isinstance(metric, str):
+            result[prefix] = get_metric(metric)
+        else:
+            result[prefix] = metric
+    return result
+
+
+def list_metrics() -> list[str]:
+    """List all available metric names.
+
+    Returns:
+        Sorted list of metric names.
+
+    Example:
+        >>> list_metrics()
+        ['accuracy', 'array_f1', 'array_jaccard', ...]
+    """
+    return sorted(METRIC_REGISTRY.keys())

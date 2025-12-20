@@ -171,10 +171,13 @@ class TrainingConfig(PrettyReprMixin):
         shuffle_keys: Whether to shuffle key order during tokenization.
         upscale_factor: Upscaling factor for data augmentation.
         save_every_n_epochs: Save checkpoint every N epochs.
+        checkpoint_dir: Directory for saving checkpoints. If None, no checkpoints
+            are saved automatically.
         eval_strategy: When to evaluate - "no", "steps", or "epoch".
         eval_steps: Evaluate every N steps (when eval_strategy="steps").
         eval_epochs: Evaluate every N epochs (when eval_strategy="epoch").
-        eval_metrics: Dict mapping metric names to functions.
+        eval_metrics: Dict mapping prefixes to metric names or functions.
+            Example: {"acc": "accuracy", "f1": "array_f1"}
         eval_sample_size: If set, sample this many examples for evaluation.
         eval_on_train: Whether to also evaluate on training data.
         target_key: Key to predict for prediction-based metrics.
@@ -196,6 +199,7 @@ class TrainingConfig(PrettyReprMixin):
 
     # Checkpointing
     save_every_n_epochs: int = 5
+    checkpoint_dir: str | None = None
 
     # Evaluation scheduling
     eval_strategy: Literal["no", "steps", "epoch"] = "epoch"
@@ -203,7 +207,7 @@ class TrainingConfig(PrettyReprMixin):
     eval_epochs: int = 1
 
     # Evaluation options
-    eval_metrics: dict[str, Callable[[list[Any], list[Any]], float]] | None = None
+    eval_metrics: dict[str, str | Callable[[list[Any], list[Any]], float]] | None = None
     eval_sample_size: int | None = None
     eval_on_train: bool = False
     target_key: str | None = None
@@ -217,6 +221,7 @@ class TrainingConfig(PrettyReprMixin):
             raise ValueError(f"learning_rate must be > 0, got {self.learning_rate}")
         if self.num_epochs < 1:
             raise ValueError(f"num_epochs must be >= 1, got {self.num_epochs}")
+
         valid_eval_strategies = {"no", "steps", "epoch"}
         if self.eval_strategy not in valid_eval_strategies:
             raise ValueError(
