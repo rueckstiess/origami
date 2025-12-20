@@ -154,7 +154,9 @@ class OrigamiTrainer:
             tokenizer,
             shuffle=self.config.shuffle_keys,
         )
-        self.eval_dataset = OrigamiDataset(eval_data, tokenizer, shuffle=False) if eval_data else None
+        self.eval_dataset = (
+            OrigamiDataset(eval_data, tokenizer, shuffle=False) if eval_data else None
+        )
 
         # Create collator
         self.collator = OrigamiDataCollator(
