@@ -169,7 +169,6 @@ class TrainingConfig(PrettyReprMixin):
         warmup_steps: Number of warmup steps for LR scheduler.
         weight_decay: Weight decay for optimizer.
         shuffle_keys: Whether to shuffle key order during tokenization.
-        upscale_factor: Upscaling factor for data augmentation.
         save_every_n_epochs: Save checkpoint every N epochs.
         checkpoint_dir: Directory for saving checkpoints. If None, no checkpoints
             are saved automatically.
@@ -195,7 +194,6 @@ class TrainingConfig(PrettyReprMixin):
 
     # Data augmentation
     shuffle_keys: bool = True
-    upscale_factor: int = 1
 
     # Checkpointing
     save_every_n_epochs: int = 5

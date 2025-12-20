@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from origami.training.collator import OrigamiDataCollator
-from origami.training.dataset import EvalDataset
+from origami.training.dataset import OrigamiDataset
 from origami.training.metrics import MetricSpec, resolve_metrics
 
 from .predictor import OrigamiPredictor
@@ -171,7 +171,7 @@ class OrigamiEvaluator:
         self.model.eval()
 
         # Create dataset and dataloader
-        dataset = EvalDataset(data, self.tokenizer)
+        dataset = OrigamiDataset(data, self.tokenizer, shuffle=False)
         collator = OrigamiDataCollator(
             self.tokenizer,
             max_length=self.model.config.max_seq_length,

@@ -232,7 +232,6 @@ class OrigamiPipeline:
             num_epochs=num_epochs,
             warmup_steps=self.config.training.warmup_steps,
             weight_decay=self.config.training.weight_decay,
-            upscale_factor=self.config.training.upscale_factor,
             shuffle_keys=self.config.training.shuffle_keys,
             save_every_n_epochs=self.config.training.save_every_n_epochs,
             checkpoint_dir=self.config.training.checkpoint_dir,

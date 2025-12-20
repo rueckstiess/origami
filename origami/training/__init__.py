@@ -10,7 +10,7 @@ from .callbacks import (
     TrainerCallback,
 )
 from .collator import OrigamiDataCollator
-from .dataset import EvalDataset, UpscaledDataset
+from .dataset import OrigamiDataset
 from .metrics import (
     COMPLEX_VALUE_METRICS,
     METRIC_REGISTRY,
@@ -29,9 +29,8 @@ from .metrics import (
 from .trainer import EpochStats, OrigamiTrainer, TrainResult
 
 __all__ = [
-    # Datasets
-    "EvalDataset",
-    "UpscaledDataset",
+    # Dataset
+    "OrigamiDataset",
     # Collation
     "OrigamiDataCollator",
     # Trainer

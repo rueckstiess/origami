@@ -79,7 +79,6 @@ class TestTrainingConfig:
         assert config.batch_size == 32
         assert config.num_epochs == 10
         assert config.shuffle_keys is True
-        assert config.upscale_factor == 1
 
 
 class TestOrigamiEmbeddings:

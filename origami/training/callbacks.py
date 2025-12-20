@@ -180,11 +180,7 @@ class ProgressCallback(TrainerCallback):
     ) -> None:
         """Print training info at start."""
         print(f"Training on {trainer.device}")
-        print(
-            f"Train samples: {len(trainer.train_dataset)} "
-            f"(base: {trainer.train_dataset.base_size}, "
-            f"upscale: {trainer.config.upscale_factor}x)"
-        )
+        print(f"Train samples: {len(trainer.train_dataset)}")
         if trainer.eval_dataset:
             print(f"Eval samples: {len(trainer.eval_dataset)}")
         print(f"Batch size: {trainer.config.batch_size}")

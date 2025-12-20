@@ -2,7 +2,7 @@
 
 Provides training utilities with support for:
 - Grammar-constrained loss
-- Key-order shuffling / upscaling
+- Key-order shuffling for data augmentation
 - Mixed discrete + continuous loss
 - Learning rate scheduling with warmup
 - Callback system for monitoring and customization
@@ -25,7 +25,7 @@ from origami.utils import get_device
 
 from .callbacks import CallbackHandler, TrainerCallback
 from .collator import OrigamiDataCollator
-from .dataset import EvalDataset, UpscaledDataset
+from .dataset import OrigamiDataset
 
 if TYPE_CHECKING:
     from origami.config import TrainingConfig
@@ -76,7 +76,7 @@ class OrigamiTrainer:
     """Training loop for ORIGAMI model.
 
     Supports:
-    - Automatic upscaling and key-order shuffling
+    - Key-order shuffling for data augmentation
     - Grammar-constrained loss (via model)
     - Mixed discrete + continuous loss (via model)
     - Linear warmup learning rate schedule
@@ -92,7 +92,6 @@ class OrigamiTrainer:
             config=TrainingConfig(
                 batch_size=32,
                 num_epochs=100,
-                upscale_factor=10,
             ),
         )
         trainer.train()
@@ -150,13 +149,12 @@ class OrigamiTrainer:
         self.eval_data = eval_data
 
         # Create datasets
-        self.train_dataset = UpscaledDataset(
+        self.train_dataset = OrigamiDataset(
             train_data,
             tokenizer,
-            upscale_factor=self.config.upscale_factor,
             shuffle=self.config.shuffle_keys,
         )
-        self.eval_dataset = EvalDataset(eval_data, tokenizer) if eval_data else None
+        self.eval_dataset = OrigamiDataset(eval_data, tokenizer, shuffle=False) if eval_data else None
 
         # Create collator
         self.collator = OrigamiDataCollator(
@@ -410,7 +408,7 @@ class OrigamiTrainer:
         train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,  # Shuffle order of (upscaled) samples
+            shuffle=True,  # Shuffle sample order each epoch
             collate_fn=self.collator,
             drop_last=True,  # Drop incomplete batches for consistent batch size
         )

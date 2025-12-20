@@ -86,7 +86,7 @@ JSON object keys have no inherent order, so we randomly shuffle key order during
 # Shuffled: {"age": 30, "name": "Alice"}
 ```
 
-This is controlled by `UpscaledDataset` with `upscale_factor` parameter.
+Shuffling is controlled by `TrainingConfig.shuffle_keys` (default True). Each time a sample is accessed during training, a fresh random permutation is generated. This forces the model to learn from key semantics rather than position.
 
 ### 5. Continuous Numeric Handling (MoG Head)
 High-cardinality numeric fields can be handled in two ways:
@@ -472,7 +472,7 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 | `ProgressCallback` | Training progress bars and logging |
 | `MetricsCallback` | Compute and log evaluation metrics during training |
 | `OrigamiDataCollator` | Batch sequences with left-padding |
-| `UpscaledDataset` | Data augmentation via key-order shuffling |
+| `OrigamiDataset` | Dataset wrapper with optional key-order shuffling |
 | `NumericScaler` | StandardScaler for continuous numeric fields |
 | `NumericDiscretizer` | Bin numeric fields into categories |
 | `Vocabulary` | Token storage with frequency tracking and pruning support |

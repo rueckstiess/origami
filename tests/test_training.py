@@ -11,11 +11,10 @@ from origami.model import OrigamiModel
 from origami.tokenizer import JSONTokenizer
 from origami.training import (
     EpochStats,
-    EvalDataset,
     OrigamiDataCollator,
+    OrigamiDataset,
     OrigamiTrainer,
     TrainResult,
-    UpscaledDataset,
 )
 from origami.utils import available_devices as get_available_devices
 
@@ -46,96 +45,47 @@ def sample_data():
     ]
 
 
-class TestUpscaledDataset:
-    """Tests for UpscaledDataset."""
+class TestOrigamiDataset:
+    """Tests for OrigamiDataset."""
 
-    def test_length_with_upscale_factor(self, tokenizer, sample_data):
-        """Test that length is multiplied by upscale factor."""
-        dataset = UpscaledDataset(sample_data, tokenizer, upscale_factor=10)
-        assert len(dataset) == len(sample_data) * 10
-
-    def test_length_no_upscale(self, tokenizer, sample_data):
-        """Test length with upscale_factor=1."""
-        dataset = UpscaledDataset(sample_data, tokenizer, upscale_factor=1)
+    def test_length(self, tokenizer, sample_data):
+        """Test dataset length."""
+        dataset = OrigamiDataset(sample_data, tokenizer)
         assert len(dataset) == len(sample_data)
 
     def test_getitem_returns_tokenized_instance(self, tokenizer, sample_data):
         """Test that __getitem__ returns TokenizedInstance."""
         from origami.tokenizer.json_tokenizer import TokenizedInstance
 
-        dataset = UpscaledDataset(sample_data, tokenizer, upscale_factor=1)
+        dataset = OrigamiDataset(sample_data, tokenizer)
         item = dataset[0]
         assert isinstance(item, TokenizedInstance)
         assert len(item.tokens) > 0
         assert len(item.paths) == len(item.tokens)
 
-    def test_upscale_maps_to_base_index(self, tokenizer, sample_data):
-        """Test that upscaled indices map to correct base indices."""
-        dataset = UpscaledDataset(sample_data, tokenizer, upscale_factor=5)
-
-        # Indices 0-4 should all come from base item 0
-        for i in range(5):
-            base_item = dataset.get_base_item(i // 5)
-            assert base_item == sample_data[0]
-
-        # Indices 5-9 should come from base item 1
-        for i in range(5, 10):
-            base_item = dataset.get_base_item(i // 5)
-            assert base_item == sample_data[1]
-
-    def test_shuffle_produces_different_orderings(self, tokenizer):
-        """Test that shuffle produces different key orderings."""
+    def test_shuffle_true_produces_different_orderings(self, tokenizer):
+        """Test that shuffle=True produces different key orderings."""
         data = [{"a": 1, "b": 2, "c": 3, "d": 4}]
         tokenizer.fit(data)
 
-        dataset = UpscaledDataset(data, tokenizer, upscale_factor=20)
+        dataset = OrigamiDataset(data, tokenizer, shuffle=True)
 
-        # Collect token sequences from multiple accesses
+        # Collect token sequences from multiple accesses of same index
         sequences = []
-        for i in range(20):
-            item = dataset[i]
+        for _ in range(20):
+            item = dataset[0]
             sequences.append(tuple(t for t in item.tokens))
 
-        # With 4 keys and 20 samples, we should see multiple orderings
+        # With 4 keys and 20 accesses, we should see multiple orderings
         unique_sequences = set(sequences)
         assert len(unique_sequences) > 1, "Shuffle should produce different orderings"
 
-    def test_base_size_property(self, tokenizer, sample_data):
-        """Test base_size property."""
-        dataset = UpscaledDataset(sample_data, tokenizer, upscale_factor=10)
-        assert dataset.base_size == len(sample_data)
-
-    def test_invalid_upscale_factor_raises(self, tokenizer, sample_data):
-        """Test that upscale_factor < 1 raises ValueError."""
-        with pytest.raises(ValueError, match="upscale_factor must be >= 1"):
-            UpscaledDataset(sample_data, tokenizer, upscale_factor=0)
-
-        with pytest.raises(ValueError, match="upscale_factor must be >= 1"):
-            UpscaledDataset(sample_data, tokenizer, upscale_factor=-1)
-
-
-class TestEvalDataset:
-    """Tests for EvalDataset."""
-
-    def test_length(self, tokenizer, sample_data):
-        """Test dataset length."""
-        dataset = EvalDataset(sample_data, tokenizer)
-        assert len(dataset) == len(sample_data)
-
-    def test_getitem_returns_tokenized_instance(self, tokenizer, sample_data):
-        """Test that __getitem__ returns TokenizedInstance."""
-        from origami.tokenizer.json_tokenizer import TokenizedInstance
-
-        dataset = EvalDataset(sample_data, tokenizer)
-        item = dataset[0]
-        assert isinstance(item, TokenizedInstance)
-
-    def test_deterministic_tokenization(self, tokenizer):
-        """Test that tokenization is deterministic (no shuffle)."""
+    def test_shuffle_false_deterministic(self, tokenizer):
+        """Test that shuffle=False produces deterministic tokenization."""
         data = [{"a": 1, "b": 2, "c": 3, "d": 4}]
         tokenizer.fit(data)
 
-        dataset = EvalDataset(data, tokenizer)
+        dataset = OrigamiDataset(data, tokenizer, shuffle=False)
 
         # Multiple accesses should produce identical results
         sequences = []
@@ -144,7 +94,12 @@ class TestEvalDataset:
             sequences.append(tuple(t for t in item.tokens))
 
         # All sequences should be identical
-        assert len(set(sequences)) == 1, "Eval dataset should be deterministic"
+        assert len(set(sequences)) == 1, "shuffle=False should be deterministic"
+
+    def test_default_shuffle_is_true(self, tokenizer, sample_data):
+        """Test that shuffle defaults to True."""
+        dataset = OrigamiDataset(sample_data, tokenizer)
+        assert dataset.shuffle is True
 
 
 class TestOrigamiDataCollator:
@@ -594,21 +549,6 @@ class TestOrigamiTrainer:
         assert trainer.eval_dataset is not None
         assert len(trainer.eval_dataset) == 1
 
-    def test_trainer_with_upscale(self, model_and_tokenizer):
-        """Test trainer with upscaling."""
-        model, tokenizer = model_and_tokenizer
-        train_data = [{"name": "Alice", "age": 30}]
-
-        config = TrainingConfig(num_epochs=1, upscale_factor=10)
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=train_data,
-            config=config,
-        )
-
-        assert len(trainer.train_dataset) == 10
-
     def test_train_one_epoch(self, model_and_tokenizer):
         """Test training for one epoch."""
         model, tokenizer = model_and_tokenizer
@@ -903,7 +843,6 @@ class TestEndToEndTraining:
                 batch_size=4,
                 num_epochs=3,
                 learning_rate=1e-2,
-                upscale_factor=2,  # 2x upscaling for augmentation
                 save_every_n_epochs=3,
                 checkpoint_dir=tmpdir,
             )
