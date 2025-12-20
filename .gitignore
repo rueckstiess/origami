@@ -16,6 +16,8 @@ wheels/
 datasets/
 checkpoints/
 *.pt
+*.npy
+*.npx
 
 # IDE
 .vscode/
