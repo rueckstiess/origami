@@ -215,13 +215,8 @@ class JSONGrammarPDA:
         batch_size = token.shape[0]
         device = token.device
 
-        # Make copies to avoid in-place modification issues
-        new_stack = stack.clone()
-        new_depth = depth.clone()
-        new_awaiting_value = awaiting_value.clone()
-        new_seen_start = seen_start.clone()
-        new_root_closed = root_closed.clone()
-        new_ended = ended.clone()
+        # Note: All operations below (torch.where, |, scatter) return new tensors
+        # rather than modifying in-place, so we can safely reassign the parameters.
 
         # Token type masks
         is_start = token == self.vocab.start_id
@@ -243,74 +238,66 @@ class JSONGrammarPDA:
         is_value = torch.isin(token, value_ids)
 
         # START: mark seen_start = True
-        new_seen_start = new_seen_start | is_start
+        seen_start = seen_start | is_start
 
         # END: mark as ended
-        new_ended = new_ended | is_end
+        ended = ended | is_end
 
         # OBJ_START: push object onto stack
-        push_obj = is_obj_start & (new_depth < self.max_depth)
-        depth_indices = new_depth.unsqueeze(1)  # (batch, 1)
+        push_obj = is_obj_start & (depth < self.max_depth)
+        depth_indices = depth.unsqueeze(1)  # (batch, 1)
         obj_values = torch.full((batch_size, 1), STACK_OBJECT, dtype=torch.long, device=device)
-        new_stack = torch.where(
+        stack = torch.where(
             push_obj.unsqueeze(1).expand(-1, self.max_depth),
-            new_stack.scatter(1, depth_indices.clamp(max=self.max_depth - 1), obj_values),
-            new_stack,
+            stack.scatter(1, depth_indices.clamp(max=self.max_depth - 1), obj_values),
+            stack,
         )
-        new_depth = torch.where(push_obj, new_depth + 1, new_depth)
-        new_awaiting_value = torch.where(
-            push_obj, torch.zeros_like(new_awaiting_value), new_awaiting_value
-        )
+        depth = torch.where(push_obj, depth + 1, depth)
+        awaiting_value = torch.where(push_obj, torch.zeros_like(awaiting_value), awaiting_value)
 
         # ARRAY_START: push array onto stack
-        push_array = is_array_start & (new_depth < self.max_depth)
+        push_array = is_array_start & (depth < self.max_depth)
         array_values = torch.full((batch_size, 1), STACK_ARRAY, dtype=torch.long, device=device)
-        new_stack = torch.where(
+        stack = torch.where(
             push_array.unsqueeze(1).expand(-1, self.max_depth),
-            new_stack.scatter(
-                1, new_depth.unsqueeze(1).clamp(max=self.max_depth - 1), array_values
-            ),
-            new_stack,
+            stack.scatter(1, depth.unsqueeze(1).clamp(max=self.max_depth - 1), array_values),
+            stack,
         )
-        new_depth = torch.where(push_array, new_depth + 1, new_depth)
+        depth = torch.where(push_array, depth + 1, depth)
 
         # OBJ_END: pop from stack, check if closing root
-        pop_obj = is_obj_end & (new_depth > 0)
+        pop_obj = is_obj_end & (depth > 0)
         # Check if we're closing the root (depth will become 0)
-        closing_root_obj = pop_obj & (new_depth == 1)
-        new_depth = torch.where(pop_obj, new_depth - 1, new_depth)
+        closing_root_obj = pop_obj & (depth == 1)
+        depth = torch.where(pop_obj, depth - 1, depth)
 
         # ARRAY_END: pop from stack, check if closing root
-        pop_array = is_array_end & (new_depth > 0)
-        closing_root_array = pop_array & (new_depth == 1)
-        new_depth = torch.where(pop_array, new_depth - 1, new_depth)
+        pop_array = is_array_end & (depth > 0)
+        closing_root_array = pop_array & (depth == 1)
+        depth = torch.where(pop_array, depth - 1, depth)
 
         # Mark root as closed
-        new_root_closed = new_root_closed | closing_root_obj | closing_root_array
+        root_closed = root_closed | closing_root_obj | closing_root_array
 
         # Key: set awaiting_value = True
-        new_awaiting_value = torch.where(
-            is_key, torch.ones_like(new_awaiting_value), new_awaiting_value
-        )
+        awaiting_value = torch.where(is_key, torch.ones_like(awaiting_value), awaiting_value)
 
         # Value (primitive): set awaiting_value = False
-        new_awaiting_value = torch.where(
-            is_value, torch.zeros_like(new_awaiting_value), new_awaiting_value
-        )
+        awaiting_value = torch.where(is_value, torch.zeros_like(awaiting_value), awaiting_value)
 
         # After OBJ_END or ARRAY_END, if we're back in an object context,
         # the closed container was the value, so awaiting_value = False
-        depth_idx = (new_depth - 1).clamp(min=0).unsqueeze(1)
-        parent_container = torch.gather(new_stack, 1, depth_idx).squeeze(1)
-        parent_is_obj = (parent_container == STACK_OBJECT) & (new_depth > 0)
+        depth_idx = (depth - 1).clamp(min=0).unsqueeze(1)
+        parent_container = torch.gather(stack, 1, depth_idx).squeeze(1)
+        parent_is_obj = (parent_container == STACK_OBJECT) & (depth > 0)
         just_closed = pop_obj | pop_array
-        new_awaiting_value = torch.where(
+        awaiting_value = torch.where(
             just_closed & parent_is_obj,
-            torch.zeros_like(new_awaiting_value),
-            new_awaiting_value,
+            torch.zeros_like(awaiting_value),
+            awaiting_value,
         )
 
-        return new_stack, new_depth, new_awaiting_value, new_seen_start, new_root_closed, new_ended
+        return stack, depth, awaiting_value, seen_start, root_closed, ended
 
     def apply_constraints(
         self,

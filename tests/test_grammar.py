@@ -393,6 +393,820 @@ class TestJSONGrammarPDA:
         assert masks[0, 2, vocab.unk_value_id].item() is True
 
 
+class TestPDAStateTransitions:
+    """Tests for internal PDA state transitions.
+
+    These tests verify the correctness of _update_state by checking
+    the state variables (stack, depth, awaiting_value, etc.) after
+    processing each token.
+    """
+
+    def test_init_state(self, pda):
+        """Test initial state is correct."""
+        state = pda.init_state(batch_size=2, device=torch.device("cpu"))
+        stack, depth, awaiting_value, seen_start, root_closed, ended = state
+
+        assert stack.shape == (2, 32)  # batch_size x max_depth
+        assert depth.shape == (2,)
+        assert (stack == 0).all()  # STACK_EMPTY
+        assert (depth == 0).all()
+        assert not awaiting_value.any()
+        assert not seen_start.any()
+        assert not root_closed.any()
+        assert not ended.any()
+
+    def test_start_token_transition(self, vocab, pda):
+        """Test state after START token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        token = torch.tensor([vocab.start_id])
+
+        mask, new_state = pda.get_next_token_mask(token, state)
+        _, depth, _, seen_start, root_closed, ended = new_state
+
+        # After START: seen_start=True, everything else unchanged
+        assert seen_start[0].item() is True
+        assert depth[0].item() == 0
+        assert root_closed[0].item() is False
+        assert ended[0].item() is False
+
+        # Next valid tokens: OBJ_START or ARRAY_START only
+        assert mask[0, vocab.obj_start_id].item() is True
+        assert mask[0, vocab.array_start_id].item() is True
+        assert mask[0, vocab.start_id].item() is False
+        assert mask[0, vocab.end_id].item() is False
+
+    def test_obj_start_transition(self, vocab, pda):
+        """Test state after OBJ_START token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+
+        # Process START
+        token = torch.tensor([vocab.start_id])
+        _, state = pda.get_next_token_mask(token, state)
+
+        # Process OBJ_START
+        token = torch.tensor([vocab.obj_start_id])
+        mask, state = pda.get_next_token_mask(token, state)
+        stack, depth, awaiting_value, _, root_closed, _ = state
+
+        # After OBJ_START: depth=1, stack[0]=STACK_OBJECT, awaiting_value=False
+        assert depth[0].item() == 1
+        assert stack[0, 0].item() == 1  # STACK_OBJECT
+        assert awaiting_value[0].item() is False
+        assert root_closed[0].item() is False
+
+        # Next valid: keys or OBJ_END
+        name_id = vocab.encode(vocab._id_to_token[10])
+        assert mask[0, name_id].item() is True
+        assert mask[0, vocab.obj_end_id].item() is True
+        assert mask[0, vocab.array_end_id].item() is False
+
+    def test_key_transition(self, vocab, pda):
+        """Test state after key token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+
+        # Process START -> OBJ_START -> key
+        for token_id in [vocab.start_id, vocab.obj_start_id, name_id]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, awaiting_value, _, _, _ = state
+
+        # After key: awaiting_value=True
+        assert awaiting_value[0].item() is True
+        assert depth[0].item() == 1
+
+        # Next valid: values (primitives, OBJ_START, ARRAY_START, NUM)
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        assert mask[0, alice_id].item() is True
+        assert mask[0, vocab.obj_start_id].item() is True
+        assert mask[0, vocab.array_start_id].item() is True
+        assert mask[0, vocab.num_token_id].item() is True
+        # Not valid: keys, OBJ_END
+        assert mask[0, name_id].item() is False
+        assert mask[0, vocab.obj_end_id].item() is False
+
+    def test_value_transition(self, vocab, pda):
+        """Test state after value token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Process START -> OBJ_START -> key -> value
+        for token_id in [vocab.start_id, vocab.obj_start_id, name_id, alice_id]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, awaiting_value, _, _, _ = state
+
+        # After value: awaiting_value=False
+        assert awaiting_value[0].item() is False
+        assert depth[0].item() == 1
+
+        # Next valid: keys or OBJ_END
+        assert mask[0, name_id].item() is True
+        assert mask[0, vocab.obj_end_id].item() is True
+        assert mask[0, alice_id].item() is False
+
+    def test_obj_end_closes_root(self, vocab, pda):
+        """Test that OBJ_END at depth=1 sets root_closed."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Process START -> OBJ_START -> key -> value -> OBJ_END
+        for token_id in [vocab.start_id, vocab.obj_start_id, name_id, alice_id, vocab.obj_end_id]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, _, _, root_closed, ended = state
+
+        # After OBJ_END at root: depth=0, root_closed=True
+        assert depth[0].item() == 0
+        assert root_closed[0].item() is True
+        assert ended[0].item() is False
+
+        # Next valid: END only
+        assert mask[0, vocab.end_id].item() is True
+        assert mask[0, vocab.obj_start_id].item() is False
+        assert mask[0, name_id].item() is False
+
+    def test_end_token_transition(self, vocab, pda):
+        """Test state after END token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Process full sequence: START -> OBJ_START -> key -> value -> OBJ_END -> END
+        for token_id in [
+            vocab.start_id,
+            vocab.obj_start_id,
+            name_id,
+            alice_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+
+        # After END: ended=True
+        assert ended[0].item() is True
+
+        # Next valid: PAD only
+        assert mask[0, vocab.pad_token_id].item() is True
+        assert mask[0, vocab.end_id].item() is False
+        assert mask[0, vocab.start_id].item() is False
+
+    def test_nested_object_depth_tracking(self, vocab, pda):
+        """Test depth increases/decreases correctly with nested objects."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+
+        # START -> OBJ_START -> key -> OBJ_START -> key -> OBJ_START -> OBJ_END -> OBJ_END -> OBJ_END -> END
+        tokens = [
+            vocab.start_id,  # depth: 0
+            vocab.obj_start_id,  # depth: 1
+            items_id,  # depth: 1
+            vocab.obj_start_id,  # depth: 2
+            items_id,  # depth: 2
+            vocab.obj_start_id,  # depth: 3
+            vocab.obj_end_id,  # depth: 2
+            vocab.obj_end_id,  # depth: 1
+            vocab.obj_end_id,  # depth: 0
+            vocab.end_id,  # depth: 0
+        ]
+        expected_depths_after = [0, 1, 1, 2, 2, 3, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths_after, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth, (
+                f"After token {token_id}, expected depth {expected_depth}, got {depth[0].item()}"
+            )
+
+    def test_array_start_transition(self, vocab, pda):
+        """Test state after ARRAY_START token."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+
+        # Process START -> ARRAY_START
+        for token_id in [vocab.start_id, vocab.array_start_id]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        stack, depth, _, _, _, _ = state
+
+        # After ARRAY_START: depth=1, stack[0]=STACK_ARRAY
+        assert depth[0].item() == 1
+        assert stack[0, 0].item() == 2  # STACK_ARRAY
+
+        # Next valid: values or ARRAY_END
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        assert mask[0, alice_id].item() is True
+        assert mask[0, vocab.obj_start_id].item() is True
+        assert mask[0, vocab.array_start_id].item() is True
+        assert mask[0, vocab.array_end_id].item() is True
+        # Not valid: keys
+        name_id = vocab.encode(vocab._id_to_token[10])
+        assert mask[0, name_id].item() is False
+
+    def test_array_value_does_not_set_awaiting_value(self, vocab, pda):
+        """Test that values in array don't affect awaiting_value."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Process START -> ARRAY_START -> value -> value
+        for token_id in [vocab.start_id, vocab.array_start_id, alice_id, alice_id]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, _, awaiting_value, _, _, _ = state
+
+        # In array context, awaiting_value should be False
+        assert awaiting_value[0].item() is False
+
+        # Can still add more values or close
+        assert mask[0, alice_id].item() is True
+        assert mask[0, vocab.array_end_id].item() is True
+
+    def test_nested_container_as_value_clears_awaiting(self, vocab, pda):
+        """Test that OBJ_END/ARRAY_END after nested container clears awaiting_value."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+
+        # START -> OBJ_START -> key -> OBJ_START -> OBJ_END
+        # After the nested OBJ_END, we're back in parent object with value completed
+        for token_id in [
+            vocab.start_id,
+            vocab.obj_start_id,
+            name_id,
+            vocab.obj_start_id,
+            vocab.obj_end_id,
+        ]:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, awaiting_value, _, _, _ = state
+
+        # After nested object closes, awaiting_value should be False
+        assert awaiting_value[0].item() is False
+        assert depth[0].item() == 1
+
+        # Next valid: another key or OBJ_END
+        assert mask[0, name_id].item() is True
+        assert mask[0, vocab.obj_end_id].item() is True
+
+    def test_init_state_from_tokens(self, vocab, pda):
+        """Test init_state_from_tokens recreates correct state."""
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Create a prefix sequence
+        prefix = torch.tensor([vocab.start_id, vocab.obj_start_id, name_id, alice_id])
+
+        # Initialize state from tokens
+        state = pda.init_state_from_tokens(prefix, batch_size=1, device=torch.device("cpu"))
+        stack, depth, awaiting_value, seen_start, root_closed, ended = state
+
+        # Should match state after processing these tokens incrementally
+        assert seen_start[0].item() is True
+        assert depth[0].item() == 1
+        assert stack[0, 0].item() == 1  # STACK_OBJECT
+        assert awaiting_value[0].item() is False  # Just saw a value
+        assert root_closed[0].item() is False
+        assert ended[0].item() is False
+
+    def test_init_state_from_tokens_with_padding(self, vocab, pda):
+        """Test init_state_from_tokens skips PAD tokens."""
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        # Left-padded sequence
+        prefix = torch.tensor(
+            [
+                vocab.pad_token_id,
+                vocab.pad_token_id,
+                vocab.start_id,
+                vocab.obj_start_id,
+                name_id,
+                alice_id,
+            ]
+        )
+
+        state = pda.init_state_from_tokens(prefix, batch_size=1, device=torch.device("cpu"))
+        _, depth, awaiting_value, _, _, _ = state
+
+        # Should be same as without padding
+        assert depth[0].item() == 1
+        assert awaiting_value[0].item() is False
+
+    def test_init_state_from_tokens_replicates_for_batch(self, vocab, pda):
+        """Test init_state_from_tokens creates correct batch_size copies."""
+        prefix = torch.tensor([vocab.start_id, vocab.obj_start_id])
+
+        state = pda.init_state_from_tokens(prefix, batch_size=4, device=torch.device("cpu"))
+        stack, depth, _, seen_start, _, _ = state
+
+        # All batch items should have same state
+        assert stack.shape[0] == 4
+        assert (depth == 1).all()
+        assert seen_start.all()
+
+    def test_incremental_matches_full_computation(self, vocab, pda):
+        """Test that incremental get_next_token_mask matches compute_valid_mask."""
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = torch.tensor(
+            [
+                [
+                    vocab.start_id,
+                    vocab.obj_start_id,
+                    name_id,
+                    alice_id,
+                    vocab.obj_end_id,
+                    vocab.end_id,
+                ]
+            ]
+        )
+
+        # Get masks from full computation
+        full_masks = pda.compute_valid_mask(tokens)
+
+        # Get masks incrementally
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        incremental_masks = []
+        for t in range(tokens.shape[1]):
+            token = tokens[:, t]
+            mask, state = pda.get_next_token_mask(token, state)
+            incremental_masks.append(mask)
+
+        incremental_masks = torch.stack(incremental_masks, dim=1)
+
+        # Should match exactly
+        assert torch.equal(full_masks, incremental_masks)
+
+    def test_batch_independence(self, vocab, pda):
+        """Test that batch items are processed independently."""
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        state = pda.init_state(batch_size=2, device=torch.device("cpu"))
+
+        # Process different tokens for each batch item
+        # Batch 0: START -> OBJ_START -> key
+        # Batch 1: START -> ARRAY_START -> value
+        sequences = [
+            ([vocab.start_id, vocab.start_id], [0, 0]),  # Both START
+            ([vocab.obj_start_id, vocab.array_start_id], [1, 1]),  # OBJ vs ARRAY
+            ([name_id, alice_id], [1, 1]),  # key vs value
+        ]
+
+        for tokens, expected_depths in sequences:
+            token = torch.tensor(tokens)
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+
+            assert depth[0].item() == expected_depths[0]
+            assert depth[1].item() == expected_depths[1]
+
+        # Final state checks
+        stack, _, awaiting_value, _, _, _ = state
+
+        # Batch 0: in object, awaiting_value=True (just saw key)
+        assert stack[0, 0].item() == 1  # STACK_OBJECT
+        assert awaiting_value[0].item() is True
+
+        # Batch 1: in array, awaiting_value=False
+        assert stack[1, 0].item() == 2  # STACK_ARRAY
+        assert awaiting_value[1].item() is False
+
+
+class TestGrammarStructures:
+    """Comprehensive tests for different JSON structures.
+
+    Tests flat objects, nested objects, arrays, nested arrays,
+    and mixed object/array nesting to ensure PDA handles all
+    valid JSON structures correctly.
+    """
+
+    def test_flat_object_single_field(self, vocab, pda):
+        """Test flat object with single key-value pair: {"name": "Alice"}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            name_id,
+            alice_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 1, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_flat_object_multiple_fields(self, vocab, pda):
+        """Test flat object with multiple fields: {"name": "Alice", "age": 42}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        age_id = vocab.encode(vocab._id_to_token[11])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        val_42 = vocab.encode(vocab._id_to_token[14])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            name_id,
+            alice_id,  # "name": "Alice"
+            age_id,
+            val_42,  # "age": 42
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+
+        awaiting_values = []
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, _, awaiting_value, _, _, _ = state
+            awaiting_values.append(awaiting_value[0].item())
+
+        # awaiting_value should toggle: F, F, T, F, T, F, F, F
+        # After key -> True, after value -> False
+        assert awaiting_values[2] is True  # After first key
+        assert awaiting_values[3] is False  # After first value
+        assert awaiting_values[4] is True  # After second key
+        assert awaiting_values[5] is False  # After second value
+
+    def test_empty_object(self, vocab, pda):
+        """Test empty object: {}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+
+        tokens = [vocab.start_id, vocab.obj_start_id, vocab.obj_end_id, vocab.end_id]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, _, _, root_closed, ended = state
+        assert depth[0].item() == 0
+        assert root_closed[0].item() is True
+        assert ended[0].item() is True
+
+    def test_empty_array(self, vocab, pda):
+        """Test empty array: []"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+
+        tokens = [vocab.start_id, vocab.array_start_id, vocab.array_end_id, vocab.end_id]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, depth, _, _, root_closed, ended = state
+        assert depth[0].item() == 0
+        assert root_closed[0].item() is True
+        assert ended[0].item() is True
+
+    def test_flat_array_single_element(self, vocab, pda):
+        """Test flat array with single element: ["Alice"]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [vocab.start_id, vocab.array_start_id, alice_id, vocab.array_end_id, vocab.end_id]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_flat_array_multiple_elements(self, vocab, pda):
+        """Test flat array with multiple elements: ["Alice", 42, true]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        val_42 = vocab.encode(vocab._id_to_token[14])
+        val_true = vocab.encode(vocab._id_to_token[15])
+
+        tokens = [
+            vocab.start_id,
+            vocab.array_start_id,
+            alice_id,
+            val_42,
+            val_true,
+            vocab.array_end_id,
+            vocab.end_id,
+        ]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            mask, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_nested_objects_two_levels(self, vocab, pda):
+        """Test nested object: {"items": {"name": "Alice"}}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,  # depth: 0, 1
+            items_id,
+            vocab.obj_start_id,  # depth: 1, 2
+            name_id,
+            alice_id,  # depth: 2, 2
+            vocab.obj_end_id,
+            vocab.obj_end_id,  # depth: 1, 0
+            vocab.end_id,  # depth: 0
+        ]
+        expected_depths = [0, 1, 1, 2, 2, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+    def test_nested_objects_three_levels(self, vocab, pda):
+        """Test three levels of nesting: {"a": {"b": {"c": "val"}}}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            items_id,
+            vocab.obj_start_id,
+            items_id,
+            vocab.obj_start_id,
+            items_id,
+            alice_id,
+            vocab.obj_end_id,
+            vocab.obj_end_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 1, 2, 2, 3, 3, 3, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+    def test_nested_arrays_two_levels(self, vocab, pda):
+        """Test nested arrays: [["Alice", 42]]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        val_42 = vocab.encode(vocab._id_to_token[14])
+
+        tokens = [
+            vocab.start_id,
+            vocab.array_start_id,
+            vocab.array_start_id,
+            alice_id,
+            val_42,
+            vocab.array_end_id,
+            vocab.array_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 2, 2, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+    def test_nested_arrays_three_levels(self, vocab, pda):
+        """Test three levels of array nesting: [[["Alice"]]]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [
+            vocab.start_id,
+            vocab.array_start_id,
+            vocab.array_start_id,
+            vocab.array_start_id,
+            alice_id,
+            vocab.array_end_id,
+            vocab.array_end_id,
+            vocab.array_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 2, 3, 3, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+    def test_array_of_objects(self, vocab, pda):
+        """Test array containing objects: [{"name": "Alice"}, {"name": "Bob"}]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        name_id = vocab.encode(vocab._id_to_token[10])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+
+        tokens = [
+            vocab.start_id,
+            vocab.array_start_id,
+            vocab.obj_start_id,
+            name_id,
+            alice_id,
+            vocab.obj_end_id,
+            vocab.obj_start_id,
+            name_id,
+            alice_id,
+            vocab.obj_end_id,
+            vocab.array_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 2, 2, 2, 1, 2, 2, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            stack, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+            # Verify stack types at depth transitions
+            if expected_depth == 1:
+                assert stack[0, 0].item() == 2  # STACK_ARRAY
+            if expected_depth == 2:
+                assert stack[0, 1].item() == 1  # STACK_OBJECT
+
+    def test_object_with_array_value(self, vocab, pda):
+        """Test object with array value: {"items": ["Alice", 42]}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+        alice_id = vocab.encode(vocab._id_to_token[13])
+        val_42 = vocab.encode(vocab._id_to_token[14])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            items_id,
+            vocab.array_start_id,
+            alice_id,
+            val_42,
+            vocab.array_end_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+        expected_depths = [0, 1, 1, 2, 2, 2, 1, 0, 0]
+
+        awaiting_values = []
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, awaiting_value, _, _, _ = state
+            awaiting_values.append(awaiting_value[0].item())
+            assert depth[0].item() == expected_depth
+
+        # After "items" key, awaiting_value=True
+        assert awaiting_values[2] is True
+        # After ARRAY_END (which completes the value), awaiting_value=False
+        assert awaiting_values[6] is False
+
+    def test_nested_empty_structures(self, vocab, pda):
+        """Test nested empty structures: {"items": {}}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            items_id,
+            vocab.obj_start_id,
+            vocab.obj_end_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_array_with_empty_objects(self, vocab, pda):
+        """Test array containing empty objects: [{}, {}]"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+
+        tokens = [
+            vocab.start_id,
+            vocab.array_start_id,
+            vocab.obj_start_id,
+            vocab.obj_end_id,
+            vocab.obj_start_id,
+            vocab.obj_end_id,
+            vocab.array_end_id,
+            vocab.end_id,
+        ]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_object_with_empty_array(self, vocab, pda):
+        """Test object with empty array: {"items": []}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            items_id,
+            vocab.array_start_id,
+            vocab.array_end_id,
+            vocab.obj_end_id,
+            vocab.end_id,
+        ]
+
+        for token_id in tokens:
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+
+        _, _, _, _, _, ended = state
+        assert ended[0].item() is True
+
+    def test_deeply_nested_mixed(self, vocab, pda):
+        """Test deeply nested mixed structure: {"a": [{"b": [1]}]}"""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+        val_42 = vocab.encode(vocab._id_to_token[14])
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,  # depth: 0, 1
+            items_id,
+            vocab.array_start_id,  # depth: 1, 2
+            vocab.obj_start_id,  # depth: 3
+            items_id,
+            vocab.array_start_id,  # depth: 3, 4
+            val_42,  # depth: 4
+            vocab.array_end_id,  # depth: 3
+            vocab.obj_end_id,  # depth: 2
+            vocab.array_end_id,  # depth: 1
+            vocab.obj_end_id,
+            vocab.end_id,  # depth: 0, 0
+        ]
+        expected_depths = [0, 1, 1, 2, 3, 3, 4, 4, 3, 2, 1, 0, 0]
+
+        for token_id, expected_depth in zip(tokens, expected_depths, strict=True):
+            token = torch.tensor([token_id])
+            _, state = pda.get_next_token_mask(token, state)
+            _, depth, _, _, _, _ = state
+            assert depth[0].item() == expected_depth
+
+
+class TestGrammarEdgeCases:
+    """Edge case tests for grammar constraints."""
+
+    def test_max_depth_limit(self, vocab, pda):
+        """Test that depth doesn't exceed max_depth."""
+        state = pda.init_state(batch_size=1, device=torch.device("cpu"))
+        items_id = vocab.encode(vocab._id_to_token[12])
+
+        # Try to nest deeper than max_depth
+        token = torch.tensor([vocab.start_id])
+        _, state = pda.get_next_token_mask(token, state)
+
+        for i in range(pda.max_depth + 5):
+            token = torch.tensor([vocab.obj_start_id])
+            _, state = pda.get_next_token_mask(token, state)
+            if i < pda.max_depth - 1:
+                token = torch.tensor([items_id])
+                _, state = pda.get_next_token_mask(token, state)
+
+        _, depth, *_ = state
+        # Depth should be clamped at max_depth
+        assert depth[0].item() <= pda.max_depth
+
+
 class TestGrammarPerformance:
     """Performance tests for grammar constraints."""
 

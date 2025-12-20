@@ -9,6 +9,7 @@ Provides training utilities with support for:
 - Step-based and epoch-based evaluation scheduling (within epochs)
 """
 
+import gc
 import math
 import time
 import warnings
@@ -212,6 +213,24 @@ class OrigamiTrainer:
 
         return LambdaLR(self.optimizer, lr_lambda)
 
+    def _clear_memory_caches(self) -> None:
+        """Clear memory caches to prevent unbounded memory growth.
+
+        This is called periodically during training to free memory that
+        PyTorch and Python may be holding onto. On macOS, this helps
+        prevent excessive swapping during long training runs.
+        """
+        # Run Python garbage collection
+        gc.collect()
+
+        # Clear PyTorch CUDA cache if applicable
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        # Clear MPS cache if on Apple Silicon
+        if self.device.type == "mps" and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
+
     def _resolve_allow_complex_values(self) -> bool:
         """Resolve allow_complex_values with auto-detection and conflict warning.
 
@@ -322,6 +341,9 @@ class OrigamiTrainer:
 
         # Track this evaluation step
         self._last_eval_step = self.state.global_step
+
+        # Clear memory after evaluation (can accumulate many intermediate tensors)
+        self._clear_memory_caches()
 
         # Fire callback with metrics dict
         self.callback_handler.fire_event("on_evaluate", self, self.state, metrics)
@@ -447,6 +469,9 @@ class OrigamiTrainer:
                 self._run_evaluation_and_checkpoint()
 
         duration = time.time() - start_time
+
+        # Clear memory caches at end of epoch to prevent unbounded growth
+        self._clear_memory_caches()
 
         return EpochStats(
             loss=total_loss / max(1, num_batches),
