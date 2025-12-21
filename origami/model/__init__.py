@@ -4,15 +4,19 @@ This module provides the core model components:
 - ModelConfig: Model architecture configuration
 - OrigamiModel: Main model class
 - OrigamiOutput: Model output dataclass
-- Backbone classes: TransformerBackbone, etc.
+- Backbone classes: TransformerBackbone, CachedTransformerBackbone, etc.
 - Head classes: DiscreteHead, ContinuousHead
 """
 
 from origami.config import ModelConfig
 
-from .backbone import (
+from .backbones import (
     BACKBONE_CLASSES,
     BackboneBase,
+    CachedMultiHeadAttention,
+    CachedTransformerBackbone,
+    CachedTransformerBlock,
+    KVCache,
     LSTMBackbone,
     MambaBackbone,
     TransformerBackbone,
@@ -33,6 +37,10 @@ __all__ = [
     # Backbones
     "BackboneBase",
     "TransformerBackbone",
+    "CachedTransformerBackbone",
+    "CachedTransformerBlock",
+    "CachedMultiHeadAttention",
+    "KVCache",
     "LSTMBackbone",
     "MambaBackbone",
     "BACKBONE_CLASSES",

@@ -15,11 +15,12 @@ from torch import Tensor
 from origami.config import ModelConfig
 from origami.tokenizer.vocabulary import Vocabulary
 
-from .backbone import create_backbone
+from .backbones import create_backbone
 from .embeddings import OrigamiEmbeddings
 from .heads import ContinuousHead, DiscreteHead
 
 if TYPE_CHECKING:
+    from origami.model.backbones import KVCache
     from origami.tokenizer.json_tokenizer import JSONTokenizer
 
 
@@ -33,12 +34,14 @@ class OrigamiOutput:
         continuous_params: Tuple of (weights, means, log_vars) for MoG head,
             or None if continuous head disabled.
         hidden_states: Final hidden states of shape (batch, seq_len, d_model)
+        past_key_values: KV cache from CachedTransformerBackbone, or None.
     """
 
     loss: Tensor | None
     logits: Tensor
     continuous_params: tuple[Tensor, Tensor, Tensor] | None
     hidden_states: Tensor
+    past_key_values: "KVCache | None" = None
 
 
 class OrigamiModel(nn.Module):
@@ -106,6 +109,8 @@ class OrigamiModel(nn.Module):
         numeric_values: Tensor | None = None,  # (batch, seq_len)
         numeric_mask: Tensor | None = None,  # (batch, seq_len)
         grammar_mask: Tensor | None = None,  # (batch, seq_len, vocab_size) - explicit!
+        past_key_values: "KVCache | None" = None,
+        use_cache: bool = False,
     ) -> OrigamiOutput:
         """Forward pass through the model.
 
@@ -124,15 +129,30 @@ class OrigamiModel(nn.Module):
             grammar_mask: Boolean mask for valid tokens at each position.
                 Shape (batch, seq_len, vocab_size). If provided, invalid tokens
                 are masked to -inf. Computed by caller (Trainer or Generator).
+            past_key_values: KV cache from previous forward pass (for generation).
+            use_cache: Whether to compute and return KV cache (for generation).
 
         Returns:
-            OrigamiOutput with logits, optional loss, and hidden states
+            OrigamiOutput with logits, optional loss, hidden states, and optionally cache
         """
         # 1. Embeddings (with numeric values for continuous head)
         hidden = self.embeddings(input_ids, path_types, path_ids, path_lengths, numeric_values)
 
-        # 2. Backbone
-        hidden = self.backbone(hidden, attention_mask)
+        # 2. Backbone (with optional KV caching)
+        new_cache = None
+        if (
+            use_cache
+            and hasattr(self.backbone, "forward")
+            and "past_key_values" in self.backbone.forward.__code__.co_varnames
+        ):
+            # CachedTransformerBackbone supports caching
+            result = self.backbone(
+                hidden, attention_mask, past_key_values=past_key_values, use_cache=True
+            )
+            hidden, new_cache = result
+        else:
+            # Standard backbone without caching
+            hidden = self.backbone(hidden, attention_mask)
 
         # 3. Discrete head
         logits = self.discrete_head(hidden)
@@ -164,6 +184,7 @@ class OrigamiModel(nn.Module):
             logits=logits,
             continuous_params=continuous_params,
             hidden_states=hidden,
+            past_key_values=new_cache,
         )
 
     def compute_grammar_mask(

@@ -153,7 +153,7 @@ class ModelConfig(PrettyReprMixin):
             raise ValueError(
                 f"kvpe_pooling must be one of {valid_poolings}, got '{self.kvpe_pooling}'"
             )
-        valid_backbones = {"transformer", "lstm", "mamba"}
+        valid_backbones = {"transformer", "lstm", "mamba", "cached_transformer"}
         if self.backbone not in valid_backbones:
             raise ValueError(f"backbone must be one of {valid_backbones}, got '{self.backbone}'")
 

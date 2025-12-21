@@ -165,6 +165,20 @@ class OrigamiGenerator:
         # Get grammar PDA reference from model for incremental constraint application
         self._grammar_pda = model._grammar_pda
 
+        # Check if backbone supports KV caching
+        self._supports_kv_cache = self._check_kv_cache_support()
+
+    def _check_kv_cache_support(self) -> bool:
+        """Check if the model's backbone supports KV caching."""
+        backbone = self.model.backbone
+        # Check if backbone has past_key_values parameter
+        if hasattr(backbone, "forward"):
+            import inspect
+
+            sig = inspect.signature(backbone.forward)
+            return "past_key_values" in sig.parameters
+        return False
+
     @property
     def device(self) -> torch.device:
         """Get the model's current device dynamically."""
@@ -410,24 +424,50 @@ class OrigamiGenerator:
         # Store completed results: maps original index -> (seq_tokens, numeric_values)
         completed_results: dict[int, tuple[list[int], list[float]]] = {}
 
+        # KV cache for incremental generation (if backbone supports it)
+        kv_cache = None
+        use_kv_cache = self._supports_kv_cache
+
         # Generation loop
-        for _step in range(max_tokens):
+        for step in range(max_tokens):
             if len(active_indices) == 0:
                 break
 
             batch_size = current_ids.size(0)
 
-            # Forward pass with numeric values for continuous head
-            output = self.model(
-                input_ids=current_ids,
-                path_types=current_path_types,
-                path_ids=current_path_ids,
-                path_lengths=current_path_lengths,
-                attention_mask=current_attention_mask,
-                numeric_values=current_numeric_values
-                if self.model.continuous_head is not None
-                else None,
-            )
+            # Forward pass with optional KV caching
+            if use_kv_cache and step > 0 and kv_cache is not None:
+                # Incremental forward: only pass the new token
+                # Use the last token and its path info
+                output = self.model(
+                    input_ids=current_ids[:, -1:],
+                    path_types=current_path_types[:, -1:, :],
+                    path_ids=current_path_ids[:, -1:, :],
+                    path_lengths=current_path_lengths[:, -1:],
+                    attention_mask=None,  # Not needed for single token with cache
+                    numeric_values=current_numeric_values[:, -1:]
+                    if self.model.continuous_head is not None
+                    else None,
+                    past_key_values=kv_cache,
+                    use_cache=True,
+                )
+                kv_cache = output.past_key_values
+            else:
+                # Full forward (first step or no caching)
+                output = self.model(
+                    input_ids=current_ids,
+                    path_types=current_path_types,
+                    path_ids=current_path_ids,
+                    path_lengths=current_path_lengths,
+                    attention_mask=current_attention_mask,
+                    numeric_values=current_numeric_values
+                    if self.model.continuous_head is not None
+                    else None,
+                    past_key_values=None,
+                    use_cache=use_kv_cache,
+                )
+                if use_kv_cache:
+                    kv_cache = output.past_key_values
 
             # Get logits for last position
             next_logits = output.logits[:, -1, :]  # (batch, vocab_size)
@@ -546,6 +586,20 @@ class OrigamiGenerator:
                             initial_depths = initial_depths[keep_tensor]
                     if next_valid_mask is not None:
                         next_valid_mask = next_valid_mask[keep_tensor]
+
+                    # Compact KV cache (select only active sequences)
+                    if kv_cache is not None:
+                        from origami.model.backbones import KVCache
+
+                        new_cache = KVCache()
+                        for layer_idx in range(len(kv_cache)):
+                            k, v = kv_cache[layer_idx]
+                            # k, v shape: (batch, num_heads, seq_len, head_dim)
+                            new_cache.update(layer_idx, k[keep_tensor], v[keep_tensor])
+                        kv_cache = new_cache
+                else:
+                    # All sequences completed, clear cache
+                    kv_cache = None
 
                 active_indices = new_active_indices
                 path_states = new_path_states
