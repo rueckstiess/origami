@@ -89,6 +89,10 @@ class OrigamiPipeline:
         self._fitted = False
         self._train_result: TrainResult | None = None
 
+        # Stored preprocessed data for train()
+        self._train_processed: list[dict] | None = None
+        self._eval_processed: list[dict] | None = None
+
         # Device management
         # _training_device: resolved device for training (GPU/MPS if available)
         # After inference, model stays on CPU (faster for autoregressive generation)
@@ -159,41 +163,34 @@ class OrigamiPipeline:
             self._predictor = None
             self._embedder = None
 
-    def fit(
+    def preprocess(
         self,
         data: list[dict],
         eval_data: list[dict] | None = None,
-        epochs: int | None = None,
         verbose: bool = False,
-        callbacks: list | None = None,
     ) -> OrigamiPipeline:
-        """Fit the pipeline on training data.
+        """Preprocess data and initialize model.
 
         This method:
         1. Sets up preprocessing based on numeric_mode
         2. Preprocesses data
         3. Fits tokenizer to build vocabulary
         4. Creates model with correct configuration
-        5. Trains the model
+        5. Stores preprocessed data for training
+
+        After calling preprocess(), call train() to train the model.
+        Can be called again to reset preprocessing with new data.
 
         Args:
             data: Training data as list of JSON-like dictionaries
             eval_data: Optional evaluation data for validation during training
-            epochs: Number of training epochs. Overrides config.training.num_epochs if provided.
-            verbose: Whether to print training info (vocab size, model params, device)
-            callbacks: List of TrainerCallback instances for monitoring/customization.
-                If None (default), uses [ProgressCallback()] for progress bars.
-                Pass an explicit list to use only your callbacks (e.g., [] for silent).
+            verbose: Whether to print info (vocab size, model params, device)
 
         Returns:
             self (for method chaining)
         """
-        from origami.training import OrigamiTrainer, ProgressCallback
-
         if not data:
             raise ValueError("Training data cannot be empty")
-
-        num_epochs = epochs if epochs is not None else self.config.training.num_epochs
 
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
@@ -227,7 +224,53 @@ class OrigamiPipeline:
             print(f"Model parameters: {self._model.get_num_parameters():,}")
             print(f"Training device: {self._training_device}")
 
-        # Step 4: Create trainer and train
+        # Step 4: Store preprocessed data for train()
+        self._train_processed = train_processed
+        self._eval_processed = eval_processed
+
+        # Reset inference components (model changed)
+        self._generator = None
+        self._predictor = None
+        self._embedder = None
+
+        return self
+
+    def train(
+        self,
+        epochs: int | None = None,
+        verbose: bool = False,
+        callbacks: list | None = None,
+    ) -> OrigamiPipeline:
+        """Train the model on preprocessed data.
+
+        Must call preprocess() first. Can be called multiple times to continue
+        training the same model (model weights are preserved between calls).
+
+        Args:
+            epochs: Number of training epochs. Overrides config.training.num_epochs if provided.
+            verbose: Whether to print training device info.
+            callbacks: List of TrainerCallback instances for monitoring/customization.
+                If None (default), uses [ProgressCallback()] for progress bars.
+                Pass an explicit list to use only your callbacks (e.g., [] for silent).
+
+        Returns:
+            self (for method chaining)
+
+        Raises:
+            RuntimeError: If preprocess() hasn't been called first.
+        """
+        from origami.training import OrigamiTrainer, ProgressCallback
+
+        if self._train_processed is None:
+            raise RuntimeError(
+                "Must call preprocess() before train(). Alternatively, use fit() which calls both."
+            )
+
+        num_epochs = epochs if epochs is not None else self.config.training.num_epochs
+
+        # Ensure model is on training device
+        self._ensure_training_device()
+
         # Use training config, but override num_epochs if specified
         train_config = replace(self.config.training, num_epochs=num_epochs)
 
@@ -237,11 +280,14 @@ class OrigamiPipeline:
         else:
             all_callbacks = list(callbacks)
 
+        if verbose:
+            print(f"Training device: {self._training_device}")
+
         trainer = OrigamiTrainer(
             model=self._model,
             tokenizer=self._tokenizer,
-            train_data=train_processed,
-            eval_data=eval_processed,
+            train_data=self._train_processed,
+            eval_data=self._eval_processed,
             config=train_config,
             callbacks=all_callbacks if all_callbacks else None,
             device=self._training_device,
@@ -260,6 +306,33 @@ class OrigamiPipeline:
         self._embedder = None
 
         return self
+
+    def fit(
+        self,
+        data: list[dict],
+        eval_data: list[dict] | None = None,
+        epochs: int | None = None,
+        verbose: bool = False,
+        callbacks: list | None = None,
+    ) -> OrigamiPipeline:
+        """Fit the pipeline on training data.
+
+        Equivalent to calling preprocess() then train().
+
+        Args:
+            data: Training data as list of JSON-like dictionaries
+            eval_data: Optional evaluation data for validation during training
+            epochs: Number of training epochs. Overrides config.training.num_epochs if provided.
+            verbose: Whether to print training info (vocab size, model params, device)
+            callbacks: List of TrainerCallback instances for monitoring/customization.
+                If None (default), uses [ProgressCallback()] for progress bars.
+                Pass an explicit list to use only your callbacks (e.g., [] for silent).
+
+        Returns:
+            self (for method chaining)
+        """
+        self.preprocess(data, eval_data=eval_data, verbose=verbose)
+        return self.train(epochs=epochs, verbose=verbose, callbacks=callbacks)
 
     def _preprocess_data(
         self,
