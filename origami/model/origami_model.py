@@ -109,6 +109,7 @@ class OrigamiModel(nn.Module):
         numeric_values: Tensor | None = None,  # (batch, seq_len)
         numeric_mask: Tensor | None = None,  # (batch, seq_len)
         grammar_mask: Tensor | None = None,  # (batch, seq_len, vocab_size) - explicit!
+        loss_weights: Tensor | None = None,  # (batch, seq_len) - per-token loss weights
         past_key_values: "KVCache | None" = None,
         use_cache: bool = False,
     ) -> OrigamiOutput:
@@ -129,6 +130,9 @@ class OrigamiModel(nn.Module):
             grammar_mask: Boolean mask for valid tokens at each position.
                 Shape (batch, seq_len, vocab_size). If provided, invalid tokens
                 are masked to -inf. Computed by caller (Trainer or Generator).
+            loss_weights: Per-token loss weights of shape (batch, seq_len).
+                If provided, applies weighted cross-entropy loss. Should be
+                pre-normalized so mean weight = 1.0 to maintain stable gradients.
             past_key_values: KV cache from previous forward pass (for generation).
             use_cache: Whether to compute and return KV cache (for generation).
 
@@ -174,6 +178,7 @@ class OrigamiModel(nn.Module):
                 logits=logits,
                 labels=labels,
                 attention_mask=attention_mask,
+                loss_weights=loss_weights,
                 continuous_params=continuous_params,
                 numeric_values=numeric_values,
                 numeric_mask=numeric_mask,
@@ -225,6 +230,7 @@ class OrigamiModel(nn.Module):
         logits: Tensor,  # (batch, seq_len, vocab_size)
         labels: Tensor,  # (batch, seq_len)
         attention_mask: Tensor | None,
+        loss_weights: Tensor | None,  # (batch, seq_len)
         continuous_params: tuple[Tensor, Tensor, Tensor] | None,
         numeric_values: Tensor | None,
         numeric_mask: Tensor | None,
@@ -238,6 +244,7 @@ class OrigamiModel(nn.Module):
             logits: Predicted logits
             labels: Target token IDs
             attention_mask: Mask for valid positions (True = valid, False = padding)
+            loss_weights: Per-token loss weights (already normalized)
             continuous_params: MoG parameters if continuous head enabled
             numeric_values: Target numeric values for continuous loss
             numeric_mask: Mask for NUM token positions
@@ -259,12 +266,36 @@ class OrigamiModel(nn.Module):
 
         # Flatten for cross-entropy
         vocab_size = shift_logits.size(-1)
-        loss = F.cross_entropy(
-            shift_logits.view(-1, vocab_size),
-            shift_labels.view(-1),
-            ignore_index=-100,  # Ignore padding
-            reduction="mean",
-        )
+
+        if loss_weights is not None:
+            # Weighted cross-entropy: use reduction="none" and apply weights
+            per_token_loss = F.cross_entropy(
+                shift_logits.view(-1, vocab_size),
+                shift_labels.view(-1),
+                ignore_index=-100,
+                reduction="none",
+            )
+
+            # Shift loss_weights to match shifted labels
+            shift_loss_weights = loss_weights[:, 1:].contiguous()
+
+            # Zero out weights for padding positions (where labels are -100)
+            valid_mask = (shift_labels != -100).float()
+            shift_loss_weights = shift_loss_weights * valid_mask
+
+            # Flatten weights to match per_token_loss
+            flat_weights = shift_loss_weights.view(-1)
+
+            # Compute weighted mean (weights should be pre-normalized)
+            weight_sum = flat_weights.sum().clamp(min=1e-8)
+            loss = (per_token_loss * flat_weights).sum() / weight_sum
+        else:
+            loss = F.cross_entropy(
+                shift_logits.view(-1, vocab_size),
+                shift_labels.view(-1),
+                ignore_index=-100,  # Ignore padding
+                reduction="mean",
+            )
 
         # Add continuous loss if enabled
         if continuous_params is not None and numeric_values is not None:
@@ -277,12 +308,17 @@ class OrigamiModel(nn.Module):
             shift_numeric_mask = numeric_mask[:, 1:] if numeric_mask is not None else None
 
             if shift_numeric_mask is not None and shift_numeric_mask.any():
+                # Pass loss_weights to continuous head for consistent weighting
+                shift_loss_weights = (
+                    loss_weights[:, 1:].contiguous() if loss_weights is not None else None
+                )
                 continuous_loss = self.continuous_head.nll_loss(
                     shift_weights,
                     shift_means,
                     shift_log_vars,
                     shift_numeric_values,
                     shift_numeric_mask,
+                    loss_weights=shift_loss_weights,
                 )
 
                 # Calculate loss weight

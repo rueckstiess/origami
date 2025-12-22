@@ -22,6 +22,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
+from origami.position_encoding import PATH_TYPE_KEY
+from origami.tokenizer.vocabulary import KeyToken
 from origami.utils import get_device
 
 from .callbacks import CallbackHandler, TrainerCallback
@@ -201,6 +203,13 @@ class OrigamiTrainer:
 
         # Track last evaluation step to avoid duplicate evals
         self._last_eval_step = -1
+
+        # Cache target key ID for loss weighting (avoids repeated lookup per batch)
+        self._target_key_id: int | None = None
+        if self.config.target_key is not None and self.config.target_loss_weight != 1.0:
+            target_key_token = KeyToken(self.config.target_key)
+            if target_key_token in self.tokenizer.vocab._token_to_id:
+                self._target_key_id = self.tokenizer.vocab.encode(target_key_token)
 
     def _create_scheduler(self) -> LambdaLR:
         """Create learning rate scheduler with linear warmup."""
@@ -480,6 +489,57 @@ class OrigamiTrainer:
             duration_seconds=duration,
         )
 
+    def _compute_loss_weights(self, batch: "EncodedBatch") -> torch.Tensor | None:
+        """Compute normalized loss weights for target value tokens.
+
+        Uses path information already in the batch to identify all tokens
+        belonging to the target key's value. This works correctly for both
+        primitive values and complex nested values (objects/arrays).
+
+        A token belongs to the target value if its path starts with the target key.
+        For example, in {"target": {"nested": 1}}:
+        - Key("target") has path () - NOT weighted (it's the key, not the value)
+        - OBJ_START has path (Key("target"),) - weighted
+        - Key("nested") has path (Key("target"),) - weighted
+        - Value(1) has path (Key("target"), Key("nested")) - weighted
+        - OBJ_END has path (Key("target"),) - weighted
+
+        Weights are normalized so their sum equals the number of valid tokens,
+        maintaining stable gradients regardless of target_loss_weight value.
+
+        Args:
+            batch: Collated EncodedBatch with path_types and path_ids tensors
+
+        Returns:
+            Tensor of shape (batch, seq_len) with normalized weights,
+            or None if no weighting is needed.
+        """
+        # Use cached target key ID (computed once at init, not every batch)
+        if self._target_key_id is None:
+            return None
+
+        # Identify tokens inside target value using path information
+        # A token is in target value if its path starts with the target key
+        in_target_value = (batch.path_types[:, :, 0] == PATH_TYPE_KEY) & (
+            batch.path_ids[:, :, 0] == self._target_key_id
+        )
+
+        # Create weights: target_weight for target value tokens, 1.0 elsewhere
+        target_weight = self.config.target_loss_weight
+        weights = torch.where(in_target_value, target_weight, 1.0)
+
+        # Normalize weights so sum equals number of valid tokens
+        # This keeps the effective learning rate stable
+        valid_mask = batch.attention_mask
+        valid_weights = weights * valid_mask
+        weight_sum = valid_weights.sum()
+        valid_token_count = valid_mask.sum()
+
+        if weight_sum > 0:
+            weights = weights * (valid_token_count / weight_sum)
+
+        return weights
+
     def _train_step(self, batch: "EncodedBatch") -> tuple[float, int]:
         """Execute single training step.
 
@@ -494,6 +554,9 @@ class OrigamiTrainer:
         # Compute grammar mask if model has grammar constraints enabled
         grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
 
+        # Compute loss weights for target value tokens (if configured)
+        loss_weights = self._compute_loss_weights(batch)
+
         # Forward pass with explicit grammar mask
         output = self.model(
             input_ids=batch.input_ids,
@@ -505,6 +568,7 @@ class OrigamiTrainer:
             numeric_values=batch.numeric_values,
             numeric_mask=batch.numeric_mask,
             grammar_mask=grammar_mask,
+            loss_weights=loss_weights,
         )
         loss = output.loss
 

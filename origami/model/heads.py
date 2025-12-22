@@ -100,6 +100,7 @@ class ContinuousHead(nn.Module):
         log_vars: Tensor,  # (batch, seq_len, n_components)
         targets: Tensor,  # (batch, seq_len)
         mask: Tensor,  # (batch, seq_len)
+        loss_weights: Tensor | None = None,  # (batch, seq_len) - per-token weights
     ) -> Tensor:
         """Compute negative log-likelihood under mixture of Gaussians.
 
@@ -109,6 +110,8 @@ class ContinuousHead(nn.Module):
             log_vars: Component log-variances
             targets: Target continuous values
             mask: Boolean mask where True indicates NUM token positions
+            loss_weights: Optional per-token loss weights for weighted averaging.
+                If provided, applies weighted mean instead of simple mean.
 
         Returns:
             Scalar NLL loss averaged over valid positions
@@ -126,9 +129,14 @@ class ContinuousHead(nn.Module):
         log_weights = torch.log(weights + 1e-10)
         log_mixture = torch.logsumexp(log_weights + log_probs, dim=-1)
 
-        # Mask and average
+        # Mask and average (with optional per-token weighting)
         if mask.any():
-            nll = -log_mixture[mask].mean()
+            masked_nll = -log_mixture[mask]
+            if loss_weights is not None:
+                masked_loss_weights = loss_weights[mask]
+                nll = (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(min=1e-8)
+            else:
+                nll = masked_nll.mean()
         else:
             # Return zero loss on same device as input
             nll = weights.new_zeros(())
