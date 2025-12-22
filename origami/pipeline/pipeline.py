@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import cProfile
 import pstats
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -228,25 +228,8 @@ class OrigamiPipeline:
             print(f"Training device: {self._training_device}")
 
         # Step 4: Create trainer and train
-        # Use training config directly, but override num_epochs if specified
-        train_config = TrainingConfig(
-            batch_size=self.config.training.batch_size,
-            learning_rate=self.config.training.learning_rate,
-            num_epochs=num_epochs,
-            warmup_steps=self.config.training.warmup_steps,
-            weight_decay=self.config.training.weight_decay,
-            shuffle_keys=self.config.training.shuffle_keys,
-            save_every_n_epochs=self.config.training.save_every_n_epochs,
-            checkpoint_dir=self.config.training.checkpoint_dir,
-            # Evaluation
-            eval_strategy=self.config.training.eval_strategy,
-            eval_steps=self.config.training.eval_steps,
-            eval_epochs=self.config.training.eval_epochs,
-            eval_metrics=self.config.training.eval_metrics,
-            eval_sample_size=self.config.training.eval_sample_size,
-            eval_on_train=self.config.training.eval_on_train,
-            target_key=self.config.training.target_key,
-        )
+        # Use training config, but override num_epochs if specified
+        train_config = replace(self.config.training, num_epochs=num_epochs)
 
         # Build callbacks list: default to ProgressCallback if not specified
         if callbacks is None:
@@ -327,26 +310,8 @@ class OrigamiPipeline:
         # Determine if continuous head is needed based on data config
         use_continuous_head = self.config.data.numeric_mode == "scale"
 
-        # Create a copy of model config with continuous head setting
-        model_config = ModelConfig(
-            d_model=self.config.model.d_model,
-            n_heads=self.config.model.n_heads,
-            n_layers=self.config.model.n_layers,
-            d_ff=self.config.model.d_ff,
-            dropout=self.config.model.dropout,
-            max_depth=self.config.model.max_depth,
-            max_array_position=self.config.model.max_array_position,
-            kvpe_pooling=self.config.model.kvpe_pooling,
-            kvpe_pooling_kwargs=self.config.model.kvpe_pooling_kwargs,
-            backbone=self.config.model.backbone,
-            lstm_bidirectional=self.config.model.lstm_bidirectional,
-            lstm_num_layers=self.config.model.lstm_num_layers,
-            use_continuous_head=use_continuous_head,
-            num_mixture_components=self.config.model.num_mixture_components,
-            continuous_loss_weight=self.config.model.continuous_loss_weight,
-            use_grammar_constraints=self.config.model.use_grammar_constraints,
-            max_seq_length=self.config.model.max_seq_length,
-        )
+        # Create model config with continuous head setting based on data config
+        model_config = replace(self.config.model, use_continuous_head=use_continuous_head)
 
         return OrigamiModel(model_config, self._tokenizer.vocab)
 

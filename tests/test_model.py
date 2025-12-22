@@ -37,7 +37,7 @@ class TestModelConfig:
         assert config.n_heads == 4
         assert config.n_layers == 4
         assert config.d_ff == 512
-        assert config.dropout == 0.1
+        assert config.dropout == 0.0
         assert config.backbone == "transformer"
         assert config.kvpe_pooling == "sum"
         assert config.max_depth == 32
@@ -854,11 +854,11 @@ class TestCreateBackbone:
         backbone = create_backbone(config)
         assert isinstance(backbone, TransformerBackbone)
 
-    def test_create_lstm_not_implemented(self):
-        """Test that LSTM backbone raises NotImplementedError."""
+    def test_create_lstm(self):
+        """Test that LSTM backbone is created successfully."""
         config = ModelConfig(backbone="lstm")
-        with pytest.raises(NotImplementedError):
-            create_backbone(config)
+        backbone = create_backbone(config)
+        assert backbone is not None
 
     def test_create_mamba_not_implemented(self):
         """Test that Mamba backbone raises NotImplementedError."""

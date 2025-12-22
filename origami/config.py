@@ -103,7 +103,6 @@ class ModelConfig(PrettyReprMixin):
         kvpe_pooling: Pooling strategy for KVPE.
         kvpe_pooling_kwargs: Additional kwargs for pooling strategy.
         backbone: Type of sequence modeling backbone.
-        lstm_bidirectional: Whether LSTM backbone is bidirectional.
         lstm_num_layers: Number of LSTM layers.
         num_mixture_components: Number of mixture components for continuous head.
         use_grammar_constraints: Whether to apply grammar constraints to logits.
@@ -114,7 +113,7 @@ class ModelConfig(PrettyReprMixin):
     n_heads: int = 4
     n_layers: int = 4
     d_ff: int = 512
-    dropout: float = 0.1
+    dropout: float = 0.0
 
     # Position encoding
     max_depth: int = 32
@@ -124,7 +123,6 @@ class ModelConfig(PrettyReprMixin):
 
     # Backbone
     backbone: Literal["transformer", "lstm", "mamba"] = "transformer"
-    lstm_bidirectional: bool = False
     lstm_num_layers: int = 2
 
     # Continuous head
