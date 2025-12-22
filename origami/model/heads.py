@@ -134,7 +134,9 @@ class ContinuousHead(nn.Module):
             masked_nll = -log_mixture[mask]
             if loss_weights is not None:
                 masked_loss_weights = loss_weights[mask]
-                nll = (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(min=1e-8)
+                nll = (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(
+                    min=1e-8
+                )
             else:
                 nll = masked_nll.mean()
         else:

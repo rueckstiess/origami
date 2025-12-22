@@ -18,11 +18,13 @@ class TestComputeLossWeights:
     def tokenizer(self):
         """Create a tokenizer fitted on data with various structures."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"a": 1, "target": 2, "b": 3},
-            {"a": 1, "target": {"nested": 5}, "b": 3},
-            {"a": 1, "target": [1, 2, 3], "b": 3},
-        ])
+        tokenizer.fit(
+            [
+                {"a": 1, "target": 2, "b": 3},
+                {"a": 1, "target": {"nested": 5}, "b": 3},
+                {"a": 1, "target": [1, 2, 3], "b": 3},
+            ]
+        )
         return tokenizer
 
     @pytest.fixture
@@ -177,9 +179,8 @@ class TestComputeLossWeights:
 
         # Find target value positions using path info
         target_key_id = tokenizer.vocab.encode(KeyToken("target"))
-        in_target_value = (
-            (batch.path_types[:, :, 0] == PATH_TYPE_KEY)
-            & (batch.path_ids[:, :, 0] == target_key_id)
+        in_target_value = (batch.path_types[:, :, 0] == PATH_TYPE_KEY) & (
+            batch.path_ids[:, :, 0] == target_key_id
         )
 
         # Target positions should have higher weights than non-target
@@ -197,10 +198,12 @@ class TestTargetLossWeightForComplexValues:
     def tokenizer(self):
         """Create tokenizer with complex structures."""
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"a": 1, "target": {"nested": 5, "deep": {"x": 1}}, "b": 3},
-            {"a": 1, "target": [1, 2, [3, 4]], "b": 3},
-        ])
+        tokenizer.fit(
+            [
+                {"a": 1, "target": {"nested": 5, "deep": {"x": 1}}, "b": 3},
+                {"a": 1, "target": [1, 2, [3, 4]], "b": 3},
+            ]
+        )
         return tokenizer
 
     @pytest.fixture
@@ -239,9 +242,8 @@ class TestTargetLossWeightForComplexValues:
 
         # Count how many tokens are in target value using path info
         target_key_id = tokenizer.vocab.encode(KeyToken("target"))
-        in_target_value = (
-            (batch.path_types[:, :, 0] == PATH_TYPE_KEY)
-            & (batch.path_ids[:, :, 0] == target_key_id)
+        in_target_value = (batch.path_types[:, :, 0] == PATH_TYPE_KEY) & (
+            batch.path_ids[:, :, 0] == target_key_id
         )
 
         # For {"nested": 5}, we expect: OBJ_START, Key("nested"), Value(5), OBJ_END
@@ -273,9 +275,8 @@ class TestTargetLossWeightForComplexValues:
 
         # Count tokens in target value
         target_key_id = tokenizer.vocab.encode(KeyToken("target"))
-        in_target_value = (
-            (batch.path_types[:, :, 0] == PATH_TYPE_KEY)
-            & (batch.path_ids[:, :, 0] == target_key_id)
+        in_target_value = (batch.path_types[:, :, 0] == PATH_TYPE_KEY) & (
+            batch.path_ids[:, :, 0] == target_key_id
         )
 
         # For [1, 2, 3], we expect: ARRAY_START, Value(1), Value(2), Value(3), ARRAY_END
@@ -578,7 +579,11 @@ class TestContinuousHeadWeightedLoss:
 
         loss_no_weights = head.nll_loss(weights, means, log_vars, targets, mask)
         loss_uniform = head.nll_loss(
-            weights, means, log_vars, targets, mask,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
             loss_weights=torch.ones(batch_size, seq_len),
         )
 
@@ -604,7 +609,11 @@ class TestContinuousHeadWeightedLoss:
 
         loss_unweighted = head.nll_loss(weights, means, log_vars, targets, mask)
         loss_weighted = head.nll_loss(
-            weights, means, log_vars, targets, mask,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
             loss_weights=loss_weights,
         )
 

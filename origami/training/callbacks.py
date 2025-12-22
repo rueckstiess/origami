@@ -341,7 +341,7 @@ class TableLogCallback(TrainerCallback):
             f"step: {state.global_step}",
             f"epoch: {state.epoch}",
             f"lr: {state.current_lr:.2e}",
-            f"batch_dt: {batch_dt_ms:4.0f}ms",
+            f"batch_dt: {batch_dt_ms:3.0f}ms",
             f"loss: {state.current_batch_loss:.4f}",
         ]
 
