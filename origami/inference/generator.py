@@ -49,6 +49,10 @@ class PathState:
     # Current array index for array context
     array_index: int = 0
 
+    # Track seen key token IDs at each object depth level
+    # Each entry corresponds to an object in context_stack (only for objects, not arrays)
+    seen_keys_stack: list[set[int]] = field(default_factory=list)
+
     def get_current_path(self) -> list[tuple[int, int]]:
         """Get the path for the current position."""
         if not self.context_stack:
@@ -63,6 +67,7 @@ class PathState:
         # Use value path to include current key if present
         base_path = self.get_value_path()
         self.context_stack.append(("object", base_path))
+        self.seen_keys_stack.append(set())  # Track keys for this object
         self.current_key = None  # Clear after consuming
 
     def push_array(self) -> None:
@@ -79,12 +84,18 @@ class PathState:
     def pop_context(self) -> None:
         """Pop the current context from the stack."""
         if self.context_stack:
-            self.context_stack.pop()
+            ctx_type, _ = self.context_stack.pop()
+            # Only objects have seen_keys tracking
+            if ctx_type == "object" and self.seen_keys_stack:
+                self.seen_keys_stack.pop()
         self.current_key = None
 
     def set_key(self, key_type: int, key_id: int) -> None:
         """Set the current key for an object context."""
         self.current_key = (key_type, key_id)
+        # Record this key as seen in current object
+        if self.seen_keys_stack:
+            self.seen_keys_stack[-1].add(key_id)
 
     def get_value_path(self) -> list[tuple[int, int]]:
         """Get the path for a value token (includes the key/index)."""
@@ -105,12 +116,19 @@ class PathState:
         """Advance the array index after processing an element."""
         self.array_index += 1
 
+    def get_seen_keys(self) -> set[int]:
+        """Get the set of key token IDs seen in the current object context."""
+        if self.seen_keys_stack:
+            return self.seen_keys_stack[-1]
+        return set()
+
     def clone(self) -> "PathState":
         """Create a deep copy of the path state."""
         new_state = PathState()
         new_state.context_stack = [(ctx_type, list(path)) for ctx_type, path in self.context_stack]
         new_state.current_key = self.current_key
         new_state.array_index = self.array_index
+        new_state.seen_keys_stack = [s.copy() for s in self.seen_keys_stack]
         return new_state
 
 
@@ -141,12 +159,15 @@ class OrigamiGenerator:
         self,
         model: "OrigamiModel",
         tokenizer: "JSONTokenizer",
+        prevent_duplicate_keys: bool = True,
     ):
         """Initialize generator.
 
         Args:
             model: Trained ORIGAMI model
             tokenizer: JSONTokenizer with fitted vocabulary
+            prevent_duplicate_keys: If True (default), prevent generating duplicate
+                keys within the same JSON object during generation.
 
         Note:
             The Generator uses the model's current device dynamically.
@@ -157,6 +178,7 @@ class OrigamiGenerator:
 
         self.model = model
         self.tokenizer = tokenizer
+        self.prevent_duplicate_keys = prevent_duplicate_keys
         self.model.eval()
 
         # Collator for batch creation (include_labels=False for inference)
@@ -183,6 +205,60 @@ class OrigamiGenerator:
     def device(self) -> torch.device:
         """Get the model's current device dynamically."""
         return next(self.model.parameters()).device
+
+    def _get_duplicate_key_mask(
+        self,
+        path_states: list[PathState],
+        grammar_state: tuple[Tensor, ...] | None,
+    ) -> Tensor:
+        """Create mask for duplicate keys that should be suppressed.
+
+        Args:
+            path_states: List of PathState for each sequence in the batch
+            grammar_state: Current grammar PDA state tuple, or None
+
+        Returns:
+            Boolean tensor (batch, vocab_size) where True = should be masked out
+        """
+        batch_size = len(path_states)
+        vocab = self.tokenizer.vocab
+        device = self.device
+
+        # Initialize mask (False = don't mask, True = mask out)
+        mask = torch.zeros(batch_size, vocab.size, dtype=torch.bool, device=device)
+
+        # Check if we're in "expecting key" state (inside object, not awaiting value)
+        # We can infer this from grammar_state if available
+        if grammar_state is not None:
+            stack, depth, awaiting_value, _, _, _ = grammar_state
+            # Get current container type
+            depth_idx = (depth - 1).clamp(min=0).unsqueeze(1)
+            current_container = torch.gather(stack, 1, depth_idx).squeeze(1)
+            # We're expecting a key when: in object AND not awaiting value
+            # STACK_OBJECT = 1 (from origami.constraints.json_grammar)
+            expecting_key = (current_container == 1) & ~awaiting_value
+        else:
+            # Fallback: check path_states directly
+            expecting_key = torch.tensor(
+                [
+                    bool(s.context_stack)
+                    and s.context_stack[-1][0] == "object"
+                    and s.current_key is None
+                    for s in path_states
+                ],
+                device=device,
+            )
+
+        # For sequences expecting a key, mask out already-seen keys
+        for i, (state, expects_key) in enumerate(
+            zip(path_states, expecting_key.tolist(), strict=True)
+        ):
+            if expects_key:
+                seen = state.get_seen_keys()
+                for key_id in seen:
+                    mask[i, key_id] = True
+
+        return mask
 
     @torch.inference_mode()
     def generate(
@@ -475,6 +551,11 @@ class OrigamiGenerator:
             # Apply grammar constraints using pre-computed valid mask
             if next_valid_mask is not None:
                 next_logits = next_logits.masked_fill(~next_valid_mask, float("-inf"))
+
+            # Apply duplicate key prevention
+            if self.prevent_duplicate_keys:
+                dup_key_mask = self._get_duplicate_key_mask(path_states, grammar_state)
+                next_logits = next_logits.masked_fill(dup_key_mask, float("-inf"))
 
             # Disallow complex values (objects/arrays) if requested
             if not allow_complex_values:

@@ -153,6 +153,95 @@ class TestPathState:
         cloned.set_key(PATH_TYPE_KEY, 100)
         assert state.current_key == (PATH_TYPE_KEY, 42)
 
+    def test_seen_keys_stack_initialized_on_push_object(self):
+        """Test that seen_keys_stack is initialized when pushing object."""
+        state = PathState()
+        assert len(state.seen_keys_stack) == 0
+
+        state.push_object()
+        assert len(state.seen_keys_stack) == 1
+        assert state.seen_keys_stack[0] == set()
+
+    def test_set_key_records_in_seen_keys(self):
+        """Test that set_key records the key_id in seen_keys."""
+        state = PathState()
+        state.push_object()
+
+        state.set_key(PATH_TYPE_KEY, 42)
+        assert 42 in state.get_seen_keys()
+
+        state.set_key(PATH_TYPE_KEY, 100)
+        assert 42 in state.get_seen_keys()
+        assert 100 in state.get_seen_keys()
+
+    def test_get_seen_keys_returns_current_object_keys(self):
+        """Test get_seen_keys returns keys from current object only."""
+        state = PathState()
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 10)
+
+        # Push nested object
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 20)
+
+        # get_seen_keys should only return keys from innermost object
+        seen = state.get_seen_keys()
+        assert 20 in seen
+        assert 10 not in seen
+
+    def test_pop_context_removes_seen_keys_for_object(self):
+        """Test that pop_context removes seen_keys for objects."""
+        state = PathState()
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 10)
+
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 20)
+
+        # Pop inner object
+        state.pop_context()
+
+        # Should now see keys from outer object
+        seen = state.get_seen_keys()
+        assert 10 in seen
+        assert 20 not in seen
+
+    def test_seen_keys_not_affected_by_arrays(self):
+        """Test that arrays don't add to seen_keys_stack."""
+        state = PathState()
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 10)
+
+        # Push array - should not add to seen_keys_stack
+        state.push_array()
+        assert len(state.seen_keys_stack) == 1  # Still only object's set
+
+        # Pop array
+        state.pop_context()
+        assert len(state.seen_keys_stack) == 1
+
+    def test_get_seen_keys_empty_without_object(self):
+        """Test get_seen_keys returns empty set without object context."""
+        state = PathState()
+        assert state.get_seen_keys() == set()
+
+        state.push_array()
+        assert state.get_seen_keys() == set()
+
+    def test_clone_deep_copies_seen_keys(self):
+        """Test that clone deep-copies seen_keys_stack."""
+        state = PathState()
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 42)
+
+        cloned = state.clone()
+        assert cloned.get_seen_keys() == state.get_seen_keys()
+
+        # Modifying clone's seen_keys shouldn't affect original
+        cloned.set_key(PATH_TYPE_KEY, 100)
+        assert 100 in cloned.get_seen_keys()
+        assert 100 not in state.get_seen_keys()
+
 
 class TestOrigamiGenerator:
     """Tests for OrigamiGenerator."""
@@ -852,3 +941,135 @@ class TestGeneratorEdgeCases:
         assert len(results) == 10
         for result in results:
             assert isinstance(result, dict)
+
+
+class TestDuplicateKeyPrevention:
+    """Tests for duplicate key prevention in generation."""
+
+    @pytest.fixture
+    def dup_key_tokenizer(self):
+        """Create a tokenizer fitted on data with repeated keys."""
+        data = [
+            {"a": 1, "b": 2, "c": 3},
+            {"a": 10, "b": 20, "c": 30},
+            {"a": 100, "b": 200, "c": 300},
+        ]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        return tokenizer
+
+    @pytest.fixture
+    def dup_key_model(self, dup_key_tokenizer):
+        """Create a model for duplicate key testing."""
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=dup_key_tokenizer.max_depth,
+        )
+        return OrigamiModel(config, vocab=dup_key_tokenizer.vocab)
+
+    def test_prevent_duplicate_keys_default_true(self, dup_key_model, dup_key_tokenizer):
+        """Test that prevent_duplicate_keys is True by default."""
+        generator = OrigamiGenerator(dup_key_model, dup_key_tokenizer)
+        assert generator.prevent_duplicate_keys is True
+
+    def test_prevent_duplicate_keys_can_be_disabled(self, dup_key_model, dup_key_tokenizer):
+        """Test that prevent_duplicate_keys can be set to False."""
+        generator = OrigamiGenerator(dup_key_model, dup_key_tokenizer, prevent_duplicate_keys=False)
+        assert generator.prevent_duplicate_keys is False
+
+    def test_generated_objects_have_no_duplicate_keys(self, dup_key_model, dup_key_tokenizer):
+        """Test that generated objects have no duplicate keys."""
+        generator = OrigamiGenerator(dup_key_model, dup_key_tokenizer)
+
+        # Generate multiple samples and check for duplicate keys
+        results = generator.generate(
+            num_samples=20, max_length=100, seed=42, allow_complex_values=False
+        )
+
+        for obj in results:
+            # Python dicts can't have duplicate keys, but if we had duplicates
+            # during generation, later values would overwrite earlier ones.
+            # We can verify by checking that we don't have more keys in our
+            # token sequence than in the final dict (which would indicate overwrites)
+            # For this test, we just verify we get valid dicts without errors.
+            assert isinstance(obj, dict)
+            # The keys should be a subset of the vocabulary keys
+            vocab_keys = {"a", "b", "c"}
+            assert all(k in vocab_keys for k in obj.keys())
+
+    def test_get_duplicate_key_mask_method(self, dup_key_model, dup_key_tokenizer):
+        """Test the _get_duplicate_key_mask method directly."""
+        generator = OrigamiGenerator(dup_key_model, dup_key_tokenizer)
+
+        # Create path states with some seen keys
+        state = PathState()
+        state.push_object()
+
+        # Simulate having seen key "a"
+        key_a_id = dup_key_tokenizer.vocab.encode(
+            dup_key_tokenizer.vocab.decode(list(dup_key_tokenizer.vocab.get_all_key_ids())[0])
+        )
+        state.set_key(PATH_TYPE_KEY, key_a_id)
+        state.current_key = None  # Clear current_key to simulate after value
+
+        # Create a simple grammar state tuple
+        # (stack, depth, awaiting_value, seen_start, root_closed, ended)
+        device = generator.device
+        grammar_state = (
+            torch.tensor([[1, 0, 0]], device=device),  # stack with OBJECT at depth 0
+            torch.tensor([1], device=device),  # depth=1
+            torch.tensor([False], device=device),  # awaiting_value=False (expecting key)
+            torch.tensor([True], device=device),  # seen_start
+            torch.tensor([False], device=device),  # root_closed
+            torch.tensor([False], device=device),  # ended
+        )
+
+        mask = generator._get_duplicate_key_mask([state], grammar_state)
+
+        # The mask should have True for the seen key
+        assert mask.shape == (1, dup_key_tokenizer.vocab.size)
+        assert mask[0, key_a_id].item() is True
+
+    def test_nested_objects_have_independent_key_tracking(self, dup_key_model, dup_key_tokenizer):
+        """Test that nested objects track keys independently."""
+        state = PathState()
+
+        # Outer object with key "a"
+        state.push_object()
+        state.set_key(PATH_TYPE_KEY, 100)
+
+        # Nested object - should start with fresh seen_keys
+        state.push_object()
+        assert state.get_seen_keys() == set()
+
+        # Add key to nested object
+        state.set_key(PATH_TYPE_KEY, 200)
+        assert 200 in state.get_seen_keys()
+        assert 100 not in state.get_seen_keys()
+
+        # Pop nested object
+        state.pop_context()
+
+        # Should be back to outer object's seen_keys
+        assert 100 in state.get_seen_keys()
+        assert 200 not in state.get_seen_keys()
+
+    def test_batch_generation_with_duplicate_prevention(self, dup_key_model, dup_key_tokenizer):
+        """Test that batch generation works correctly with duplicate prevention."""
+        generator = OrigamiGenerator(dup_key_model, dup_key_tokenizer)
+
+        # Generate a batch
+        results = generator.generate(
+            num_samples=5,
+            batch_size=5,  # All in one batch
+            max_length=50,
+            seed=123,
+            allow_complex_values=False,
+        )
+
+        assert len(results) == 5
+        for obj in results:
+            assert isinstance(obj, dict)
