@@ -222,7 +222,6 @@ class OrigamiPipeline:
 
         if verbose:
             print(f"Model parameters: {self._model.get_num_parameters():,}")
-            print(f"Training device: {self._training_device}")
 
         # Step 4: Store preprocessed data for train()
         self._train_processed = train_processed

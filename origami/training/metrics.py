@@ -18,6 +18,13 @@ Example:
 from collections.abc import Callable, Hashable
 from typing import Any
 
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+
+def root_mean_squared_error(y_true: list, y_pred: list) -> float:
+    """Root Mean Squared Error (RMSE)."""
+    return mean_squared_error(y_true, y_pred) ** 0.5
+
 # Metrics that require allow_complex_values=True for correct predictions.
 # These metrics expect arrays or objects as predictions and will return 0.0
 # if the predictor only generates primitive values.
@@ -372,6 +379,10 @@ METRIC_REGISTRY: dict[str, MetricFn] = {
     "array_recall": array_recall,
     "array_jaccard": array_jaccard,
     "object_key_accuracy": object_key_accuracy,
+    # Regression metrics (sklearn)
+    "mse": mean_squared_error,
+    "mae": mean_absolute_error,
+    "rmse": root_mean_squared_error,
 }
 
 

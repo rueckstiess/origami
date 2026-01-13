@@ -994,3 +994,136 @@ class TestPipelinePreprocessorSerialization:
 
         result = OrigamiPipeline._load_preprocessor("NumericScaler", None)
         assert result is None
+
+
+class TestPipelineEvaluateRegressionMetrics:
+    """Tests for regression metrics (mse, rmse, mae) with scaled numeric fields."""
+
+    @pytest.fixture
+    def pipeline_with_scaled_numerics(self):
+        """Create a pipeline with scaled numeric target field."""
+        import random
+
+        torch.manual_seed(42)
+        random.seed(42)
+
+        # Data with high-cardinality numeric field that will be scaled
+        # Use values in a specific range so we can verify inverse transform works
+        data = [{"category": i % 3, "price": 100.0 + i * 10.0} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2, use_continuous_head=True),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10),
+            training=TrainingConfig(target_key="price"),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=3, verbose=False)
+
+        return pipeline, data
+
+    def test_evaluate_mse_with_scaled_numerics(self, pipeline_with_scaled_numerics):
+        """Test that MSE metric works with scaled numeric fields."""
+        pipeline, data = pipeline_with_scaled_numerics
+
+        results = pipeline.evaluate(
+            data[:10],
+            target_key="price",
+            metrics={"mse": "mse"},
+        )
+
+        assert "loss" in results
+        assert "mse" in results
+        assert isinstance(results["mse"], float)
+        # MSE should be non-negative
+        assert results["mse"] >= 0
+
+    def test_evaluate_rmse_with_scaled_numerics(self, pipeline_with_scaled_numerics):
+        """Test that RMSE metric works with scaled numeric fields."""
+        pipeline, data = pipeline_with_scaled_numerics
+
+        results = pipeline.evaluate(
+            data[:10],
+            target_key="price",
+            metrics={"rmse": "rmse"},
+        )
+
+        assert "rmse" in results
+        assert isinstance(results["rmse"], float)
+        # RMSE should be non-negative
+        assert results["rmse"] >= 0
+
+    def test_evaluate_mae_with_scaled_numerics(self, pipeline_with_scaled_numerics):
+        """Test that MAE metric works with scaled numeric fields."""
+        pipeline, data = pipeline_with_scaled_numerics
+
+        results = pipeline.evaluate(
+            data[:10],
+            target_key="price",
+            metrics={"mae": "mae"},
+        )
+
+        assert "mae" in results
+        assert isinstance(results["mae"], float)
+        # MAE should be non-negative
+        assert results["mae"] >= 0
+
+    def test_evaluate_multiple_regression_metrics(self, pipeline_with_scaled_numerics):
+        """Test that multiple regression metrics can be computed together."""
+        pipeline, data = pipeline_with_scaled_numerics
+
+        results = pipeline.evaluate(
+            data[:10],
+            target_key="price",
+            metrics={"mse": "mse", "rmse": "rmse", "mae": "mae"},
+        )
+
+        assert "mse" in results
+        assert "rmse" in results
+        assert "mae" in results
+
+        # RMSE should equal sqrt(MSE)
+        assert abs(results["rmse"] - results["mse"] ** 0.5) < 1e-6
+
+    def test_evaluate_regression_metrics_in_original_scale(self, pipeline_with_scaled_numerics):
+        """Test that regression metrics are computed in original scale, not scaled space.
+
+        This is the key test: both y_true and y_pred should be inverse-transformed
+        so metrics are interpretable in original units (e.g., dollars for price).
+        """
+        pipeline, data = pipeline_with_scaled_numerics
+
+        # Get the scaler stats to understand the scale
+        stats = pipeline._preprocessor.get_scaler_stats("price")
+        original_std = stats["std"]
+
+        results = pipeline.evaluate(
+            data[:10],
+            target_key="price",
+            metrics={"rmse": "rmse"},
+        )
+
+        # If metrics were computed in scaled space, RMSE would be ~1.0 (z-score scale)
+        # In original scale, RMSE should be proportional to the data's std dev
+        # Even a bad model should have RMSE roughly in the same order of magnitude as std
+        assert results["rmse"] > 1.0, (
+            f"RMSE {results['rmse']:.2f} is too small - likely computed in scaled space. "
+            f"Original std is {original_std:.2f}"
+        )
+
+    def test_evaluate_y_true_unwrapped_from_scaled_numeric(self, pipeline_with_scaled_numerics):
+        """Test that y_true values are properly unwrapped from ScaledNumeric objects.
+
+        This is a regression test for the bug where y_true contained ScaledNumeric
+        objects instead of floats, causing sklearn metrics to fail.
+        """
+        pipeline, data = pipeline_with_scaled_numerics
+
+        # This should not raise an error about ScaledNumeric types
+        results = pipeline.evaluate(
+            data[:5],
+            target_key="price",
+            metrics={"mse": "mse"},
+        )
+
+        # If we get here without error, ScaledNumeric was properly unwrapped
+        assert "mse" in results

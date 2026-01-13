@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from origami.preprocessing.numeric_scaler import ScaledNumeric
 from origami.training.collator import OrigamiDataCollator
 from origami.training.dataset import OrigamiDataset
 from origami.training.metrics import MetricSpec, resolve_metrics
@@ -241,8 +242,8 @@ class OrigamiEvaluator:
                 inverse_transform_fn=self.inverse_transform,
             )
 
-        # Extract true values
-        y_true = [obj[self.target_key] for obj in data]
+        # Extract true values and prepare them (unwrap ScaledNumeric, inverse transform)
+        y_true = [self._prepare_true_value(obj[self.target_key]) for obj in data]
 
         # Get predictions (predictor handles device management)
         y_pred = self._predictor.predict_batch(
@@ -254,6 +255,22 @@ class OrigamiEvaluator:
         )
 
         return y_true, y_pred
+
+    def _prepare_true_value(self, value: Any) -> Any:
+        """Unwrap ScaledNumeric and apply inverse transform if configured.
+
+        This ensures y_true matches y_pred (which is already inverse-transformed
+        by the predictor) for consistent metric computation.
+        """
+        # Unwrap ScaledNumeric
+        if isinstance(value, ScaledNumeric):
+            value = value.value
+
+        # Apply inverse transform if configured (to match y_pred)
+        if self.inverse_transform and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return self.inverse_transform(value, self.target_key)
+
+        return value
 
 
 def evaluate(
