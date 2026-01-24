@@ -202,6 +202,7 @@ class TrainingConfig(PrettyReprMixin):
 
     # Multi-GPU training
     use_accelerate: bool = True  # Use accelerate for distributed training if installed
+    mixed_precision: Literal["no", "fp16", "bf16"] = "no"  # Mixed precision mode for accelerate
 
     # Data loading
     dataloader_num_workers: int = 0  # Number of DataLoader workers (0 = main process only)

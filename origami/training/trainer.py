@@ -62,6 +62,8 @@ class TrainResult:
     global_step: int = 0
     best_eval_loss: float = float("inf")
     epoch_step: int = 0
+    epoch_completed: bool = False  # True after epoch finishes, False at start
+    epoch_resume_step: int = 0  # Steps skipped at start of epoch when resuming mid-epoch
     current_batch_loss: float = 0.0
     current_lr: float = 0.0
     current_batch_dt: float = 0.0  # Batch time in seconds
@@ -130,6 +132,7 @@ class OrigamiTrainer:
         config: "TrainingConfig | None" = None,
         device: torch.device | None = None,
         callbacks: list[TrainerCallback] | None = None,
+        training_state: dict | None = None,
     ):
         """Initialize trainer.
 
@@ -143,6 +146,8 @@ class OrigamiTrainer:
             callbacks: List of TrainerCallback instances for monitoring/customization.
                      Use ProgressCallback for progress bars. Evaluation metrics are
                      computed automatically based on TrainingConfig settings.
+            training_state: Optional training state dict for resuming training.
+                     Contains optimizer_state, scheduler_state, epoch, global_step.
         """
         from origami.config import TrainingConfig
 
@@ -161,7 +166,7 @@ class OrigamiTrainer:
 
         if self._use_accelerate:
             # Use accelerate for device management and distributed training
-            self._accelerator = Accelerator()
+            self._accelerator = Accelerator(mixed_precision=self.config.mixed_precision)
             self.device = self._accelerator.device
         else:
             # Standard single-device training
@@ -219,12 +224,17 @@ class OrigamiTrainer:
             fused=torch.cuda.is_available(),
         )
 
-        # Calculate total training steps for scheduler
-        # With accelerate, each GPU processes dataset_size / num_gpus samples
-        steps_per_epoch = max(1, len(self.train_dataset) // self.config.batch_size)
+        # Calculate training steps
+        # total_steps: for LR scheduler - based on full epochs (undivided)
+        # steps_per_epoch: for progress bar - actual batches per GPU
+        steps_per_epoch_full = max(1, len(self.train_dataset) // self.config.batch_size)
+        self.total_steps = steps_per_epoch_full * self.config.num_epochs
+
+        # With accelerate, each GPU processes dataset_size / num_gpus batches per epoch
         if self._use_accelerate:
-            steps_per_epoch = steps_per_epoch // self._accelerator.num_processes
-        self.total_steps = steps_per_epoch * self.config.num_epochs
+            self.steps_per_epoch = steps_per_epoch_full // self._accelerator.num_processes
+        else:
+            self.steps_per_epoch = steps_per_epoch_full
 
         # Create scheduler with linear warmup
         self.scheduler = self._create_scheduler()
@@ -241,6 +251,11 @@ class OrigamiTrainer:
 
         # Training state
         self.state = TrainResult()
+        self._resume_steps_in_epoch = 0  # Steps to skip when resuming mid-epoch
+
+        # Restore training state if provided (for checkpoint resumption)
+        if training_state is not None:
+            self._restore_training_state(training_state)
 
         # Callback handler
         self.callback_handler = CallbackHandler(callbacks or [])
@@ -474,15 +489,28 @@ class OrigamiTrainer:
         and returning with interrupted=True. The model state is preserved
         and can be saved.
 
+        When resuming from a checkpoint, training continues from the next
+        epoch after the checkpoint was saved.
+
         Returns:
             TrainResult with completion status and training metrics
         """
         self.callback_handler.fire_event("on_train_begin", self, self.state, None)
 
+        # Determine starting epoch (resume from checkpoint or fresh start)
+        # If resuming and epoch was completed, start from next epoch
+        # If resuming mid-epoch, start from saved epoch (will skip to saved step)
+        if self.state.global_step > 0:
+            start_epoch = self.state.epoch + 1 if self.state.epoch_completed else self.state.epoch
+        else:
+            start_epoch = 0
+
         try:
-            for epoch in range(self.config.num_epochs):
+            for epoch in range(start_epoch, self.config.num_epochs):
                 self.state.epoch = epoch
+                self.state.epoch_completed = False  # Mark epoch as in-progress
                 epoch_stats = self._train_epoch()
+                self.state.epoch_completed = True  # Mark epoch as completed
 
                 self.callback_handler.fire_event("on_epoch_end", self, self.state, epoch_stats)
 
@@ -545,12 +573,22 @@ class OrigamiTrainer:
         num_batches = 0
         start_time = time.time()
 
-        # Reset epoch step counter
+        # Reset epoch step counter (or start from resume point)
         self.state.epoch_step = 0
+        steps_to_skip = self._resume_steps_in_epoch
+        self._resume_steps_in_epoch = 0  # Reset for next epoch
+        # Track resume position for callbacks (e.g., progress bar initial position)
+        self.state.epoch_resume_step = steps_to_skip
 
         self.callback_handler.fire_event("on_epoch_begin", self, self.state, None)
 
         for batch in train_loader:
+            # Skip batches when resuming mid-epoch
+            if steps_to_skip > 0:
+                steps_to_skip -= 1
+                self.state.epoch_step += 1
+                continue
+
             self.callback_handler.fire_event("on_batch_begin", self, self.state, None)
 
             batch_start = time.time()
@@ -794,3 +832,49 @@ class OrigamiTrainer:
         self.state.epoch = state_dict["epoch"]
         self.state.global_step = state_dict["global_step"]
         self.state.best_eval_loss = state_dict["best_eval_loss"]
+
+    def get_training_state(self) -> dict:
+        """Get current training state for checkpoint resumption.
+
+        Returns a dictionary that can be passed to a new trainer's
+        `training_state` parameter to resume training.
+
+        Returns:
+            Dict containing optimizer_state, scheduler_state, and training progress.
+        """
+        return {
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
+            "epoch": self.state.epoch,
+            "global_step": self.state.global_step,
+            "best_eval_loss": self.state.best_eval_loss,
+            "epoch_completed": self.state.epoch_completed,
+            "steps_in_epoch": self.state.epoch_step,  # For mid-epoch resumption
+        }
+
+    def _restore_training_state(self, state: dict) -> None:
+        """Restore training state from checkpoint.
+
+        Called during __init__ when training_state is provided.
+
+        Args:
+            state: Training state dict from get_training_state() or checkpoint.
+        """
+        # Restore optimizer and scheduler state
+        if "optimizer_state_dict" in state:
+            self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        if "scheduler_state_dict" in state:
+            self.scheduler.load_state_dict(state["scheduler_state_dict"])
+
+        # Restore training progress
+        self.state.epoch = state.get("epoch", 0)
+        self.state.global_step = state.get("global_step", 0)
+        self.state.best_eval_loss = state.get("best_eval_loss", float("inf"))
+        self.state.epoch_completed = state.get("epoch_completed", True)  # Default True for backwards compat
+
+        # Track steps to skip for mid-epoch resumption
+        # Only relevant if epoch was not completed
+        if not self.state.epoch_completed:
+            self._resume_steps_in_epoch = state.get("steps_in_epoch", 0)
+        else:
+            self._resume_steps_in_epoch = 0

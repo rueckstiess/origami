@@ -21,12 +21,6 @@ from origami.tokenizer.vocabulary import Vocabulary
 
 from .json_grammar_numba import NUMBA_AVAILABLE, compute_grammar_mask_parallel
 
-# Print Numba availability at import time (always visible)
-if NUMBA_AVAILABLE:
-    print("[origami] Numba available - using parallel grammar mask computation")
-else:
-    print("[origami] Numba NOT available - using PyTorch grammar mask computation")
-
 # Stack content types
 STACK_EMPTY = 0
 STACK_OBJECT = 1

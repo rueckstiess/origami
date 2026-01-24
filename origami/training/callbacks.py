@@ -181,7 +181,13 @@ class ProgressCallback(TrainerCallback):
         """Print training info at start."""
         if not trainer.is_main_process:
             return
-        print(f"Training on {trainer.device}")
+
+        # Check if resuming from checkpoint
+        if state.global_step > 0:
+            print(f"Resuming training from epoch {state.epoch + 1}, step {state.global_step}")
+        else:
+            print(f"Training on {trainer.device}")
+
         print(f"Train samples: {len(trainer.train_dataset)}")
         if trainer.eval_dataset:
             print(f"Eval samples: {len(trainer.eval_dataset)}")
@@ -199,10 +205,11 @@ class ProgressCallback(TrainerCallback):
         """Create progress bar for epoch."""
         if not trainer.is_main_process:
             return
-        # Use trainer's total_steps which accounts for multi-GPU
-        self._num_batches = trainer.total_steps // trainer.config.num_epochs
+        # Use trainer's steps_per_epoch which accounts for multi-GPU
+        self._num_batches = trainer.steps_per_epoch
         self._pbar = tqdm(
             total=self._num_batches,
+            initial=state.epoch_resume_step,  # Start at resume position if mid-epoch
             desc=f"Epoch {state.epoch + 1}",
             leave=False,
             unit="batch",

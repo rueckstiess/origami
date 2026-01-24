@@ -996,6 +996,327 @@ class TestPipelinePreprocessorSerialization:
         assert result is None
 
 
+class TestPipelineCheckpointResume:
+    """Tests for checkpoint save/load/resume functionality."""
+
+    def test_save_includes_training_state(self, tmp_path):
+        """Test that save includes training state by default."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=3, batch_size=8),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=3, verbose=False)
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Load checkpoint and verify training state is present
+        checkpoint = torch.load(path, weights_only=False)
+        assert "training_state" in checkpoint
+        assert "optimizer_state_dict" in checkpoint["training_state"]
+        assert "scheduler_state_dict" in checkpoint["training_state"]
+        assert "epoch" in checkpoint["training_state"]
+        assert "global_step" in checkpoint["training_state"]
+
+    def test_save_without_training_state(self, tmp_path):
+        """Test that save can exclude training state."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=2, batch_size=8),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2, verbose=False)
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path, include_training_state=False)
+
+        # Verify training state is not included
+        checkpoint = torch.load(path, weights_only=False)
+        assert "training_state" not in checkpoint
+
+    def test_load_restores_training_state(self, tmp_path):
+        """Test that load restores training state."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=3, batch_size=8),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=3, verbose=False)
+
+        # Capture training state before save
+        original_epoch = pipeline._training_state["epoch"]
+        original_step = pipeline._training_state["global_step"]
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Load and verify training state is restored
+        loaded = OrigamiPipeline.load(path)
+        assert loaded._training_state is not None
+        assert loaded._training_state["epoch"] == original_epoch
+        assert loaded._training_state["global_step"] == original_step
+
+    def test_preprocess_detects_resume(self, tmp_path):
+        """Test that preprocess() detects resumption and skips refitting."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": float(i)} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10),
+            training=TrainingConfig(num_epochs=2, batch_size=8),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2, verbose=False)
+
+        # Save original preprocessor state
+        original_scaled_fields = pipeline._preprocessor.scaled_fields.copy()
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Load checkpoint
+        loaded = OrigamiPipeline.load(path)
+
+        # Before preprocess, train data should be None
+        assert loaded._train_processed is None
+
+        # Call preprocess (should detect resume and use existing preprocessor)
+        loaded.preprocess(data, verbose=False)
+
+        # Verify preprocessor was not refit (same scaled fields)
+        assert loaded._preprocessor.scaled_fields == original_scaled_fields
+        # Verify data was processed
+        assert loaded._train_processed is not None
+
+    def test_resume_training_after_completed_epoch(self, tmp_path):
+        """Test that resumed training continues from the next epoch when saved after completion.
+
+        When an epoch completes fully and is saved, resuming should start from
+        the next epoch (no replay of completed work).
+        """
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=5, batch_size=8),
+        )
+
+        # Train for 2 epochs (completes fully)
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2, verbose=False)
+
+        # Verify we trained for 2 epochs and epoch is marked as completed
+        assert pipeline._training_state["epoch"] == 1  # 0-indexed
+        assert pipeline._training_state["epoch_completed"] is True
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Load and resume training for remaining epochs
+        loaded = OrigamiPipeline.load(path)
+        loaded.preprocess(data, verbose=False)
+
+        # Should continue from epoch 2 (index), not replay epoch 1
+        loaded.train(epochs=5, verbose=False)
+
+        # Final epoch should be 4 (0-indexed)
+        assert loaded._training_state["epoch"] == 4
+
+    def test_full_checkpoint_resume_workflow(self, tmp_path):
+        """Test the complete checkpoint resume workflow.
+
+        Simulates a spot instance scenario:
+        1. Start training from scratch
+        2. Save checkpoint after a few epochs
+        3. Load checkpoint (simulating restart)
+        4. Resume training seamlessly
+        """
+        torch.manual_seed(42)
+        data = [{"label": i % 3, "x": i, "y": float(i * 2)} for i in range(50)]
+        eval_data = [{"label": i % 3, "x": i + 100, "y": float(i * 2 + 200)} for i in range(10)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10),
+            training=TrainingConfig(num_epochs=6, batch_size=8),
+        )
+
+        # Phase 1: Initial training
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, eval_data=eval_data, epochs=3, verbose=False)
+
+        initial_step = pipeline._training_state["global_step"]
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Phase 2: Simulate restart - load checkpoint
+        # This is the key workflow: same code path for initial and resume
+        loaded = OrigamiPipeline.load(path)
+        loaded.preprocess(data, eval_data=eval_data, verbose=False)
+        loaded.train(epochs=6, verbose=False)
+
+        # Verify training completed all epochs
+        assert loaded._training_state["epoch"] == 5  # 0-indexed
+        # Verify global_step increased beyond checkpoint
+        assert loaded._training_state["global_step"] > initial_step
+
+        # Verify model still works for inference
+        prediction = loaded.predict({"label": 0, "x": 999, "y": 0.0}, target_key="label")
+        assert prediction is not None
+
+    def test_resume_with_eval_data(self, tmp_path):
+        """Test that resume works correctly with evaluation data."""
+        torch.manual_seed(42)
+        train_data = [{"a": i, "b": i % 2} for i in range(40)]
+        eval_data = [{"a": i, "b": i % 2} for i in range(10)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(
+                num_epochs=4,
+                batch_size=8,
+                eval_strategy="epoch",
+            ),
+        )
+
+        # Train initially
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(train_data, eval_data=eval_data, epochs=2, verbose=False)
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Resume
+        loaded = OrigamiPipeline.load(path)
+        loaded.preprocess(train_data, eval_data=eval_data, verbose=False)
+        loaded.train(epochs=4, verbose=False)
+
+        # Should complete without error
+        assert loaded._training_state["epoch"] == 3
+
+    def test_state_dict_version_updated(self):
+        """Test that state_dict version is 1.1 for training state support."""
+        torch.manual_seed(42)
+        data = [{"a": i} for i in range(20)]
+
+        pipeline = OrigamiPipeline()
+        pipeline.fit(data, epochs=1, verbose=False)
+
+        state = pipeline.state_dict()
+        assert state["version"] == "1.1"
+
+    def test_resume_via_fit(self, tmp_path):
+        """Test that resume works via fit() as well as preprocess()/train()."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(30)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=4, batch_size=8),
+        )
+
+        # Train for 2 epochs
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2, verbose=False)
+
+        assert pipeline._training_state["epoch"] == 1  # 0-indexed
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Resume using fit() instead of preprocess()/train()
+        loaded = OrigamiPipeline.load(path)
+        loaded.fit(data, epochs=4, verbose=False)
+
+        # Should have completed all 4 epochs
+        assert loaded._training_state["epoch"] == 3  # 0-indexed
+
+    def test_mid_epoch_resume_skips_completed_steps(self, tmp_path):
+        """Test that mid-epoch resumption skips already-completed steps.
+
+        Simulates a mid-epoch interruption by manually setting epoch_completed=False
+        and steps_in_epoch to a partial value.
+        """
+        torch.manual_seed(42)
+        # Use enough data to have multiple batches per epoch
+        data = [{"label": "A", "x": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=3, batch_size=8),
+        )
+
+        # Train for 1 full epoch
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1, verbose=False)
+
+        # Get the number of steps per epoch
+        steps_per_epoch = pipeline._training_state["steps_in_epoch"]
+        assert steps_per_epoch > 5, "Need enough steps to test mid-epoch resume"
+
+        # Simulate mid-epoch interruption by modifying training state
+        # Pretend we're in epoch 1 (0-indexed) and completed 3 steps
+        pipeline._training_state["epoch"] = 1
+        pipeline._training_state["epoch_completed"] = False
+        pipeline._training_state["steps_in_epoch"] = 3
+        # Adjust global_step to match (1 full epoch + 3 steps)
+        pipeline._training_state["global_step"] = steps_per_epoch + 3
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Load and resume
+        loaded = OrigamiPipeline.load(path)
+        loaded.preprocess(data, verbose=False)
+
+        # Should start from epoch 1, skipping first 3 steps
+        loaded.train(epochs=3, verbose=False)
+
+        # Final epoch should be 2 (trained epochs 1 and 2)
+        assert loaded._training_state["epoch"] == 2
+        assert loaded._training_state["epoch_completed"] is True
+
+    def test_mid_epoch_state_saved_correctly(self, tmp_path):
+        """Test that training state correctly reflects mid-epoch state.
+
+        Verifies that epoch_completed is False during training and True after.
+        """
+        torch.manual_seed(42)
+        data = [{"label": "A", "x": i} for i in range(50)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(num_epochs=2, batch_size=8),
+        )
+
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=2, verbose=False)
+
+        # After fit completes, epoch should be marked as completed
+        assert pipeline._training_state["epoch_completed"] is True
+        assert pipeline._training_state["epoch"] == 1  # 0-indexed
+
+        path = tmp_path / "checkpoint.pt"
+        pipeline.save(path)
+
+        # Verify saved state has epoch_completed
+        checkpoint = torch.load(path, weights_only=False)
+        assert "epoch_completed" in checkpoint["training_state"]
+        assert checkpoint["training_state"]["epoch_completed"] is True
+
+
 class TestPipelineEvaluateRegressionMetrics:
     """Tests for regression metrics (mse, rmse, mae) with scaled numeric fields."""
 

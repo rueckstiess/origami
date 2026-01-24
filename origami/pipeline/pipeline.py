@@ -93,6 +93,10 @@ class OrigamiPipeline:
         self._train_processed: list[dict] | None = None
         self._eval_processed: list[dict] | None = None
 
+        # Training state for checkpoint resumption
+        # Populated by load() when loading a checkpoint with training state
+        self._training_state: dict | None = None
+
         # Device management
         # _training_device: resolved device for training (GPU/MPS if available)
         # After inference, model stays on CPU (faster for autoregressive generation)
@@ -171,15 +175,19 @@ class OrigamiPipeline:
     ) -> OrigamiPipeline:
         """Preprocess data and initialize model.
 
-        This method:
+        For fresh training, this method:
         1. Sets up preprocessing based on numeric_mode
-        2. Preprocesses data
+        2. Preprocesses data (fit_transform)
         3. Fits tokenizer to build vocabulary
         4. Creates model with correct configuration
         5. Stores preprocessed data for training
 
+        When resuming from a checkpoint (model already loaded), this method:
+        1. Transforms data using the already-fitted preprocessor
+        2. Stores preprocessed data for training
+        (Tokenizer and model are preserved from checkpoint)
+
         After calling preprocess(), call train() to train the model.
-        Can be called again to reset preprocessing with new data.
 
         Args:
             data: Training data as list of JSON-like dictionaries
@@ -192,6 +200,19 @@ class OrigamiPipeline:
         if not data:
             raise ValueError("Training data cannot be empty")
 
+        # Check if resuming from checkpoint (model already loaded)
+        if self._model is not None:
+            # Resuming: just transform data using existing preprocessor
+            if verbose:
+                print("Resuming from checkpoint - using existing model and preprocessor")
+
+            self._train_processed = self._transform_data(data)
+            self._eval_processed = (
+                self._transform_data(eval_data) if eval_data else None
+            )
+            return self
+
+        # Fresh start: full preprocessing pipeline
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
 
@@ -312,6 +333,7 @@ class OrigamiPipeline:
             config=train_config,
             callbacks=all_callbacks if all_callbacks else None,
             device=trainer_device,
+            training_state=self._training_state,  # Resume from checkpoint if available
         )
 
         # Run training (handles KeyboardInterrupt gracefully)
@@ -320,6 +342,9 @@ class OrigamiPipeline:
         # Mark as fitted regardless of whether training completed or was interrupted
         self._fitted = True
         self._train_result = result
+
+        # Capture training state for potential checkpoint save
+        self._training_state = trainer.get_training_state()
 
         # Reset lazy-initialized inference components
         self._generator = None
@@ -409,11 +434,17 @@ class OrigamiPipeline:
 
         return OrigamiModel(model_config, self._tokenizer.vocab)
 
-    def state_dict(self) -> dict:
+    def state_dict(self, include_training_state: bool = True) -> dict:
         """Get complete state dict for serialization.
 
         Returns a dictionary containing all state needed to reconstruct
         the pipeline: model weights, tokenizer, preprocessor, and config.
+        Optionally includes training state for checkpoint resumption.
+
+        Args:
+            include_training_state: If True (default), include optimizer state,
+                scheduler state, and training progress (epoch, global_step).
+                Required for resuming training from a checkpoint.
 
         Returns:
             State dictionary suitable for torch.save()
@@ -423,8 +454,8 @@ class OrigamiPipeline:
         """
         self._check_fitted()
 
-        return {
-            "version": "1.0",
+        state = {
+            "version": "1.1",  # Bumped for training state support
             "config": asdict(self.config),
             "model_state_dict": self._model.state_dict(),
             "model_config": asdict(self._model.config),
@@ -433,18 +464,26 @@ class OrigamiPipeline:
             "preprocessor_state": self._preprocessor_to_dict(),
         }
 
+        # Include training state if available and requested
+        if include_training_state and self._training_state is not None:
+            state["training_state"] = self._training_state
+
+        return state
+
     @classmethod
     def from_state_dict(cls, state_dict: dict) -> OrigamiPipeline:
         """Create pipeline from state dict.
 
         Reconstructs a complete pipeline from a state dictionary,
         including model, tokenizer, preprocessor, and config.
+        If training state is present, it will be loaded for potential
+        training resumption.
 
         Args:
             state_dict: State dictionary from state_dict() or torch.load()
 
         Returns:
-            Loaded OrigamiPipeline ready for inference
+            Loaded OrigamiPipeline ready for inference or training resumption
         """
         # Reconstruct config (nested dataclasses)
         config_dict = state_dict["config"]
@@ -474,22 +513,30 @@ class OrigamiPipeline:
         # Set training device for potential future fit() calls
         pipeline._training_device = pipeline._resolve_device()
 
+        # Load training state if present (for checkpoint resumption)
+        if "training_state" in state_dict:
+            pipeline._training_state = state_dict["training_state"]
+
         pipeline._fitted = True
         return pipeline
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: str | Path, include_training_state: bool = True) -> None:
         """Save the complete pipeline to a file.
 
         Saves model weights, tokenizer state, preprocessor state, and
-        configuration in a single checkpoint file.
+        configuration in a single checkpoint file. Optionally includes
+        training state for checkpoint resumption.
 
         Args:
             path: Path to save the checkpoint
+            include_training_state: If True (default), include optimizer state,
+                scheduler state, and training progress. Set to False for
+                smaller inference-only checkpoints.
 
         Raises:
             RuntimeError: If pipeline hasn't been fitted
         """
-        torch.save(self.state_dict(), path)
+        torch.save(self.state_dict(include_training_state=include_training_state), path)
 
     @classmethod
     def load(cls, path: str | Path) -> OrigamiPipeline:
@@ -554,7 +601,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         # Preprocess objects
-        processed = self._preprocess_for_inference(objects)
+        processed = self._transform_data(objects)
 
         # Get or create predictor (has inverse_transform_fn configured if needed)
         predictor = self._get_predictor()
@@ -604,7 +651,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         # Preprocess object
-        processed = self._preprocess_for_inference([obj])[0]
+        processed = self._transform_data([obj])[0]
 
         # Get or create predictor
         predictor = self._get_predictor()
@@ -723,7 +770,7 @@ class OrigamiPipeline:
         effective_target_key = target_key or self.config.training.target_key
 
         # Preprocess data
-        processed = self._preprocess_for_inference(data)
+        processed = self._transform_data(data)
 
         # Move to CPU for faster evaluation
         self._ensure_inference_device()
@@ -809,7 +856,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         # Preprocess objects
-        processed = self._preprocess_for_inference(objects)
+        processed = self._transform_data(objects)
 
         # Get or create embedder with appropriate pooling
         embedder = self._get_embedder(pooling)
@@ -831,14 +878,17 @@ class OrigamiPipeline:
                 "Pipeline must be fitted before use. Call fit() or load a checkpoint with load()."
             )
 
-    def _preprocess_for_inference(self, objects: list[dict]) -> list[dict]:
-        """Apply preprocessing for inference.
+    def _transform_data(self, objects: list[dict]) -> list[dict]:
+        """Transform data using the fitted preprocessor.
+
+        Used for both training (when resuming from checkpoint) and inference.
+        The preprocessor must already be fitted (from fit() or load()).
 
         Args:
             objects: Raw input objects
 
         Returns:
-            Preprocessed objects ready for model input
+            Transformed objects ready for model input
         """
         if self._preprocessor is None:
             return objects
