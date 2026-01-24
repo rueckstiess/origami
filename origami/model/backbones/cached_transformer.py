@@ -6,8 +6,6 @@ enabling O(1) per-token generation instead of O(n) when generating sequences.
 
 from __future__ import annotations
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -91,7 +89,6 @@ class CachedMultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
-        self.scale = 1.0 / math.sqrt(self.head_dim)
 
         # Separate projections for Q, K, V
         self.q_proj = nn.Linear(d_model, d_model)
@@ -143,25 +140,23 @@ class CachedMultiHeadAttention(nn.Module):
             # First time caching for this layer
             key, value = kv_cache.update(layer_idx, key, value)
 
-        # Compute attention scores
+        # Compute attention using scaled_dot_product_attention
+        # Uses Flash Attention on CUDA, memory-efficient attention on other backends
         # query: (batch, n_heads, q_len, head_dim)
         # key: (batch, n_heads, kv_len, head_dim)
-        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * self.scale
-        # attn_weights: (batch, n_heads, q_len, kv_len)
+        # value: (batch, n_heads, kv_len, head_dim)
 
-        # Apply attention mask if provided
-        if attention_mask is not None:
-            # Convert boolean mask to additive mask
-            # attention_mask: True = attend, False = mask
-            # We need: 0 = attend, -inf = mask
-            attn_weights = attn_weights.masked_fill(~attention_mask, float("-inf"))
+        # SDPA expects boolean mask where True = mask out (opposite of our convention)
+        sdpa_mask = ~attention_mask if attention_mask is not None else None
 
-        # Softmax and dropout
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-
-        # Apply attention to values
-        attn_output = torch.matmul(attn_weights, value)
+        attn_output = F.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=sdpa_mask,
+            dropout_p=self.dropout.p if self.training else 0.0,
+            is_causal=False,  # Causality is already encoded in the mask
+        )
         # attn_output: (batch, n_heads, q_len, head_dim)
 
         # Reshape back to (batch, seq_len, d_model)
