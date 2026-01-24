@@ -195,6 +195,24 @@ class OrigamiPipeline:
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
 
+        if verbose and self._preprocessor is not None:
+            if isinstance(self._preprocessor, NumericScaler) and self._preprocessor.scaled_fields:
+                print(f"Scaled fields ({len(self._preprocessor.scaled_fields)}):")
+                for path in sorted(self._preprocessor.scaled_fields):
+                    scaler = self._preprocessor.scalers[path]
+                    mean = scaler.mean_[0]
+                    std = scaler.scale_[0]
+                    print(f"  - {path}: mean={mean:.4g}, std={std:.4g}")
+            elif (
+                isinstance(self._preprocessor, NumericDiscretizer)
+                and self._preprocessor.discretized_fields
+            ):
+                print(f"Discretized fields ({len(self._preprocessor.discretized_fields)}):")
+                for path in sorted(self._preprocessor.discretized_fields):
+                    discretizer = self._preprocessor.discretizers[path]
+                    n_bins = discretizer.n_bins_[0]
+                    print(f"  - {path}: {n_bins} bins")
+
         # Step 2: Fit tokenizer on all preprocessed data
         all_processed = train_processed + (eval_processed or [])
         self._tokenizer = JSONTokenizer(
