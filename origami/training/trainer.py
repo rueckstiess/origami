@@ -40,6 +40,23 @@ from origami.tokenizer.vocabulary import KeyToken
 from origami.utils import get_device
 
 from .callbacks import CallbackHandler, TrainerCallback
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    """Initialize DataLoader worker with single-threaded Numba.
+
+    When using multiple DataLoader workers, each worker would otherwise spawn
+    its own Numba thread pool. With N workers each using M Numba threads,
+    you get N×M threads competing for CPU cores, causing contention.
+
+    By setting NUMBA_NUM_THREADS=1 in each worker, we let the DataLoader
+    workers provide parallelism instead of Numba's internal threading.
+    """
+    import os
+
+    os.environ["NUMBA_NUM_THREADS"] = "1"
+
+
 from .collator import OrigamiDataCollator
 from .dataset import OrigamiDataset
 
@@ -551,17 +568,20 @@ class OrigamiTrainer:
         """
         self.model.train()
 
+        num_workers = self.config.dataloader_num_workers
         train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,  # Shuffle sample order each epoch
             collate_fn=self.collator,
             drop_last=True,  # Drop incomplete batches for consistent batch size
-            num_workers=self.config.dataloader_num_workers,
+            num_workers=num_workers,
             # Use persistent workers if using multiple workers (avoids spawn overhead)
-            persistent_workers=self.config.dataloader_num_workers > 0,
+            persistent_workers=num_workers > 0,
             # Pin memory for faster CPU-GPU transfers on CUDA
             pin_memory=torch.cuda.is_available(),
+            # Set single-threaded Numba in workers to avoid thread contention
+            worker_init_fn=_worker_init_fn if num_workers > 0 else None,
         )
 
         # Wrap dataloader with accelerate for distributed training
