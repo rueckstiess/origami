@@ -22,6 +22,19 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
+# Optional accelerate for multi-GPU training
+try:
+    from accelerate import Accelerator
+
+    ACCELERATE_AVAILABLE = True
+except ImportError:
+    ACCELERATE_AVAILABLE = False
+
+    class Accelerator:  # type: ignore[no-redef]
+        """Stub for type checking when accelerate is not installed."""
+
+        pass
+
 from origami.position_encoding import PATH_TYPE_KEY
 from origami.tokenizer.vocabulary import KeyToken
 from origami.utils import get_device
@@ -51,6 +64,7 @@ class TrainResult:
     epoch_step: int = 0
     current_batch_loss: float = 0.0
     current_lr: float = 0.0
+    current_batch_dt: float = 0.0  # Batch time in seconds
     # Completion status (set when training ends)
     completed: bool = False  # True if all epochs finished
     interrupted: bool = False  # True if stopped via KeyboardInterrupt
@@ -136,9 +150,27 @@ class OrigamiTrainer:
         self.tokenizer = tokenizer
         self.config = config or TrainingConfig()
 
-        # Auto-detect device (supports CUDA, MPS, CPU)
-        self.device = get_device(device)
-        self.model.to(self.device)
+        # Determine if we should use accelerate
+        # Only use accelerate when:
+        # 1. It's available and enabled in config
+        # 2. No explicit device was passed (user wants auto-detection)
+        self._use_accelerate = (
+            ACCELERATE_AVAILABLE and self.config.use_accelerate and device is None
+        )
+        self._accelerator: Accelerator | None = None
+
+        if self._use_accelerate:
+            # Use accelerate for device management and distributed training
+            self._accelerator = Accelerator()
+            self.device = self._accelerator.device
+        else:
+            # Standard single-device training
+            self.device = get_device(device)
+            self.model.to(self.device)
+
+        # Enable TF32 for faster float32 matmuls on Ampere+ GPUs (A100, etc.)
+        if torch.cuda.is_available():
+            torch.set_float32_matmul_precision("high")
 
         # Checkpoint directory
         self.checkpoint_dir = (
@@ -162,25 +194,50 @@ class OrigamiTrainer:
         )
 
         # Create collator
+        # Don't move tensors to device in collator when:
+        # 1. Using accelerate (it handles tensor placement)
+        # 2. Using DataLoader workers (tensors must stay on CPU for pickling)
+        use_workers = self.config.dataloader_num_workers > 0
+        collator_device = None if self._use_accelerate or use_workers else self.device
+        # Pass grammar PDA to collator for parallel computation in DataLoader workers
+        # This pre-computes grammar masks during data loading instead of in training loop
+        grammar_pda = getattr(model, "_grammar_pda", None)
         self.collator = OrigamiDataCollator(
             tokenizer,
             max_length=model.config.max_seq_length,
-            device=self.device,
+            device=collator_device,
+            grammar_pda=grammar_pda,
         )
+        # Track whether we need to move tensors to device in training loop
+        self._move_batch_to_device = use_workers and not self._use_accelerate
 
-        # Create optimizer
+        # Create optimizer (use fused AdamW on CUDA for faster updates)
         self.optimizer = AdamW(
             model.parameters(),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
+            fused=torch.cuda.is_available(),
         )
 
         # Calculate total training steps for scheduler
+        # With accelerate, each GPU processes dataset_size / num_gpus samples
         steps_per_epoch = max(1, len(self.train_dataset) // self.config.batch_size)
+        if self._use_accelerate:
+            steps_per_epoch = steps_per_epoch // self._accelerator.num_processes
         self.total_steps = steps_per_epoch * self.config.num_epochs
 
         # Create scheduler with linear warmup
         self.scheduler = self._create_scheduler()
+
+        # Apply torch.compile on CUDA for faster training
+        if torch.cuda.is_available():
+            self.model = torch.compile(self.model)
+
+        # Wrap with accelerate if enabled
+        if self._use_accelerate:
+            self.model, self.optimizer, self.scheduler = self._accelerator.prepare(
+                self.model, self.optimizer, self.scheduler
+            )
 
         # Training state
         self.state = TrainResult()
@@ -221,6 +278,34 @@ class OrigamiTrainer:
             return max(0.0, 1.0 - step / max(1, self.total_steps))
 
         return LambdaLR(self.optimizer, lr_lambda)
+
+    @property
+    def is_main_process(self) -> bool:
+        """True if this is the main process (for logging/checkpointing).
+
+        When using accelerate for distributed training, only one process
+        should handle logging and saving to avoid conflicts.
+        """
+        if self._accelerator is not None:
+            return self._accelerator.is_main_process
+        return True
+
+    @property
+    def unwrapped_model(self) -> "OrigamiModel":
+        """Get the unwrapped model (without DDP/torch.compile wrappers).
+
+        When using accelerate, the model is wrapped in DistributedDataParallel.
+        When using torch.compile, the model is wrapped in OptimizedModule.
+        Use this property to access the underlying model for saving or inference.
+        """
+        model = self.model
+        # Unwrap accelerate's DDP wrapper
+        if self._accelerator is not None:
+            model = self._accelerator.unwrap_model(model)
+        # Unwrap torch.compile's OptimizedModule
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+        return model
 
     def _clear_memory_caches(self) -> None:
         """Clear memory caches to prevent unbounded memory growth.
@@ -444,7 +529,16 @@ class OrigamiTrainer:
             shuffle=True,  # Shuffle sample order each epoch
             collate_fn=self.collator,
             drop_last=True,  # Drop incomplete batches for consistent batch size
+            num_workers=self.config.dataloader_num_workers,
+            # Use persistent workers if using multiple workers (avoids spawn overhead)
+            persistent_workers=self.config.dataloader_num_workers > 0,
+            # Pin memory for faster CPU-GPU transfers on CUDA
+            pin_memory=torch.cuda.is_available(),
         )
+
+        # Wrap dataloader with accelerate for distributed training
+        if self._use_accelerate:
+            train_loader = self._accelerator.prepare(train_loader)
 
         total_loss = 0.0
         total_tokens = 0
@@ -459,7 +553,9 @@ class OrigamiTrainer:
         for batch in train_loader:
             self.callback_handler.fire_event("on_batch_begin", self, self.state, None)
 
+            batch_start = time.time()
             loss, num_tokens = self._train_step(batch)
+            batch_dt = time.time() - batch_start
 
             total_loss += loss
             total_tokens += num_tokens
@@ -470,6 +566,7 @@ class OrigamiTrainer:
             # Update state with batch-level info for callbacks
             self.state.current_batch_loss = loss
             self.state.current_lr = self.scheduler.get_last_lr()[0]
+            self.state.current_batch_dt = batch_dt
 
             self.callback_handler.fire_event("on_batch_end", self, self.state, None)
 
@@ -540,6 +637,35 @@ class OrigamiTrainer:
 
         return weights
 
+    def _batch_to_device(self, batch: "EncodedBatch") -> "EncodedBatch":
+        """Move batch tensors to training device.
+
+        Used when DataLoader workers return CPU tensors that need to be
+        moved to GPU/MPS for training. Uses non_blocking=True to overlap
+        transfers with computation when using pinned memory.
+        """
+        from origami.tokenizer.json_tokenizer import EncodedBatch
+
+        # Use non_blocking for async transfers (works with pin_memory)
+        nb = torch.cuda.is_available()
+
+        return EncodedBatch(
+            input_ids=batch.input_ids.to(self.device, non_blocking=nb),
+            path_types=batch.path_types.to(self.device, non_blocking=nb),
+            path_ids=batch.path_ids.to(self.device, non_blocking=nb),
+            path_lengths=batch.path_lengths.to(self.device, non_blocking=nb),
+            attention_mask=batch.attention_mask.to(self.device, non_blocking=nb),
+            numeric_values=batch.numeric_values.to(self.device, non_blocking=nb),
+            numeric_mask=batch.numeric_mask.to(self.device, non_blocking=nb),
+            lengths=batch.lengths.to(self.device, non_blocking=nb),
+            labels=batch.labels.to(self.device, non_blocking=nb) if batch.labels is not None else None,
+            grammar_mask=(
+                batch.grammar_mask.to(self.device, non_blocking=nb)
+                if batch.grammar_mask is not None
+                else None
+            ),
+        )
+
     def _train_step(self, batch: "EncodedBatch") -> tuple[float, int]:
         """Execute single training step.
 
@@ -549,10 +675,20 @@ class OrigamiTrainer:
         Returns:
             Tuple of (loss value, number of tokens)
         """
+        # Move batch tensors to device if needed (when using DataLoader workers)
+        if self._move_batch_to_device:
+            batch = self._batch_to_device(batch)
+
         self.optimizer.zero_grad()
 
-        # Compute grammar mask if model has grammar constraints enabled
-        grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
+        # Use pre-computed grammar mask from batch if available (computed in DataLoader workers)
+        # Otherwise compute it here (slower, blocks GPU)
+        if batch.grammar_mask is not None:
+            grammar_mask = batch.grammar_mask
+        else:
+            # Fallback: compute grammar mask if not pre-computed
+            # Use unwrapped_model to access methods when wrapped in DDP
+            grammar_mask = self.unwrapped_model.compute_grammar_mask(batch.input_ids)
 
         # Compute loss weights for target value tokens (if configured)
         loss_weights = self._compute_loss_weights(batch)
@@ -572,8 +708,11 @@ class OrigamiTrainer:
         )
         loss = output.loss
 
-        # Backward pass
-        loss.backward()
+        # Backward pass (accelerate-aware)
+        if self._accelerator is not None:
+            self._accelerator.backward(loss)
+        else:
+            loss.backward()
 
         # Gradient clipping
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -587,28 +726,38 @@ class OrigamiTrainer:
 
         return loss.item(), int(num_tokens)
 
-    def save_checkpoint(self, name: str) -> Path:
+    def save_checkpoint(self, name: str) -> Path | None:
         """Save model checkpoint.
 
         Saves model weights, optimizer state, scheduler state, training state,
         model config, and tokenizer. The checkpoint can be loaded with
         `OrigamiModel.load()` for inference or `load_checkpoint()` to resume training.
 
+        When using accelerate for distributed training, only the main process
+        saves checkpoints to avoid conflicts.
+
         Args:
             name: Checkpoint name (e.g., "best", "epoch_10")
 
         Returns:
-            Path to saved checkpoint
+            Path to saved checkpoint, or None if not the main process
         """
+        # Only save on main process when using distributed training
+        if not self.is_main_process:
+            return None
+
         if self.checkpoint_dir is None:
             raise ValueError("No checkpoint directory specified")
+
+        # Use unwrapped model to get the state dict (without DDP wrapper)
+        model_to_save = self.unwrapped_model
 
         checkpoint_path = self.checkpoint_dir / f"{name}.pt"
         torch.save(
             {
                 # Model weights and config
-                "model_state_dict": self.model.state_dict(),
-                "model_config": asdict(self.model.config),
+                "model_state_dict": model_to_save.state_dict(),
+                "model_config": asdict(model_to_save.config),
                 # Tokenizer state for full reconstruction
                 "tokenizer_state": {
                     "vocab": self.tokenizer.vocab.to_dict(),
@@ -636,7 +785,8 @@ class OrigamiTrainer:
             path: Path to checkpoint file
         """
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+        # Use unwrapped_model to load state dict (without DDP wrapper)
+        self.unwrapped_model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from origami.constraints.json_grammar import JSONGrammarPDA
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer, TokenizedInstance
 
 
@@ -28,6 +29,9 @@ class OrigamiDataCollator:
         max_length: Maximum sequence length (truncate if exceeded)
         include_labels: Whether to include labels tensor (for training)
         device: Device for output tensors
+        grammar_pda: Optional PDA for computing grammar masks during collation.
+            When provided, grammar masks are pre-computed in DataLoader workers
+            for parallel processing.
     """
 
     def __init__(
@@ -36,6 +40,7 @@ class OrigamiDataCollator:
         max_length: int | None = None,
         include_labels: bool = True,
         device: torch.device | None = None,
+        grammar_pda: "JSONGrammarPDA | None" = None,
     ):
         """Initialize collator.
 
@@ -45,11 +50,15 @@ class OrigamiDataCollator:
             include_labels: If True, include labels tensor (for training).
                            If False, labels will be None (for inference).
             device: Device for output tensors (default: CPU)
+            grammar_pda: Optional PDA for pre-computing grammar masks.
+                When provided and using DataLoader with num_workers > 0,
+                grammar masks are computed in parallel by worker processes.
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.include_labels = include_labels
         self.device = device
+        self.grammar_pda = grammar_pda
 
     def __call__(
         self,
@@ -138,6 +147,13 @@ class OrigamiDataCollator:
                         path_types[b, pos, d] = PATH_TYPE_INDEX
                         path_ids[b, pos, d] = min(element.index, self.tokenizer.max_array_index - 1)
 
+        # Compute grammar mask if PDA is provided (for parallel processing in DataLoader workers)
+        grammar_mask = None
+        if self.grammar_pda is not None:
+            # Grammar computation runs on CPU - this is the expensive operation
+            # that we're parallelizing across DataLoader workers.
+            grammar_mask = self.grammar_pda.compute_valid_mask(input_ids)
+
         # Move to device if specified
         if self.device is not None:
             input_ids = input_ids.to(self.device)
@@ -148,6 +164,8 @@ class OrigamiDataCollator:
             numeric_values = numeric_values.to(self.device)
             numeric_mask = numeric_mask.to(self.device)
             lengths = lengths.to(self.device)
+            if grammar_mask is not None:
+                grammar_mask = grammar_mask.to(self.device)
 
         from origami.tokenizer.json_tokenizer import EncodedBatch
 
@@ -161,6 +179,7 @@ class OrigamiDataCollator:
             numeric_mask=numeric_mask,
             lengths=lengths,
             labels=input_ids.clone() if self.include_labels else None,
+            grammar_mask=grammar_mask,
         )
 
     def collate_objects(

@@ -6,6 +6,23 @@ Origami is a transformer-based architecture for JSON object classification and g
 
 **Core use case:** Given a JSON object with a missing field, predict the value of that field based on the other fields in the object.
 
+## Installation
+
+This is Origami v2, a complete rewrite published on PyPI as `origami-ml`. Currently in alpha:
+
+```bash
+# Install v2 alpha (opt-in)
+pip install origami-ml==2.0.0a1
+
+# Or install any pre-release
+pip install origami-ml --pre
+
+# Default install still gets v1 (0.3.0)
+pip install origami-ml
+```
+
+**GitHub:** https://github.com/rueckstiess/origami (branch: `v2`)
+
 ## Architecture Overview
 
 ```

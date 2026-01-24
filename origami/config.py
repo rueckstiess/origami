@@ -166,6 +166,12 @@ class TrainingConfig(PrettyReprMixin):
         num_epochs: Number of training epochs.
         warmup_steps: Number of warmup steps for LR scheduler.
         weight_decay: Weight decay for optimizer.
+        use_accelerate: Whether to use Hugging Face Accelerate for multi-GPU
+            training when installed. Set to False to disable even if available.
+        dataloader_num_workers: Number of worker processes for DataLoader.
+            Set > 0 to enable parallel data loading and grammar mask computation.
+            With grammar constraints enabled, this is critical for performance as
+            grammar masks are computed in parallel by workers while GPU trains.
         shuffle_keys: Whether to shuffle key order during tokenization.
         save_every_n_epochs: Save checkpoint every N epochs.
         checkpoint_dir: Directory for saving checkpoints. If None, no checkpoints
@@ -193,6 +199,12 @@ class TrainingConfig(PrettyReprMixin):
     num_epochs: int = 10
     warmup_steps: int = 1000
     weight_decay: float = 0.01
+
+    # Multi-GPU training
+    use_accelerate: bool = True  # Use accelerate for distributed training if installed
+
+    # Data loading
+    dataloader_num_workers: int = 0  # Number of DataLoader workers (0 = main process only)
 
     # Data augmentation
     shuffle_keys: bool = True

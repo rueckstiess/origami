@@ -74,6 +74,8 @@ class EncodedBatch:
         lengths: Sequence lengths before padding, shape (batch,)
         labels: Target token IDs for training, shape (batch, seq_len).
             Only present when include_labels=True during collation.
+        grammar_mask: Pre-computed grammar validity mask, shape (batch, seq_len, vocab_size).
+            Only present when grammar is computed during collation for parallel processing.
     """
 
     input_ids: Tensor
@@ -85,6 +87,7 @@ class EncodedBatch:
     numeric_mask: Tensor
     lengths: Tensor
     labels: Tensor | None = None
+    grammar_mask: Tensor | None = None
 
     def to(self, device: torch.device) -> "EncodedBatch":
         """Move all tensors to the specified device."""
@@ -98,6 +101,7 @@ class EncodedBatch:
             numeric_mask=self.numeric_mask.to(device),
             lengths=self.lengths.to(device),
             labels=self.labels.to(device) if self.labels is not None else None,
+            grammar_mask=self.grammar_mask.to(device) if self.grammar_mask is not None else None,
         )
 
 

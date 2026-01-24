@@ -1707,3 +1707,111 @@ class TestComplexValueMetricsRegistry:
         from origami.training import COMPLEX_VALUE_METRICS
 
         assert isinstance(COMPLEX_VALUE_METRICS, frozenset)
+
+
+class TestAccelerateIntegration:
+    """Tests for optional accelerate integration."""
+
+    @pytest.fixture
+    def trainer_components(self):
+        """Create trainer components for testing."""
+        tokenizer = JSONTokenizer()
+        data = [
+            {"name": "Alice", "age": 30},
+            {"name": "Bob", "age": 25},
+        ]
+        tokenizer.fit(data)
+        config = ModelConfig(d_model=32, n_heads=2, n_layers=1, d_ff=64)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        return model, tokenizer, data
+
+    def test_trainer_has_is_main_process(self, trainer_components):
+        """Test trainer has is_main_process property."""
+        model, tokenizer, data = trainer_components
+        trainer = OrigamiTrainer(model, tokenizer, data)
+        assert hasattr(trainer, "is_main_process")
+        # Without accelerate active, should always be True
+        assert trainer.is_main_process is True
+
+    def test_trainer_has_unwrapped_model(self, trainer_components):
+        """Test trainer has unwrapped_model property."""
+        model, tokenizer, data = trainer_components
+        trainer = OrigamiTrainer(model, tokenizer, data)
+        assert hasattr(trainer, "unwrapped_model")
+        # Without accelerate active, should return the model directly
+        assert trainer.unwrapped_model is model
+
+    def test_use_accelerate_config_default(self):
+        """Test use_accelerate defaults to True in TrainingConfig."""
+        config = TrainingConfig()
+        assert config.use_accelerate is True
+
+    def test_use_accelerate_config_can_be_disabled(self):
+        """Test use_accelerate can be set to False."""
+        config = TrainingConfig(use_accelerate=False)
+        assert config.use_accelerate is False
+
+    def test_trainer_respects_use_accelerate_false(self, trainer_components):
+        """Test trainer doesn't use accelerate when disabled."""
+        model, tokenizer, data = trainer_components
+        config = TrainingConfig(use_accelerate=False, num_epochs=1)
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config)
+
+        # Accelerator should not be initialized
+        assert trainer._accelerator is None
+        assert trainer._use_accelerate is False
+        # Properties should still work
+        assert trainer.is_main_process is True
+        assert trainer.unwrapped_model is model
+
+    def test_trainer_works_with_accelerate_disabled(self, trainer_components):
+        """Test training works with use_accelerate=False."""
+        model, tokenizer, data = trainer_components
+        config = TrainingConfig(use_accelerate=False, num_epochs=1, batch_size=2)
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config)
+
+        # Should train without errors
+        result = trainer.train()
+        assert result.epoch == 0
+        assert result.global_step > 0
+
+    def test_accelerate_available_constant_exists(self):
+        """Test ACCELERATE_AVAILABLE constant is defined."""
+        from origami.training.trainer import ACCELERATE_AVAILABLE
+
+        assert isinstance(ACCELERATE_AVAILABLE, bool)
+
+    def test_callbacks_check_is_main_process(self, trainer_components):
+        """Test callbacks respect is_main_process."""
+        from origami.training.callbacks import ProgressCallback, TableLogCallback
+
+        model, tokenizer, data = trainer_components
+
+        # Create callbacks
+        progress_cb = ProgressCallback()
+        table_cb = TableLogCallback(print_every=1)
+
+        config = TrainingConfig(num_epochs=1, batch_size=2)
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, callbacks=[progress_cb, table_cb]
+        )
+
+        # Callbacks should have access to is_main_process via trainer
+        # Just verify training works with callbacks
+        result = trainer.train()
+        assert result.completed
+
+    def test_explicit_device_disables_accelerate(self, trainer_components):
+        """Test that passing explicit device disables accelerate."""
+        model, tokenizer, data = trainer_components
+        config = TrainingConfig(use_accelerate=True, num_epochs=1)
+
+        # Passing explicit device should disable accelerate
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, device=torch.device("cpu")
+        )
+
+        # Should not use accelerate when device is explicitly passed
+        assert trainer._accelerator is None
+        assert trainer._use_accelerate is False
+        assert trainer.device.type == "cpu"

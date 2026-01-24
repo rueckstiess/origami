@@ -2,12 +2,30 @@
 
 Implements batch-parallel grammar constraint computation using a
 sequential-over-positions, parallel-over-batch approach.
+
+The grammar mask computation is O(seq_len) per batch with vectorized operations
+across the batch dimension. For maximum throughput during training, use multiple
+DataLoader workers (dataloader_num_workers config) to prepare batches in parallel.
+
+When Numba is available, an optimized parallel implementation is used that
+processes sequences in parallel across CPU cores.
 """
 
+from __future__ import annotations
+
+import numpy as np
 import torch
 from torch import Tensor
 
 from origami.tokenizer.vocabulary import Vocabulary
+
+from .json_grammar_numba import NUMBA_AVAILABLE, compute_grammar_mask_parallel
+
+# Print Numba availability at import time (always visible)
+if NUMBA_AVAILABLE:
+    print("[origami] Numba available - using parallel grammar mask computation")
+else:
+    print("[origami] Numba NOT available - using PyTorch grammar mask computation")
 
 # Stack content types
 STACK_EMPTY = 0
@@ -75,9 +93,17 @@ class JSONGrammarPDA:
         self._device_masks: dict[torch.device, tuple[Tensor, Tensor, Tensor]] = {}
         self._device_ids: dict[torch.device, tuple[Tensor, Tensor]] = {}
 
+        # NumPy arrays for Numba (if available)
+        if NUMBA_AVAILABLE:
+            self._key_ids_np = np.array(sorted(vocab.get_all_key_ids()), dtype=np.int64)
+            self._value_ids_np = np.array(
+                sorted(vocab.get_all_primitive_value_ids()), dtype=np.int64
+            )
+
     def compute_valid_mask(
         self,
         token_ids: Tensor,  # (batch, seq_len)
+        use_numba: bool = True,
     ) -> Tensor:
         """Compute grammar-valid next-token masks for each position.
 
@@ -85,8 +111,8 @@ class JSONGrammarPDA:
         This method returns mask[t] indicating which tokens are valid at
         position t+1, based on state after processing tokens 0..t.
 
-        This is implemented as a thin wrapper around get_next_token_mask(),
-        ensuring single code path for both training and inference.
+        When Numba is available and use_numba=True, uses an optimized parallel
+        implementation that processes sequences in parallel across CPU cores.
 
         Note: With left-padded sequences, PAD tokens at the start are handled
         correctly by the grammar state (they don't update state). The loss
@@ -94,11 +120,48 @@ class JSONGrammarPDA:
 
         Args:
             token_ids: Input token IDs of shape (batch, seq_len)
+            use_numba: If True and Numba available, use parallel implementation.
 
         Returns:
             Boolean mask of shape (batch, seq_len, vocab_size) where
             mask[t] indicates valid tokens for position t+1.
         """
+        device = token_ids.device
+
+        # Use Numba parallel implementation when available and on CPU
+        if use_numba and NUMBA_AVAILABLE and device.type == "cpu":
+            return self._compute_valid_mask_numba(token_ids)
+
+        # Fallback to PyTorch implementation
+        return self._compute_valid_mask_pytorch(token_ids)
+
+    def _compute_valid_mask_numba(self, token_ids: Tensor) -> Tensor:
+        """Numba-accelerated grammar mask computation.
+
+        Converts to NumPy, runs parallel computation, converts back to tensor.
+        """
+        device = token_ids.device
+        token_ids_np = token_ids.numpy()
+
+        masks_np = compute_grammar_mask_parallel(
+            token_ids_np,
+            vocab_size=self.vocab.size,
+            max_depth=self.max_depth,
+            start_id=self.vocab.start_id,
+            end_id=self.vocab.end_id,
+            obj_start_id=self.vocab.obj_start_id,
+            obj_end_id=self.vocab.obj_end_id,
+            array_start_id=self.vocab.array_start_id,
+            array_end_id=self.vocab.array_end_id,
+            pad_id=self.vocab.pad_token_id,
+            key_ids=self._key_ids_np,
+            value_ids=self._value_ids_np,
+        )
+
+        return torch.from_numpy(masks_np).to(device)
+
+    def _compute_valid_mask_pytorch(self, token_ids: Tensor) -> Tensor:
+        """PyTorch implementation of grammar mask computation."""
         batch_size, seq_len = token_ids.shape
         device = token_ids.device
         vocab_size = self.vocab.size

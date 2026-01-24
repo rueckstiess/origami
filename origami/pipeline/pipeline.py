@@ -300,6 +300,10 @@ class OrigamiPipeline:
         if verbose:
             print(f"Training device: {self._training_device}")
 
+        # When device is "auto", pass None to trainer to allow accelerate integration
+        # When device is explicitly specified, pass it to respect user's choice
+        trainer_device = None if self.config.device == "auto" else self._training_device
+
         trainer = OrigamiTrainer(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -307,7 +311,7 @@ class OrigamiPipeline:
             eval_data=self._eval_processed,
             config=train_config,
             callbacks=all_callbacks if all_callbacks else None,
-            device=self._training_device,
+            device=trainer_device,
         )
 
         # Run training (handles KeyboardInterrupt gracefully)

@@ -179,6 +179,8 @@ class ProgressCallback(TrainerCallback):
         payload: EpochStats | None,
     ) -> None:
         """Print training info at start."""
+        if not trainer.is_main_process:
+            return
         print(f"Training on {trainer.device}")
         print(f"Train samples: {len(trainer.train_dataset)}")
         if trainer.eval_dataset:
@@ -195,7 +197,10 @@ class ProgressCallback(TrainerCallback):
         payload: EpochStats | None,
     ) -> None:
         """Create progress bar for epoch."""
-        self._num_batches = len(trainer.train_dataset) // trainer.config.batch_size
+        if not trainer.is_main_process:
+            return
+        # Use trainer's total_steps which accounts for multi-GPU
+        self._num_batches = trainer.total_steps // trainer.config.num_epochs
         self._pbar = tqdm(
             total=self._num_batches,
             desc=f"Epoch {state.epoch + 1}",
@@ -210,11 +215,14 @@ class ProgressCallback(TrainerCallback):
         payload: EpochStats | None,
     ) -> None:
         """Update progress bar with current batch info."""
+        if not trainer.is_main_process:
+            return
         if self._pbar is not None:
             self._pbar.update(1)
             self._pbar.set_postfix(
                 loss=f"{state.current_batch_loss:.4f}",
                 lr=f"{state.current_lr:.2e}",
+                dt=f"{state.current_batch_dt*1000:.0f}ms",
             )
 
     def on_epoch_end(
@@ -224,6 +232,8 @@ class ProgressCallback(TrainerCallback):
         payload: EpochStats | None,
     ) -> None:
         """Close progress bar and print epoch summary."""
+        if not trainer.is_main_process:
+            return
         if self._pbar is not None:
             self._pbar.close()
             self._pbar = None
@@ -246,6 +256,8 @@ class ProgressCallback(TrainerCallback):
         Uses tqdm.write() to properly coordinate with the progress bar
         when step-based evaluation fires mid-epoch.
         """
+        if not trainer.is_main_process:
+            return
         if payload:
             parts = []
             for key, value in sorted(payload.items()):
@@ -260,6 +272,8 @@ class ProgressCallback(TrainerCallback):
         payload: Any,
     ) -> None:
         """Handle training interruption."""
+        if not trainer.is_main_process:
+            return
         # Close progress bar if open
         if self._pbar is not None:
             self._pbar.close()
@@ -332,6 +346,8 @@ class TableLogCallback(TrainerCallback):
         _payload: Any,
     ) -> None:
         """Print log line every print_every steps."""
+        if not trainer.is_main_process:
+            return
         if state.global_step % self.print_every != 0:
             return
 
@@ -371,6 +387,8 @@ class TableLogCallback(TrainerCallback):
         payload: dict[str, float],
     ) -> None:
         """Print evaluation metrics, combined with batch stats if available."""
+        if not trainer.is_main_process:
+            return
         if not payload:
             return
 
@@ -390,9 +408,11 @@ class TableLogCallback(TrainerCallback):
 
     def on_interrupt(
         self,
-        _trainer: OrigamiTrainer,
+        trainer: OrigamiTrainer,
         state: TrainResult,
         _payload: Any,
     ) -> None:
         """Print interrupt message in table format."""
+        if not trainer.is_main_process:
+            return
         print(f"\nTraining interrupted at epoch {state.epoch}, step {state.global_step}")
