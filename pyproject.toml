@@ -28,8 +28,6 @@ dependencies = [
     "ipywidgets>=8.1.8",
     "pyyaml>=6.0.3",
     "pandas>=2.3.3",
-    "pyarrow>=22.0.0",
-    "sqlglot>=28.5.0",
 ]
 
 [project.scripts]
