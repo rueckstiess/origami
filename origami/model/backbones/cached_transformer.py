@@ -146,14 +146,13 @@ class CachedMultiHeadAttention(nn.Module):
         # key: (batch, n_heads, kv_len, head_dim)
         # value: (batch, n_heads, kv_len, head_dim)
 
-        # SDPA expects boolean mask where True = mask out (opposite of our convention)
-        sdpa_mask = ~attention_mask if attention_mask is not None else None
-
+        # SDPA boolean mask convention: True = attend, False = mask out
+        # (same as our convention, no inversion needed)
         attn_output = F.scaled_dot_product_attention(
             query,
             key,
             value,
-            attn_mask=sdpa_mask,
+            attn_mask=attention_mask,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,  # Causality is already encoded in the mask
         )

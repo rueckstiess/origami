@@ -605,6 +605,9 @@ def test_grammar(self):
     output = model(..., labels=labels)
 ```
 
+### End-to-End Validation Dataset
+The **car** dataset (MongoDB: `json2vec.car`) is a good smoke test for verifying the model learns correctly. It should reach close to 100% accuracy after ~100 epochs. Use this to catch regressions in the training pipeline.
+
 ## References
 
 - **Original ORIGAMI paper**: [arXiv:2412.17348](https://arxiv.org/abs/2412.17348)
