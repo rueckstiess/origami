@@ -362,7 +362,7 @@ class OrigamiGenerator:
                     if constraints.required_key_ids - seen:
                         mask[i, vocab.obj_end_id] = False
 
-            # 3. Count-dependent: array bounds
+            # 3. Count-dependent: array bounds and uniqueItems
             if ss.container_stack and ss.container_stack[-1] == "array":
                 arr_path = (
                     self._path_elements_to_schema_path(ps.context_stack[-1][1])
@@ -383,6 +383,11 @@ class OrigamiGenerator:
                         mask[i, vocab.array_start_id] = False
                         mask[i, vocab.num_token_id] = False
                         mask[i, vocab.unk_value_id] = False
+
+                    # uniqueItems: suppress already-seen value token IDs
+                    if constraints.unique_items and ss.seen_array_values:
+                        for seen_id in ss.seen_array_values[-1]:
+                            mask[i, seen_id] = False
 
         return mask
 

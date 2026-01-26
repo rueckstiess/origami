@@ -830,6 +830,8 @@ class OrigamiPipeline:
             target_key=effective_target_key,
             inverse_transform=inverse_fn,
             allow_complex_values=effective_allow_complex,
+            schema=self._schema,
+            constrain_schema=self.config.training.constrain_schema,
         )
 
         return evaluator.evaluate(

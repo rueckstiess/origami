@@ -36,14 +36,15 @@ class CompiledFieldConstraints:
     minimum: float | None = None
     maximum: float | None = None
     required_key_ids: frozenset[int] | None = None
+    unique_items: bool = False
 
 
 @dataclass
 class SchemaState:
     """Per-sequence state for incremental inference.
 
-    Tracks count-dependent information needed for minItems/maxItems
-    and required field enforcement during generation.
+    Tracks count-dependent information needed for minItems/maxItems,
+    required field enforcement, and uniqueItems during generation.
     """
 
     # Stack of array element counts, one per array depth
@@ -52,6 +53,8 @@ class SchemaState:
     seen_keys: list[set[int]] = field(default_factory=list)
     # Stack of container types ("object" or "array")
     container_stack: list[str] = field(default_factory=list)
+    # Stack of seen value token IDs in arrays (for uniqueItems), one per array depth
+    seen_array_values: list[set[int]] = field(default_factory=list)
 
     def push_object(self) -> None:
         self.container_stack.append("object")
@@ -60,6 +63,7 @@ class SchemaState:
     def push_array(self) -> None:
         self.container_stack.append("array")
         self.array_counts.append(0)
+        self.seen_array_values.append(set())
 
     def pop_context(self) -> str | None:
         if not self.container_stack:
@@ -71,11 +75,18 @@ class SchemaState:
         elif ctx == "array":
             if self.array_counts:
                 self.array_counts.pop()
+            if self.seen_array_values:
+                self.seen_array_values.pop()
         return ctx
 
     def record_key(self, key_id: int) -> None:
         if self.seen_keys:
             self.seen_keys[-1].add(key_id)
+
+    def record_array_value(self, token_id: int) -> None:
+        """Record a value token seen in the current array."""
+        if self.seen_array_values:
+            self.seen_array_values[-1].add(token_id)
 
     def increment_array_count(self) -> None:
         if self.array_counts:
@@ -86,6 +97,7 @@ class SchemaState:
             array_counts=list(self.array_counts),
             seen_keys=[s.copy() for s in self.seen_keys],
             container_stack=list(self.container_stack),
+            seen_array_values=[s.copy() for s in self.seen_array_values],
         )
 
 
@@ -193,6 +205,7 @@ class SchemaPDA:
             max_items=schema_node.get("maxItems"),
             minimum=schema_node.get("minimum"),
             maximum=schema_node.get("maximum"),
+            unique_items=schema_node.get("uniqueItems", False),
         )
 
         # Pre-compute required key IDs for inference
@@ -289,9 +302,12 @@ class SchemaPDA:
         if additional_props is not False or "properties" not in schema_node:
             return mask  # No key constraint
 
-        # Restrict keys to only those defined in properties
+        # Restrict keys to only those defined in properties.
+        # UNK_KEY is NOT allowed — additionalProperties: false means
+        # only known keys are valid. Allowing UNK_KEY would let the model
+        # escape schema constraints by nesting objects under unknown keys.
         all_key_ids = vocab.get_all_key_ids()  # includes UNK_KEY
-        allowed_key_ids = {vocab.unk_key_id}  # Always allow UNK_KEY as fallback
+        allowed_key_ids: set[int] = set()
 
         for key in schema_node["properties"]:
             kid = self._key_name_to_id(key)
@@ -429,18 +445,7 @@ class SchemaPDA:
         for token_id in token_ids:
             if token_id == vocab.pad_token_id:
                 continue
-            if token_id == vocab.obj_start_id:
-                state.push_object()
-            elif token_id == vocab.obj_end_id:
-                state.pop_context()
-            elif token_id == vocab.array_start_id:
-                state.push_array()
-            elif token_id == vocab.array_end_id:
-                state.pop_context()
-            elif vocab.is_key_token(token_id):
-                state.record_key(token_id)
-            elif vocab.is_value_token(token_id):
-                state.increment_array_count()
+            self.update_state(token_id, state)
 
         return state
 
@@ -462,6 +467,9 @@ class SchemaPDA:
         elif vocab.is_key_token(token_id):
             state.record_key(token_id)
         elif vocab.is_value_token(token_id):
+            # Track value in current array for uniqueItems enforcement
+            if state.container_stack and state.container_stack[-1] == "array":
+                state.record_array_value(token_id)
             state.increment_array_count()
 
     # --- Properties ---
@@ -506,6 +514,8 @@ class SchemaPDA:
                     parts.append(f"minItems={constraint.min_items}")
                 if constraint.max_items is not None:
                     parts.append(f"maxItems={constraint.max_items}")
+                if constraint.unique_items:
+                    parts.append("uniqueItems")
                 if constraint.required_key_ids:
                     parts.append(f"required={len(constraint.required_key_ids)} keys")
                 if parts:

@@ -359,11 +359,10 @@ class TestKeyMasks:
         # Defined keys allowed
         assert mask[name_id].item()
         assert mask[age_id].item()
-        # Undefined keys blocked
+        # Undefined keys blocked (including UNK_KEY)
         assert not mask[color_id].item()
         assert not mask[extra_id].item()
-        # UNK_KEY always allowed
-        assert mask[vocab.unk_key_id].item()
+        assert not mask[vocab.unk_key_id].item()
 
         # Non-key tokens pass through
         assert mask[vocab.obj_end_id].item()
@@ -681,6 +680,133 @@ class TestGrammarSchemaIntersection:
         assert not combined[vocab.encode(KeyToken("color"))].item()
         assert not combined[vocab.encode(KeyToken("extra"))].item()
         assert combined[vocab.obj_end_id].item()
+
+
+class TestUniqueItems:
+    def test_unique_items_constraint_stored(self, vocab):
+        """uniqueItems: true should be stored in compiled constraints."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+        constraints = pda.get_constraints("tags")
+        assert constraints is not None
+        assert constraints.unique_items is True
+
+    def test_unique_items_false_by_default(self, vocab, simple_schema):
+        """unique_items should be False when not specified."""
+        pda = SchemaPDA(simple_schema, vocab)
+        constraints = pda.get_constraints("name")
+        assert constraints is not None
+        assert constraints.unique_items is False
+
+    def test_seen_array_values_tracked(self, vocab):
+        """SchemaState should track seen values in arrays."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+
+        # Build a token sequence: START OBJ_START KEY(items) ARRAY_START VALUE(Alice)
+        # Using the "items" key since that's what's in vocab — but let's use
+        # actual array start/value tokens
+        alice_id = vocab.encode(ValueToken("Alice"))
+        bob_id = vocab.encode(ValueToken("Bob"))
+
+        state = SchemaState()
+        pda.update_state(vocab.start_id, state)
+        pda.update_state(vocab.obj_start_id, state)
+        pda.update_state(vocab.array_start_id, state)
+        pda.update_state(alice_id, state)
+
+        # Alice should be in seen_array_values
+        assert alice_id in state.seen_array_values[-1]
+        assert bob_id not in state.seen_array_values[-1]
+        assert state.array_counts[-1] == 1
+
+        pda.update_state(bob_id, state)
+        assert bob_id in state.seen_array_values[-1]
+        assert state.array_counts[-1] == 2
+
+    def test_seen_array_values_cleared_on_pop(self, vocab):
+        """seen_array_values should be cleared when array context pops."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)
+
+        alice_id = vocab.encode(ValueToken("Alice"))
+        pda.update_state(alice_id, state)
+        assert len(state.seen_array_values) == 1
+        assert alice_id in state.seen_array_values[-1]
+
+        pda.update_state(vocab.array_end_id, state)
+        assert len(state.seen_array_values) == 0
+
+    def test_init_state_from_tokens_tracks_seen_values(self, vocab):
+        """init_state_from_tokens should populate seen_array_values."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        alice_id = vocab.encode(ValueToken("Alice"))
+        bob_id = vocab.encode(ValueToken("Bob"))
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            vocab.array_start_id,
+            alice_id,
+            bob_id,
+        ]
+        state = pda.init_state_from_tokens(tokens, vocab)
+
+        assert len(state.seen_array_values) == 1
+        assert alice_id in state.seen_array_values[-1]
+        assert bob_id in state.seen_array_values[-1]
+
+    def test_clone_preserves_seen_values(self):
+        """Clone should deep-copy seen_array_values."""
+        state = SchemaState()
+        state.push_array()
+        state.record_array_value(42)
+
+        clone = state.clone()
+        assert clone.seen_array_values[-1] == {42}
+
+        clone.record_array_value(99)
+        assert 99 in clone.seen_array_values[-1]
+        assert 99 not in state.seen_array_values[-1]
+
+    def test_unique_items_in_summary(self, vocab):
+        """Summary should display uniqueItems constraint."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+        summary = pda.summary()
+        assert "uniqueItems" in summary
 
 
 class TestSummary:

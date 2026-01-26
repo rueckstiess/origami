@@ -7,7 +7,8 @@ by SchemaPDA to constrain model outputs during training and inference.
 Derivation logic per field:
 - Types: Collect Python types → map to JSON Schema types
 - Enums: If unique value count <= enum_threshold, add enum constraint
-- Objects: Recurse into properties. Fields present in ALL objects → required
+- Objects: Recurse into properties. Fields present in ALL objects → required.
+  Sets additionalProperties: false to prevent hallucinated keys.
 - Arrays: Recurse into items (union of element schemas). Record minItems/maxItems
 - Numerics: Record minimum/maximum from observed values
 """
@@ -90,7 +91,11 @@ class SchemaDeriver:
             if key_presence[key] == total:
                 required.append(key)
 
-        schema: dict[str, Any] = {"type": "object", "properties": properties}
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": False,
+        }
         if required:
             schema["required"] = required
 
@@ -143,17 +148,28 @@ class SchemaDeriver:
         """Derive schema for array values.
 
         Produces items schema from union of all elements, plus
-        minItems/maxItems from observed lengths.
+        minItems/maxItems from observed lengths. Detects uniqueItems
+        when all observed arrays contain no duplicate elements.
         """
         schema: dict[str, Any] = {"type": "array"}
 
         # Collect all elements across all arrays
         all_elements: list[Any] = []
         lengths: list[int] = []
+        all_unique = True
 
         for arr in arrays:
             lengths.append(len(arr))
             all_elements.extend(arr)
+            # Check if this array has all unique primitive elements
+            # Only check arrays with >1 element (single-element arrays are trivially unique)
+            if len(arr) > 1 and all_unique:
+                try:
+                    if len(set(arr)) != len(arr):
+                        all_unique = False
+                except TypeError:
+                    # Unhashable elements (dicts, lists) — skip uniqueness check
+                    all_unique = False
 
         # Derive items schema from all elements
         if all_elements:
@@ -163,6 +179,10 @@ class SchemaDeriver:
         if lengths:
             schema["minItems"] = min(lengths)
             schema["maxItems"] = max(lengths)
+
+        # Mark as uniqueItems if all observed arrays have unique elements
+        if all_unique and all_elements:
+            schema["uniqueItems"] = True
 
         return schema
 
@@ -271,6 +291,23 @@ class SchemaDeriver:
                     merged["maxItems"] = schema["maxItems"]
                 else:
                     merged["maxItems"] = max(merged["maxItems"], schema["maxItems"])
+
+            # Merge uniqueItems (intersection — unique only if unique in ALL)
+            if "uniqueItems" in schema:
+                if "uniqueItems" not in merged:
+                    merged["uniqueItems"] = schema["uniqueItems"]
+                else:
+                    merged["uniqueItems"] = merged["uniqueItems"] and schema["uniqueItems"]
+
+            # Merge additionalProperties (AND — false only if false in ALL)
+            if "additionalProperties" in schema:
+                if "additionalProperties" not in merged:
+                    merged["additionalProperties"] = schema["additionalProperties"]
+                else:
+                    # Both must be False for result to be False
+                    merged["additionalProperties"] = (
+                        merged["additionalProperties"] or schema["additionalProperties"]
+                    )
 
             # Merge required (intersection — required only if required in ALL)
             if "required" in schema:

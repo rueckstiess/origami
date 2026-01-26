@@ -332,3 +332,134 @@ class TestEdgeCases:
         data = [{"x": None}, {"x": None}]
         schema = deriver.derive(data)
         assert schema["properties"]["x"]["type"] == "null"
+
+
+class TestUniqueItems:
+    def test_unique_arrays_detected(self, deriver):
+        """Arrays with all unique elements should get uniqueItems: true."""
+        data = [
+            {"tags": ["a", "b", "c"]},
+            {"tags": ["d", "e"]},
+        ]
+        schema = deriver.derive(data)
+        assert schema["properties"]["tags"]["uniqueItems"] is True
+
+    def test_duplicate_arrays_not_unique(self, deriver):
+        """Arrays with duplicates should NOT get uniqueItems."""
+        data = [
+            {"tags": ["a", "b", "a"]},
+            {"tags": ["d", "e"]},
+        ]
+        schema = deriver.derive(data)
+        assert "uniqueItems" not in schema["properties"]["tags"]
+
+    def test_single_element_arrays_unique(self, deriver):
+        """Single-element arrays are trivially unique."""
+        data = [
+            {"tags": ["a"]},
+            {"tags": ["b"]},
+        ]
+        schema = deriver.derive(data)
+        assert schema["properties"]["tags"]["uniqueItems"] is True
+
+    def test_empty_arrays_unique(self, deriver):
+        """Empty arrays are trivially unique, but no uniqueItems without elements."""
+        data = [{"tags": []}, {"tags": []}]
+        schema = deriver.derive(data)
+        # No elements means no uniqueItems (nothing to constrain)
+        assert "uniqueItems" not in schema["properties"]["tags"]
+
+    def test_mixed_unique_and_duplicate(self, deriver):
+        """If ANY array has duplicates, uniqueItems should not be set."""
+        data = [
+            {"tags": ["a", "b"]},
+            {"tags": ["c", "c"]},  # duplicate
+        ]
+        schema = deriver.derive(data)
+        assert "uniqueItems" not in schema["properties"]["tags"]
+
+    def test_integer_arrays_unique(self, deriver):
+        """Integer arrays with unique elements."""
+        data = [
+            {"ids": [1, 2, 3]},
+            {"ids": [4, 5]},
+        ]
+        schema = deriver.derive(data)
+        assert schema["properties"]["ids"]["uniqueItems"] is True
+
+    def test_integer_arrays_with_duplicates(self, deriver):
+        data = [
+            {"ids": [1, 2, 2]},
+        ]
+        schema = deriver.derive(data)
+        assert "uniqueItems" not in schema["properties"]["ids"]
+
+    def test_object_arrays_skip_uniqueness(self, deriver):
+        """Arrays of objects should skip uniqueness check (unhashable)."""
+        data = [
+            {"items": [{"a": 1}, {"b": 2}]},
+        ]
+        schema = deriver.derive(data)
+        # Objects are unhashable, so uniqueItems should not be set
+        assert "uniqueItems" not in schema["properties"]["items"]
+
+    def test_unique_items_with_merge(self, deriver):
+        """When merging schemas, uniqueItems uses intersection (AND)."""
+        # Both array and non-array values for same field
+        data = [
+            {"val": ["a", "b"]},
+            {"val": ["c", "d"]},
+        ]
+        schema = deriver.derive(data)
+        assert schema["properties"]["val"]["uniqueItems"] is True
+
+
+class TestAdditionalProperties:
+    def test_root_object(self, deriver):
+        """Root object should get additionalProperties: false."""
+        data = [{"name": "Alice"}, {"name": "Bob"}]
+        schema = deriver.derive(data)
+        assert schema["additionalProperties"] is False
+
+    def test_nested_object(self, deriver):
+        """Nested objects should also get additionalProperties: false."""
+        data = [
+            {"user": {"name": "Alice", "age": 25}},
+            {"user": {"name": "Bob", "age": 30}},
+        ]
+        schema = deriver.derive(data)
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["user"]["additionalProperties"] is False
+
+    def test_array_of_objects(self, deriver):
+        """Object items in arrays should get additionalProperties: false."""
+        data = [
+            {"items": [{"name": "a", "price": 10}]},
+            {"items": [{"name": "b", "price": 20}]},
+        ]
+        schema = deriver.derive(data)
+        items_schema = schema["properties"]["items"]["items"]
+        assert items_schema["additionalProperties"] is False
+
+    def test_empty_object(self, deriver):
+        """Empty objects should also get additionalProperties: false."""
+        schema = deriver.derive([{}, {}])
+        assert schema["additionalProperties"] is False
+
+    def test_object_or_null_preserves_additional_properties(self, deriver):
+        """When object is merged with null, additionalProperties should survive."""
+        data = [{"val": {"x": 1}}, {"val": None}]
+        schema = deriver.derive(data)
+        val_schema = schema["properties"]["val"]
+        assert val_schema["additionalProperties"] is False
+
+    def test_deeply_nested(self, deriver):
+        """All levels of nesting should get additionalProperties: false."""
+        data = [
+            {"a": {"b": {"c": "deep"}}},
+            {"a": {"b": {"c": "value"}}},
+        ]
+        schema = deriver.derive(data)
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["a"]["additionalProperties"] is False
+        assert schema["properties"]["a"]["properties"]["b"]["additionalProperties"] is False

@@ -230,9 +230,11 @@ class OrigamiTrainer:
         # This pre-computes grammar masks during data loading instead of in training loop
         grammar_pda = getattr(model, "_grammar_pda", None)
 
-        # Create SchemaPDA for semantic constraints if schema is provided
+        # Create SchemaPDA for training masks only if constrain_schema is enabled.
+        # By default (constrain_schema=False), schema constraints are only applied
+        # during inference (evaluator/generator), not during training.
         schema_pda = None
-        if schema is not None:
+        if schema is not None and self.config.constrain_schema:
             from origami.constraints import SchemaPDA
 
             schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=model.config.max_depth)
@@ -244,6 +246,9 @@ class OrigamiTrainer:
             grammar_pda=grammar_pda,
             schema_pda=schema_pda,
         )
+
+        # Store schema for inference use (evaluator predictions)
+        self._schema = schema
         # Track whether we need to move tensors to device in training loop
         self._move_batch_to_device = use_workers and not self._use_accelerate
 
@@ -302,6 +307,8 @@ class OrigamiTrainer:
             tokenizer=tokenizer,
             target_key=self.config.target_key,
             allow_complex_values=allow_complex_values,
+            schema=self._schema,
+            constrain_schema=self.config.constrain_schema,
         )
 
         # Track last evaluation step to avoid duplicate evals

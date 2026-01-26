@@ -191,6 +191,11 @@ class TrainingConfig(PrettyReprMixin):
         allow_complex_values: Whether to allow complex values (objects/arrays) during
             evaluation predictions. If None (default), auto-detected based on metrics.
             Set True for array_f1, array_jaccard, object_key_accuracy metrics.
+        constrain_schema: If True, apply schema constraints during training
+            (intersected with grammar mask). If False (default), schema constraints
+            are only applied during inference. Training with schema masks can
+            reduce effective vocabulary per position, making loss artificially
+            low without improving generation quality.
     """
 
     # Optimization
@@ -226,6 +231,7 @@ class TrainingConfig(PrettyReprMixin):
     target_key: str | None = None
     target_loss_weight: float = 1.0
     allow_complex_values: bool | None = None
+    constrain_schema: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration."""

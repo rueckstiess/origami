@@ -62,6 +62,8 @@ class OrigamiEvaluator:
         target_key: str | None = None,
         inverse_transform: Callable[[str, Any], Any] | None = None,
         allow_complex_values: bool = False,
+        schema: dict | None = None,
+        constrain_schema: bool = False,
     ):
         """Initialize evaluator.
 
@@ -75,13 +77,28 @@ class OrigamiEvaluator:
                 Used for continuous numeric fields that were scaled during preprocessing.
             allow_complex_values: Whether to allow complex values (objects/arrays)
                 during predictions. Default False for backward compatibility.
+            schema: Optional JSON Schema dict for semantic constraints.
+                Passed through to the internal predictor/generator for predictions.
+            constrain_schema: If True and schema is provided, also apply schema
+                constraints during loss computation (to match training loss when
+                the trainer uses constrain_schema=True).
         """
         self.model = model
         self.tokenizer = tokenizer
         self.target_key = target_key
         self.inverse_transform = inverse_transform
         self.allow_complex_values = allow_complex_values
+        self._schema = schema
         self._predictor: OrigamiPredictor | None = None
+
+        # Create SchemaPDA for loss computation only if constrain_schema is True
+        self._schema_pda = None
+        if constrain_schema and schema is not None:
+            from origami.constraints import SchemaPDA
+
+            self._schema_pda = SchemaPDA(
+                schema, tokenizer.vocab, max_depth=model.config.max_depth
+            )
 
     @property
     def device(self) -> torch.device:
@@ -163,20 +180,26 @@ class OrigamiEvaluator:
 
     @torch.no_grad()
     def _compute_loss(self, data: list[dict], batch_size: int, verbose: bool = False) -> float:
-        """Compute average loss over data with grammar constraints.
+        """Compute average loss over data with grammar and optional schema constraints.
 
-        This mirrors the trainer's evaluate() method to ensure consistent
-        loss computation with grammar mask applied.
+        Uses the same collator-based approach as the trainer to ensure consistent
+        loss computation. Grammar mask is always applied. Schema mask is applied
+        only when constrain_schema=True (matching training behavior).
         """
         was_training = self.model.training
         self.model.eval()
 
-        # Create dataset and dataloader
+        # Get grammar PDA from model (same as trainer does)
+        grammar_pda = getattr(self.model, "_grammar_pda", None)
+
+        # Create dataset and dataloader with PDA-enabled collator
         dataset = OrigamiDataset(data, self.tokenizer, shuffle=False)
         collator = OrigamiDataCollator(
             self.tokenizer,
             max_length=self.model.config.max_seq_length,
             device=self.device,
+            grammar_pda=grammar_pda,
+            schema_pda=self._schema_pda,
         )
         loader = DataLoader(
             dataset,
@@ -190,9 +213,6 @@ class OrigamiEvaluator:
         num_total_batches = (len(data) + batch_size - 1) // batch_size
 
         for batch in self._wrap_progress(loader, num_total_batches, "Computing loss", verbose):
-            # Compute grammar mask for proper loss evaluation
-            grammar_mask = self.model.compute_grammar_mask(batch.input_ids)
-
             output = self.model(
                 input_ids=batch.input_ids,
                 path_types=batch.path_types,
@@ -202,7 +222,7 @@ class OrigamiEvaluator:
                 labels=batch.labels,
                 numeric_values=batch.numeric_values,
                 numeric_mask=batch.numeric_mask,
-                grammar_mask=grammar_mask,
+                grammar_mask=batch.grammar_mask,
             )
 
             total_loss += output.loss.item()
@@ -240,6 +260,7 @@ class OrigamiEvaluator:
                 self.model,
                 self.tokenizer,
                 inverse_transform_fn=self.inverse_transform,
+                schema=self._schema,
             )
 
         # Extract true values and prepare them (unwrap ScaledNumeric, inverse transform)
@@ -283,6 +304,8 @@ def evaluate(
     batch_size: int = 32,
     inverse_transform: Callable[[str, Any], Any] | None = None,
     allow_complex_values: bool = False,
+    schema: dict | None = None,
+    constrain_schema: bool = False,
 ) -> dict[str, float]:
     """Convenience function for one-shot evaluation.
 
@@ -299,6 +322,9 @@ def evaluate(
         inverse_transform: Optional function to transform predicted values.
         allow_complex_values: Whether to allow complex values (objects/arrays)
             during predictions. Default False.
+        schema: Optional JSON Schema dict for semantic constraints.
+        constrain_schema: If True and schema is provided, apply schema
+            constraints during loss computation (to match training loss).
 
     Returns:
         Dict mapping metric names to their values. Always includes "loss".
@@ -321,7 +347,13 @@ def evaluate(
         ```
     """
     evaluator = OrigamiEvaluator(
-        model, tokenizer, target_key, inverse_transform, allow_complex_values
+        model,
+        tokenizer,
+        target_key,
+        inverse_transform,
+        allow_complex_values,
+        schema,
+        constrain_schema,
     )
     return evaluator.evaluate(
         data,
