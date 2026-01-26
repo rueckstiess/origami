@@ -454,23 +454,36 @@ class SchemaPDA:
         token_id: int,
         state: SchemaState,
     ) -> None:
-        """Update schema state with a single generated token (in-place)."""
+        """Update schema state with a single generated token (in-place).
+
+        Array element counting: each top-level element in an array counts as one
+        item toward minItems/maxItems. For primitive arrays, each value token is
+        one element. For arrays of objects/arrays, OBJ_START/ARRAY_START marks
+        a new element. Values inside nested containers do NOT count toward the
+        parent array.
+        """
         vocab = self._vocab
         if token_id == vocab.obj_start_id:
+            # Object starting directly inside an array = one array element
+            if state.container_stack and state.container_stack[-1] == "array":
+                state.increment_array_count()
             state.push_object()
         elif token_id == vocab.obj_end_id:
             state.pop_context()
         elif token_id == vocab.array_start_id:
+            # Sub-array starting directly inside an array = one array element
+            if state.container_stack and state.container_stack[-1] == "array":
+                state.increment_array_count()
             state.push_array()
         elif token_id == vocab.array_end_id:
             state.pop_context()
         elif vocab.is_key_token(token_id):
             state.record_key(token_id)
         elif vocab.is_value_token(token_id):
-            # Track value in current array for uniqueItems enforcement
+            # Only count primitive values as array elements when directly in array
             if state.container_stack and state.container_stack[-1] == "array":
                 state.record_array_value(token_id)
-            state.increment_array_count()
+                state.increment_array_count()
 
     # --- Properties ---
 

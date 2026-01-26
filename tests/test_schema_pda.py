@@ -809,6 +809,197 @@ class TestUniqueItems:
         assert "uniqueItems" in summary
 
 
+class TestArrayOfObjectsCounting:
+    """Test that array element counting is correct for arrays of objects.
+
+    Bug fix: Previously, every value token incremented the parent array's count,
+    even values inside nested objects. Now only top-level elements (OBJ_START,
+    ARRAY_START, primitive values directly in array) increment the count.
+    """
+
+    def test_object_in_array_counts_as_one(self, vocab):
+        """An object in an array should count as one element, regardless of how
+        many fields it contains."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        # Enter root object and then an array
+        pda.update_state(vocab.start_id, state)
+        pda.update_state(vocab.obj_start_id, state)
+        pda.update_state(vocab.array_start_id, state)
+        assert state.array_counts[-1] == 0
+
+        # Start first object in array -> counts as 1 element
+        # array_counts has one entry (for the one array), objects don't add entries
+        pda.update_state(vocab.obj_start_id, state)
+        assert state.array_counts[-1] == 1
+
+        # Add fields inside the object — these should NOT increment array count
+        name_id = vocab.encode(KeyToken("name"))
+        alice_id = vocab.encode(ValueToken("Alice"))
+        age_id = vocab.encode(KeyToken("age"))
+        val_25 = vocab.encode(ValueToken(25))
+
+        pda.update_state(name_id, state)
+        pda.update_state(alice_id, state)
+        pda.update_state(age_id, state)
+        pda.update_state(val_25, state)
+        # Array count should still be 1 (values are inside nested object)
+        assert state.array_counts[-1] == 1
+
+        # Close the object
+        pda.update_state(vocab.obj_end_id, state)
+        assert state.array_counts[-1] == 1  # back to array context
+
+        # Start second object -> count becomes 2
+        pda.update_state(vocab.obj_start_id, state)
+        assert state.array_counts[-1] == 2
+
+        pda.update_state(name_id, state)
+        pda.update_state(alice_id, state)
+        pda.update_state(vocab.obj_end_id, state)
+
+        # Still 2
+        assert state.array_counts[-1] == 2
+
+    def test_primitive_array_counts_correctly(self, vocab):
+        """Primitive values directly in an array should each count as one element."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)
+        assert state.array_counts[-1] == 0
+
+        alice_id = vocab.encode(ValueToken("Alice"))
+        bob_id = vocab.encode(ValueToken("Bob"))
+
+        pda.update_state(alice_id, state)
+        assert state.array_counts[-1] == 1
+
+        pda.update_state(bob_id, state)
+        assert state.array_counts[-1] == 2
+
+    def test_nested_array_in_array_counts_as_one(self, vocab):
+        """A sub-array inside an array should count as one element."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)  # outer array
+        assert state.array_counts[-1] == 0
+
+        # Start inner array -> counts as 1 in outer
+        pda.update_state(vocab.array_start_id, state)
+        assert state.array_counts[-2] == 1  # outer array count
+
+        # Values in inner array don't affect outer count
+        alice_id = vocab.encode(ValueToken("Alice"))
+        pda.update_state(alice_id, state)
+        assert state.array_counts[-2] == 1  # outer unchanged
+        assert state.array_counts[-1] == 1  # inner has 1
+
+        pda.update_state(vocab.array_end_id, state)  # close inner
+        assert state.array_counts[-1] == 1  # outer still 1
+
+    def test_init_state_array_of_objects_count(self, vocab):
+        """init_state_from_tokens should correctly count objects in arrays."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        name_id = vocab.encode(KeyToken("name"))
+        alice_id = vocab.encode(ValueToken("Alice"))
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,      # root object
+            vocab.array_start_id,    # array
+            vocab.obj_start_id,      # first object in array
+            name_id,
+            alice_id,
+            vocab.obj_end_id,        # close first object
+            vocab.obj_start_id,      # second object in array
+            name_id,
+            alice_id,
+            vocab.obj_end_id,        # close second object
+        ]
+        state = pda.init_state_from_tokens(tokens, vocab)
+
+        # Should be inside the array with 2 objects counted
+        assert state.container_stack == ["object", "array"]
+        assert state.array_counts[-1] == 2
+
+
+class TestUNKTokenHandling:
+    """Test that UNK_VALUE and UNK_KEY tokens are handled correctly in state tracking."""
+
+    def test_unk_value_counted_in_array(self, vocab):
+        """UNK_VALUE should count as an array element when directly in array."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)
+        pda.update_state(vocab.unk_value_id, state)
+        assert state.array_counts[-1] == 1
+
+    def test_unk_value_not_counted_in_object(self, vocab):
+        """UNK_VALUE inside an object should not increment the parent array count."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)
+        pda.update_state(vocab.obj_start_id, state)  # object in array (count=1)
+        # Record a key then UNK_VALUE inside the object
+        name_id = vocab.encode(KeyToken("name"))
+        pda.update_state(name_id, state)
+        pda.update_state(vocab.unk_value_id, state)
+
+        # Array count should be 1 (the object), not 2
+        # array_counts only has entries for arrays, not objects
+        assert state.array_counts[-1] == 1
+
+    def test_unk_key_recorded_in_seen_keys(self, vocab):
+        """UNK_KEY should be recorded in seen_keys like a normal key."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.obj_start_id, state)
+        pda.update_state(vocab.unk_key_id, state)
+        assert vocab.unk_key_id in state.seen_keys[-1]
+
+    def test_unk_value_tracked_for_unique_items(self, vocab):
+        """UNK_VALUE in array should be tracked in seen_array_values."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        state = SchemaState()
+        pda.update_state(vocab.array_start_id, state)
+        pda.update_state(vocab.unk_value_id, state)
+        assert vocab.unk_value_id in state.seen_array_values[-1]
+
+    def test_init_state_with_unk_tokens(self, vocab):
+        """init_state_from_tokens should handle UNK_VALUE and UNK_KEY correctly."""
+        schema = {"type": "object", "properties": {}}
+        pda = SchemaPDA(schema, vocab)
+
+        tokens = [
+            vocab.start_id,
+            vocab.obj_start_id,
+            vocab.unk_key_id,     # acts like a key
+            vocab.unk_value_id,   # acts like a value
+        ]
+        state = pda.init_state_from_tokens(tokens, vocab)
+
+        # UNK_KEY should be in seen_keys
+        assert vocab.unk_key_id in state.seen_keys[-1]
+        # Should be in object context
+        assert state.container_stack == ["object"]
+
+
 class TestSummary:
     def test_summary_output(self, vocab, simple_schema):
         pda = SchemaPDA(simple_schema, vocab)

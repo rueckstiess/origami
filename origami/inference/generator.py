@@ -1440,8 +1440,18 @@ class OrigamiGenerator:
                 key_id = vocab.encode(token)
                 state.set_key(PATH_TYPE_KEY, key_id)
 
-            elif isinstance(token, ValueToken) or token_id == vocab.num_token_id:
+            elif token_id == vocab.unk_key_id:
+                # UNK_KEY acts like a KeyToken but is a GrammarToken
+                path = state.get_current_path()
+                state.set_key(PATH_TYPE_KEY, vocab.unk_key_id)
+
+            elif (
+                isinstance(token, ValueToken)
+                or token_id == vocab.num_token_id
+                or token_id == vocab.unk_value_id
+            ):
                 # Value token: path includes the key/index
+                # UNK_VALUE is a GrammarToken but acts like a value
                 path = state.get_value_path()
                 # Clear current key and advance array index if in array
                 if state.context_stack and state.context_stack[-1][0] == "array":
@@ -1490,7 +1500,15 @@ class OrigamiGenerator:
             elif isinstance(token, KeyToken):
                 key_id = vocab.encode(token)
                 state.set_key(PATH_TYPE_KEY, key_id)
-            elif isinstance(token, ValueToken) or token_id == vocab.num_token_id:
+            elif token_id == vocab.unk_key_id:
+                # UNK_KEY acts like a KeyToken but is a GrammarToken
+                state.set_key(PATH_TYPE_KEY, vocab.unk_key_id)
+            elif (
+                isinstance(token, ValueToken)
+                or token_id == vocab.num_token_id
+                or token_id == vocab.unk_value_id
+            ):
+                # UNK_VALUE is a GrammarToken but acts like a value
                 if state.context_stack and state.context_stack[-1][0] == "array":
                     state.advance_array_index()
                 state.current_key = None
