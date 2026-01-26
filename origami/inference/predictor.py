@@ -62,6 +62,7 @@ class OrigamiPredictor:
         model: "OrigamiModel",
         tokenizer: "JSONTokenizer",
         inverse_transform_fn: Callable[[Any, str], Any] | None = None,
+        schema: dict | None = None,
     ):
         """Initialize predictor.
 
@@ -72,6 +73,8 @@ class OrigamiPredictor:
                 Signature: (value, target_key) -> transformed_value.
                 Used for scaled numeric values that need to be converted back
                 to original scale.
+            schema: Optional JSON Schema dict for semantic constraints.
+                Passed through to the internal OrigamiGenerator.
 
         Note:
             The Predictor uses the model's current device dynamically.
@@ -86,7 +89,7 @@ class OrigamiPredictor:
         self._inverse_transform = inverse_transform_fn
 
         # Create generator for value generation (handles grammar + continuous values)
-        self._generator = OrigamiGenerator(model, tokenizer)
+        self._generator = OrigamiGenerator(model, tokenizer, schema=schema)
 
         # Create collator for batch creation (include_labels=False for inference)
         self._collator = OrigamiDataCollator(tokenizer, include_labels=False)

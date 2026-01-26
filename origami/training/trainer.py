@@ -35,6 +35,7 @@ except ImportError:
 
         pass
 
+
 from origami.position_encoding import PATH_TYPE_KEY
 from origami.tokenizer.vocabulary import KeyToken
 from origami.utils import get_device
@@ -150,6 +151,7 @@ class OrigamiTrainer:
         device: torch.device | None = None,
         callbacks: list[TrainerCallback] | None = None,
         training_state: dict | None = None,
+        schema: dict | None = None,
     ):
         """Initialize trainer.
 
@@ -165,6 +167,9 @@ class OrigamiTrainer:
                      computed automatically based on TrainingConfig settings.
             training_state: Optional training state dict for resuming training.
                      Contains optimizer_state, scheduler_state, epoch, global_step.
+            schema: Optional JSON Schema dict for semantic constraints.
+                     When provided, schema-based masks are intersected with grammar
+                     masks during training to restrict outputs by type/enum/keys.
         """
         from origami.config import TrainingConfig
 
@@ -224,11 +229,20 @@ class OrigamiTrainer:
         # Pass grammar PDA to collator for parallel computation in DataLoader workers
         # This pre-computes grammar masks during data loading instead of in training loop
         grammar_pda = getattr(model, "_grammar_pda", None)
+
+        # Create SchemaPDA for semantic constraints if schema is provided
+        schema_pda = None
+        if schema is not None:
+            from origami.constraints import SchemaPDA
+
+            schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=model.config.max_depth)
+
         self.collator = OrigamiDataCollator(
             tokenizer,
             max_length=model.config.max_seq_length,
             device=collator_device,
             grammar_pda=grammar_pda,
+            schema_pda=schema_pda,
         )
         # Track whether we need to move tensors to device in training loop
         self._move_batch_to_device = use_workers and not self._use_accelerate
@@ -716,7 +730,9 @@ class OrigamiTrainer:
             numeric_values=batch.numeric_values.to(self.device, non_blocking=nb),
             numeric_mask=batch.numeric_mask.to(self.device, non_blocking=nb),
             lengths=batch.lengths.to(self.device, non_blocking=nb),
-            labels=batch.labels.to(self.device, non_blocking=nb) if batch.labels is not None else None,
+            labels=batch.labels.to(self.device, non_blocking=nb)
+            if batch.labels is not None
+            else None,
             grammar_mask=(
                 batch.grammar_mask.to(self.device, non_blocking=nb)
                 if batch.grammar_mask is not None
@@ -890,7 +906,9 @@ class OrigamiTrainer:
         self.state.epoch = state.get("epoch", 0)
         self.state.global_step = state.get("global_step", 0)
         self.state.best_eval_loss = state.get("best_eval_loss", float("inf"))
-        self.state.epoch_completed = state.get("epoch_completed", True)  # Default True for backwards compat
+        self.state.epoch_completed = state.get(
+            "epoch_completed", True
+        )  # Default True for backwards compat
 
         # Track steps to skip for mid-epoch resumption
         # Only relevant if epoch was not completed

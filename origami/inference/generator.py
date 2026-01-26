@@ -27,6 +27,7 @@ from origami.tokenizer.vocabulary import (
 from .utils import GenerationError
 
 if TYPE_CHECKING:
+    from origami.constraints.schema_pda import SchemaState
     from origami.model.origami_model import OrigamiModel
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer
 
@@ -160,6 +161,7 @@ class OrigamiGenerator:
         model: "OrigamiModel",
         tokenizer: "JSONTokenizer",
         prevent_duplicate_keys: bool = True,
+        schema: dict | None = None,
     ):
         """Initialize generator.
 
@@ -168,6 +170,9 @@ class OrigamiGenerator:
             tokenizer: JSONTokenizer with fitted vocabulary
             prevent_duplicate_keys: If True (default), prevent generating duplicate
                 keys within the same JSON object during generation.
+            schema: Optional JSON Schema dict for semantic constraints.
+                When provided, schema-based masks are intersected with grammar
+                masks during generation to restrict outputs by type/enum/keys.
 
         Note:
             The Generator uses the model's current device dynamically.
@@ -186,6 +191,13 @@ class OrigamiGenerator:
 
         # Get grammar PDA reference from model for incremental constraint application
         self._grammar_pda = model._grammar_pda
+
+        # Schema constraints for semantic restriction
+        self._schema_pda = None
+        if schema is not None:
+            from origami.constraints import SchemaPDA
+
+            self._schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=model.config.max_depth)
 
         # Check if backbone supports KV caching
         self._supports_kv_cache = self._check_kv_cache_support()
@@ -257,6 +269,120 @@ class OrigamiGenerator:
                 seen = state.get_seen_keys()
                 for key_id in seen:
                     mask[i, key_id] = True
+
+        return mask
+
+    def _path_elements_to_schema_path(self, path_elements: list[tuple[int, int]]) -> str:
+        """Convert path elements [(type, id), ...] to normalized schema path string.
+
+        Key elements are resolved to key names via vocab, index elements
+        become ``*`` wildcards.
+        """
+        vocab = self.tokenizer.vocab
+        parts: list[str] = []
+        for ptype, pid in path_elements:
+            if ptype == PATH_TYPE_KEY:
+                token = vocab.decode(pid)
+                if isinstance(token, KeyToken):
+                    parts.append(token.key)
+                else:
+                    return ""  # Can't resolve, fall back to root
+            elif ptype == PATH_TYPE_INDEX:
+                parts.append("*")
+        return ".".join(parts)
+
+    def _resolve_schema_path(self, ps: PathState) -> str | None:
+        """Determine the schema path that constrains the next token.
+
+        Based on the current path state:
+        - Inside object, no key set → next is key → use object's path
+        - Inside object, key set → next is value → use field path
+        - Inside array → next is element → use element path (with ``*``)
+        """
+        if not ps.context_stack:
+            return ""  # Root level
+
+        ctx_type, base_path = ps.context_stack[-1]
+
+        if ctx_type == "object":
+            if ps.current_key is not None:
+                # Next is value → use value path (includes key)
+                return self._path_elements_to_schema_path(ps.get_value_path())
+            else:
+                # Next is key (or OBJ_END) → use object's path
+                return self._path_elements_to_schema_path(base_path)
+        elif ctx_type == "array":
+            # Next is element (or ARRAY_END) → use element path
+            return self._path_elements_to_schema_path(ps.get_value_path())
+
+        return None
+
+    def _compute_schema_mask(
+        self,
+        path_states: list[PathState],
+        schema_states: list["SchemaState"],
+    ) -> Tensor:
+        """Compute schema constraint mask for the next token position.
+
+        Combines path-dependent constraints (type/enum/key) from the mask table
+        with count-dependent adjustments (required, minItems, maxItems).
+
+        Args:
+            path_states: Path state for each active sequence
+            schema_states: Schema state for each active sequence
+
+        Returns:
+            ``(batch, vocab_size)`` boolean mask
+        """
+        batch_size = len(path_states)
+        vocab = self.tokenizer.vocab
+        device = self.device
+        schema_pda = self._schema_pda
+
+        mask_table = schema_pda.get_mask_table_on_device(device)
+        mask = torch.ones(batch_size, vocab.size, dtype=torch.bool, device=device)
+
+        for i, (ps, ss) in enumerate(zip(path_states, schema_states, strict=True)):
+            # 1. Path-dependent mask from mask table
+            schema_path = self._resolve_schema_path(ps)
+            if schema_path is not None:
+                idx = schema_pda._path_to_index.get(schema_path, 0)
+                mask[i] = mask_table[idx]
+
+            # 2. Count-dependent: required fields (suppress OBJ_END if missing)
+            if ss.container_stack and ss.container_stack[-1] == "object" and ps.current_key is None:
+                obj_path = (
+                    self._path_elements_to_schema_path(ps.context_stack[-1][1])
+                    if ps.context_stack
+                    else ""
+                )
+                constraints = schema_pda.get_constraints(obj_path)
+                if constraints and constraints.required_key_ids:
+                    seen = ss.seen_keys[-1] if ss.seen_keys else set()
+                    if constraints.required_key_ids - seen:
+                        mask[i, vocab.obj_end_id] = False
+
+            # 3. Count-dependent: array bounds
+            if ss.container_stack and ss.container_stack[-1] == "array":
+                arr_path = (
+                    self._path_elements_to_schema_path(ps.context_stack[-1][1])
+                    if ps.context_stack
+                    else ""
+                )
+                constraints = schema_pda.get_constraints(arr_path)
+                if constraints:
+                    arr_count = ss.array_counts[-1] if ss.array_counts else 0
+                    if constraints.min_items is not None and arr_count < constraints.min_items:
+                        # Suppress ARRAY_END until min items reached
+                        mask[i, vocab.array_end_id] = False
+                    if constraints.max_items is not None and arr_count >= constraints.max_items:
+                        # Suppress value-like tokens to force ARRAY_END
+                        for vid in vocab._value_ids:
+                            mask[i, vid] = False
+                        mask[i, vocab.obj_start_id] = False
+                        mask[i, vocab.array_start_id] = False
+                        mask[i, vocab.num_token_id] = False
+                        mask[i, vocab.unk_value_id] = False
 
         return mask
 
@@ -464,6 +590,16 @@ class OrigamiGenerator:
             states = self._init_path_states_from_tokens(seq_tokens, num_samples=1)
             path_states.append(states[0])
 
+        # Initialize schema states for incremental constraint application
+        schema_states: list[SchemaState] | None = None
+        if self._schema_pda is not None:
+            schema_states = []
+            for i in range(original_batch_size):
+                mask = current_attention_mask[i]
+                seq_tokens = current_ids[i][mask].tolist()
+                ss = self._schema_pda.init_state_from_tokens(seq_tokens, vocab)
+                schema_states.append(ss)
+
         # Initialize grammar state for all sequences in parallel from their prefixes
         # init_state_from_tokens_batch returns state AFTER processing the prefix
         grammar_state = None
@@ -552,6 +688,11 @@ class OrigamiGenerator:
             if next_valid_mask is not None:
                 next_logits = next_logits.masked_fill(~next_valid_mask, float("-inf"))
 
+            # Apply schema constraints (type/enum/key + count-dependent)
+            if self._schema_pda is not None and schema_states is not None:
+                schema_mask = self._compute_schema_mask(path_states, schema_states)
+                next_logits = next_logits.masked_fill(~schema_mask, float("-inf"))
+
             # Apply duplicate key prevention
             if self.prevent_duplicate_keys:
                 dup_key_mask = self._get_duplicate_key_mask(path_states, grammar_state)
@@ -618,6 +759,14 @@ class OrigamiGenerator:
                 next_tokens, path_states, just_completed
             )
 
+            # Update schema states with sampled tokens
+            if schema_states is not None:
+                for idx_s, (token_id, is_done) in enumerate(
+                    zip(next_tokens.tolist(), just_completed.tolist(), strict=True)
+                ):
+                    if not is_done:
+                        self._schema_pda.update_state(token_id, schema_states[idx_s])
+
             # Extend tensors with new tokens
             current_ids = torch.cat([current_ids, next_tokens.unsqueeze(1)], dim=1)
             current_path_types = torch.cat([current_path_types, new_path_types], dim=1)
@@ -633,6 +782,7 @@ class OrigamiGenerator:
                 keep_indices = []
                 new_active_indices = []
                 new_path_states = []
+                new_schema_states = [] if schema_states is not None else None
 
                 for i, (is_complete, orig_idx) in enumerate(
                     zip(completed_mask, active_indices, strict=True)
@@ -649,6 +799,8 @@ class OrigamiGenerator:
                         keep_indices.append(i)
                         new_active_indices.append(orig_idx)
                         new_path_states.append(path_states[i])
+                        if new_schema_states is not None:
+                            new_schema_states.append(schema_states[i])
 
                 # Compact tensors to only keep active sequences
                 if keep_indices:
@@ -684,6 +836,8 @@ class OrigamiGenerator:
 
                 active_indices = new_active_indices
                 path_states = new_path_states
+                if new_schema_states is not None:
+                    schema_states = new_schema_states
 
         # Store any remaining sequences that didn't complete (hit max_tokens)
         incomplete_indices = set()
@@ -784,6 +938,22 @@ class OrigamiGenerator:
             last_token = batch.input_ids[:, -1]
             valid_mask, _ = self._grammar_pda.get_next_token_mask(last_token, grammar_state)
             next_logits = next_logits.masked_fill(~valid_mask, float("-inf"))
+
+        # 3b. Apply schema constraints
+        if self._schema_pda is not None:
+            vocab = self.tokenizer.vocab
+            path_states = []
+            schema_states_dist = []
+            for i in range(batch.input_ids.size(0)):
+                att_mask = batch.attention_mask[i]
+                seq_tokens = batch.input_ids[i][att_mask].tolist()
+                ps = self._init_path_states_from_tokens(seq_tokens, num_samples=1)[0]
+                path_states.append(ps)
+                ss = self._schema_pda.init_state_from_tokens(seq_tokens, vocab)
+                schema_states_dist.append(ss)
+
+            schema_mask = self._compute_schema_mask(path_states, schema_states_dist)
+            next_logits = next_logits.masked_fill(~schema_mask, float("-inf"))
 
         # 4. Convert to probabilities
         probs = F.softmax(next_logits, dim=-1)

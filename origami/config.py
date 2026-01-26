@@ -257,6 +257,11 @@ class DataConfig(PrettyReprMixin):
         bin_strategy: Binning strategy for discretization.
         max_vocab_size: Maximum vocabulary size. 0 = unlimited.
             If > 0, rare tokens are replaced with UNK after tokenizer.fit().
+        schema: Optional JSON Schema dict to constrain model outputs.
+            Applied as semantic constraints on top of the syntactic grammar PDA.
+        derive_schema: If True, auto-derive a JSON Schema from training data.
+            Uses cat_threshold as the enum threshold. When both schema and
+            derive_schema are set, the user-provided schema takes precedence.
     """
 
     numeric_mode: Literal["none", "discretize", "scale"] = "none"
@@ -264,6 +269,8 @@ class DataConfig(PrettyReprMixin):
     n_bins: int = 20
     bin_strategy: Literal["quantile", "uniform", "kmeans"] = "quantile"
     max_vocab_size: int = 0  # 0 = unlimited
+    schema: dict | None = None
+    derive_schema: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration."""

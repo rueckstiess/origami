@@ -1207,7 +1207,7 @@ class TestPipelineCheckpointResume:
         assert loaded._training_state["epoch"] == 3
 
     def test_state_dict_version_updated(self):
-        """Test that state_dict version is 1.1 for training state support."""
+        """Test that state_dict version is 1.2 for schema support."""
         torch.manual_seed(42)
         data = [{"a": i} for i in range(20)]
 
@@ -1215,7 +1215,7 @@ class TestPipelineCheckpointResume:
         pipeline.fit(data, epochs=1, verbose=False)
 
         state = pipeline.state_dict()
-        assert state["version"] == "1.1"
+        assert state["version"] == "1.2"
 
     def test_resume_via_fit(self, tmp_path):
         """Test that resume works via fit() as well as preprocess()/train()."""

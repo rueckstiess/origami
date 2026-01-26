@@ -9,6 +9,7 @@ import torch
 
 if TYPE_CHECKING:
     from origami.constraints.json_grammar import JSONGrammarPDA
+    from origami.constraints.schema_pda import SchemaPDA
     from origami.tokenizer.json_tokenizer import EncodedBatch, JSONTokenizer, TokenizedInstance
 
 
@@ -32,6 +33,9 @@ class OrigamiDataCollator:
         grammar_pda: Optional PDA for computing grammar masks during collation.
             When provided, grammar masks are pre-computed in DataLoader workers
             for parallel processing.
+        schema_pda: Optional SchemaPDA for computing schema masks during collation.
+            When provided, schema masks are computed via mask table gather and
+            intersected with grammar masks.
     """
 
     def __init__(
@@ -41,6 +45,7 @@ class OrigamiDataCollator:
         include_labels: bool = True,
         device: torch.device | None = None,
         grammar_pda: "JSONGrammarPDA | None" = None,
+        schema_pda: "SchemaPDA | None" = None,
     ):
         """Initialize collator.
 
@@ -53,12 +58,16 @@ class OrigamiDataCollator:
             grammar_pda: Optional PDA for pre-computing grammar masks.
                 When provided and using DataLoader with num_workers > 0,
                 grammar masks are computed in parallel by worker processes.
+            schema_pda: Optional SchemaPDA for pre-computing schema masks.
+                When provided, schema masks are computed via mask table gather
+                and intersected with grammar masks.
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.include_labels = include_labels
         self.device = device
         self.grammar_pda = grammar_pda
+        self.schema_pda = schema_pda
 
     def __call__(
         self,
@@ -153,6 +162,21 @@ class OrigamiDataCollator:
             # Grammar computation runs on CPU - this is the expensive operation
             # that we're parallelizing across DataLoader workers.
             grammar_mask = self.grammar_pda.compute_valid_mask(input_ids)
+
+        # Compute schema mask if SchemaPDA is provided
+        schema_mask = None
+        if self.schema_pda is not None:
+            start_positions = [max_seq_len - len(ids) for ids in batch_token_ids]
+            schema_indices = self.schema_pda.resolve_mask_indices(
+                batch_paths, batch_size, max_seq_len, start_positions
+            )
+            schema_mask = self.schema_pda.gather_masks(schema_indices)
+
+        # Intersect grammar and schema masks
+        if grammar_mask is not None and schema_mask is not None:
+            grammar_mask = grammar_mask & schema_mask
+        elif schema_mask is not None:
+            grammar_mask = schema_mask
 
         # Move to device if specified
         if self.device is not None:

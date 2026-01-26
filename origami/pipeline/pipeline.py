@@ -86,6 +86,7 @@ class OrigamiPipeline:
         self._preprocessor: NumericScaler | NumericDiscretizer | None = None
         self._tokenizer: JSONTokenizer | None = None
         self._model: OrigamiModel | None = None
+        self._schema: dict | None = None
         self._fitted = False
         self._train_result: TrainResult | None = None
 
@@ -116,6 +117,27 @@ class OrigamiPipeline:
     def tokenizer(self) -> JSONTokenizer | None:
         """Get the tokenizer (None before fit/load)."""
         return self._tokenizer
+
+    @property
+    def schema(self) -> dict | None:
+        """Get the current JSON Schema (None if not set).
+
+        The schema is populated after preprocess() when derive_schema=True
+        or when a schema is provided in DataConfig. It can also be set
+        manually after loading a model.
+        """
+        return self._schema
+
+    @schema.setter
+    def schema(self, value: dict | None) -> None:
+        """Set or replace the JSON Schema.
+
+        Invalidates cached inference components (generator/predictor)
+        since they depend on schema for constraint application.
+        """
+        self._schema = value
+        self._generator = None
+        self._predictor = None
 
     def _resolve_device(self) -> torch.device:
         """Resolve the configured device string to an actual device.
@@ -207,9 +229,7 @@ class OrigamiPipeline:
                 print("Resuming from checkpoint - using existing model and preprocessor")
 
             self._train_processed = self._transform_data(data)
-            self._eval_processed = (
-                self._transform_data(eval_data) if eval_data else None
-            )
+            self._eval_processed = self._transform_data(eval_data) if eval_data else None
             return self
 
         # Fresh start: full preprocessing pipeline
@@ -254,7 +274,22 @@ class OrigamiPipeline:
                     f"(frequency threshold: {stats.value_frequency_threshold})"
                 )
 
-        # Step 3: Create model and move to training device
+        # Step 3: Derive or set schema
+        if self.config.data.derive_schema:
+            from origami.constraints import SchemaDeriver
+
+            deriver = SchemaDeriver(enum_threshold=self.config.data.cat_threshold)
+            self._schema = deriver.derive(train_processed)
+            if verbose:
+                import json
+
+                print(f"Derived schema:\n{json.dumps(self._schema, indent=2)}")
+        elif self.config.data.schema is not None:
+            self._schema = self.config.data.schema
+        else:
+            self._schema = None
+
+        # Step 4: Create model and move to training device
         self._model = self._create_model()
         self._training_device = self._resolve_device()
         self._model.to(self._training_device)
@@ -262,7 +297,7 @@ class OrigamiPipeline:
         if verbose:
             print(f"Model parameters: {self._model.get_num_parameters():,}")
 
-        # Step 4: Store preprocessed data for train()
+        # Step 5: Store preprocessed data for train()
         self._train_processed = train_processed
         self._eval_processed = eval_processed
 
@@ -334,6 +369,7 @@ class OrigamiPipeline:
             callbacks=all_callbacks if all_callbacks else None,
             device=trainer_device,
             training_state=self._training_state,  # Resume from checkpoint if available
+            schema=self._schema,
         )
 
         # Run training (handles KeyboardInterrupt gracefully)
@@ -455,13 +491,14 @@ class OrigamiPipeline:
         self._check_fitted()
 
         state = {
-            "version": "1.1",  # Bumped for training state support
+            "version": "1.2",  # Bumped for schema support
             "config": asdict(self.config),
             "model_state_dict": self._model.state_dict(),
             "model_config": asdict(self._model.config),
             "tokenizer_state": self._tokenizer_to_dict(),
             "preprocessor_type": self._get_preprocessor_type(),
             "preprocessor_state": self._preprocessor_to_dict(),
+            "schema": self._schema,
         }
 
         # Include training state if available and requested
@@ -516,6 +553,9 @@ class OrigamiPipeline:
         # Load training state if present (for checkpoint resumption)
         if "training_state" in state_dict:
             pipeline._training_state = state_dict["training_state"]
+
+        # Load schema if present
+        pipeline._schema = state_dict.get("schema")
 
         pipeline._fitted = True
         return pipeline
@@ -943,7 +983,7 @@ class OrigamiPipeline:
         """
         self._ensure_inference_device()
         if self._generator is None:
-            self._generator = OrigamiGenerator(self._model, self._tokenizer)
+            self._generator = OrigamiGenerator(self._model, self._tokenizer, schema=self._schema)
         return self._generator
 
     def _get_predictor(self) -> OrigamiPredictor:
@@ -962,6 +1002,7 @@ class OrigamiPipeline:
                 self._model,
                 self._tokenizer,
                 inverse_transform_fn=inverse_fn,
+                schema=self._schema,
             )
         return self._predictor
 
