@@ -3,25 +3,30 @@
 import pytest
 
 from origami.constraints.schema_deriver import SchemaDeriver
+from origami.preprocessing.numeric_scaler import ScaledNumeric
 
 
 @pytest.fixture
 def deriver():
-    """Default deriver with threshold=100."""
-    return SchemaDeriver(enum_threshold=100)
+    """Default deriver with no enum threshold (always includes enum)."""
+    return SchemaDeriver()
 
 
 class TestSchemaDeriverInit:
     def test_default_threshold(self):
         d = SchemaDeriver()
-        assert d.enum_threshold == 100
+        assert d.enum_threshold is None
 
     def test_custom_threshold(self):
         d = SchemaDeriver(enum_threshold=50)
         assert d.enum_threshold == 50
 
+    def test_none_threshold(self):
+        d = SchemaDeriver(enum_threshold=None)
+        assert d.enum_threshold is None
+
     def test_invalid_threshold(self):
-        with pytest.raises(ValueError, match="enum_threshold must be >= 1"):
+        with pytest.raises(ValueError, match="enum_threshold must be >= 1 or None"):
             SchemaDeriver(enum_threshold=0)
 
 
@@ -115,6 +120,14 @@ class TestRequiredFields:
 
 
 class TestEnumThreshold:
+    def test_default_always_includes_enum(self):
+        """Default (None) threshold always includes enum regardless of cardinality."""
+        deriver = SchemaDeriver()
+        data = [{"id": f"val_{i}"} for i in range(500)]
+        schema = deriver.derive(data)
+        assert "enum" in schema["properties"]["id"]
+        assert len(schema["properties"]["id"]["enum"]) == 500
+
     def test_below_threshold(self):
         deriver = SchemaDeriver(enum_threshold=5)
         data = [{"color": c} for c in ["red", "green", "blue"]]
@@ -463,3 +476,75 @@ class TestAdditionalProperties:
         assert schema["additionalProperties"] is False
         assert schema["properties"]["a"]["additionalProperties"] is False
         assert schema["properties"]["a"]["properties"]["b"]["additionalProperties"] is False
+
+
+class TestScaledNumericSchema:
+    """Tests for ScaledNumeric value handling in schema derivation."""
+
+    def test_scaled_numeric_produces_number_type(self, deriver):
+        """ScaledNumeric values should produce type: 'number' with min/max."""
+        data = [
+            {"price": ScaledNumeric(value=-1.5)},
+            {"price": ScaledNumeric(value=0.0)},
+            {"price": ScaledNumeric(value=2.3)},
+        ]
+        schema = deriver.derive(data)
+
+        price_schema = schema["properties"]["price"]
+        assert price_schema["type"] == "number"
+        assert price_schema["minimum"] == -1.5
+        assert price_schema["maximum"] == 2.3
+
+    def test_scaled_numeric_no_enum(self, deriver):
+        """ScaledNumeric fields should NOT have enum (continuous values)."""
+        data = [{"x": ScaledNumeric(value=float(i) / 10)} for i in range(100)]
+        schema = deriver.derive(data)
+
+        x_schema = schema["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert "enum" not in x_schema
+
+    def test_scaled_numeric_required(self, deriver):
+        """ScaledNumeric fields present in all objects should be required."""
+        data = [
+            {"val": ScaledNumeric(value=1.0)},
+            {"val": ScaledNumeric(value=2.0)},
+        ]
+        schema = deriver.derive(data)
+        assert "val" in schema["required"]
+
+    def test_mixed_scaled_and_primitive(self, deriver):
+        """Mixed ScaledNumeric and primitive values should merge correctly."""
+        data = [
+            {"x": ScaledNumeric(value=1.0)},
+            {"x": "unknown"},
+        ]
+        schema = deriver.derive(data)
+
+        x_schema = schema["properties"]["x"]
+        # Should have both number (from ScaledNumeric) and string types
+        assert isinstance(x_schema["type"], list)
+        assert "number" in x_schema["type"]
+        assert "string" in x_schema["type"]
+
+    def test_scaled_numeric_bounds_are_from_scaled_values(self, deriver):
+        """Bounds should reflect the scaled (z-score) values, not originals."""
+        data = [
+            {"temp": ScaledNumeric(value=-2.0)},
+            {"temp": ScaledNumeric(value=3.0)},
+        ]
+        schema = deriver.derive(data)
+
+        temp_schema = schema["properties"]["temp"]
+        assert temp_schema["minimum"] == -2.0
+        assert temp_schema["maximum"] == 3.0
+
+    def test_single_scaled_value(self, deriver):
+        """Single ScaledNumeric value: min == max."""
+        data = [{"x": ScaledNumeric(value=0.5)}]
+        schema = deriver.derive(data)
+
+        x_schema = schema["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert x_schema["minimum"] == 0.5
+        assert x_schema["maximum"] == 0.5

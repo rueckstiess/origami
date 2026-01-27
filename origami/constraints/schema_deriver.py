@@ -18,6 +18,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from origami.preprocessing.numeric_scaler import ScaledNumeric
+
 # Python type → JSON Schema type mapping
 _PYTHON_TO_JSON_TYPE: dict[type, str] = {
     str: "string",
@@ -36,12 +38,13 @@ class SchemaDeriver:
 
     Args:
         enum_threshold: Fields with more than this many unique primitive
-            values will not have an enum constraint. Default 100.
+            values will not have an enum constraint. None (default) means
+            no limit — always include enum regardless of cardinality.
     """
 
-    def __init__(self, enum_threshold: int = 100):
-        if enum_threshold < 1:
-            raise ValueError(f"enum_threshold must be >= 1, got {enum_threshold}")
+    def __init__(self, enum_threshold: int | None = None):
+        if enum_threshold is not None and enum_threshold < 1:
+            raise ValueError(f"enum_threshold must be >= 1 or None, got {enum_threshold}")
         self.enum_threshold = enum_threshold
 
     def derive(self, data: list[dict]) -> dict:
@@ -110,12 +113,15 @@ class SchemaDeriver:
         object_values: list[dict] = []
         array_values: list[list] = []
         primitive_values: list[Any] = []
+        scaled_values: list[float] = []
 
         for v in values:
             if isinstance(v, dict):
                 object_values.append(v)
             elif isinstance(v, list):
                 array_values.append(v)
+            elif isinstance(v, ScaledNumeric):
+                scaled_values.append(v.value)
             elif isinstance(v, (str, int, float, bool)) or v is None:
                 primitive_values.append(v)
             # Skip other types silently
@@ -133,6 +139,14 @@ class SchemaDeriver:
         # Handle primitives
         if primitive_values:
             sub_schemas.append(self._derive_primitive_schema(primitive_values))
+
+        # Handle scaled numerics — type + bounds only, no enum
+        if scaled_values:
+            sub_schemas.append({
+                "type": "number",
+                "minimum": min(scaled_values),
+                "maximum": max(scaled_values),
+            })
 
         if not sub_schemas:
             # No recognized values — permissive schema
@@ -222,13 +236,13 @@ class SchemaDeriver:
         elif len(json_types) > 1:
             schema["type"] = sorted(json_types)
 
-        # Enum: only for low-cardinality fields
+        # Enum: include unless threshold is set and exceeded
         unique_values = set()
         for v in values:
-            # Use (type, value) to distinguish e.g. 1 vs True
             unique_values.add(v)
 
-        if len(unique_values) <= self.enum_threshold:
+        include_enum = self.enum_threshold is None or len(unique_values) <= self.enum_threshold
+        if include_enum:
             # Sort for deterministic output (handle mixed types gracefully)
             enum_list = _sort_mixed(list(unique_values))
             schema["enum"] = enum_list

@@ -278,7 +278,7 @@ class OrigamiPipeline:
         if self.config.data.derive_schema:
             from origami.constraints import SchemaDeriver
 
-            deriver = SchemaDeriver(enum_threshold=self.config.data.cat_threshold)
+            deriver = SchemaDeriver()
             self._schema = deriver.derive(train_processed)
             if verbose:
                 import json
@@ -430,7 +430,7 @@ class OrigamiPipeline:
         Returns:
             Tuple of (processed_train, processed_eval)
         """
-        if self.config.data.numeric_mode == "none":
+        if self.config.data.numeric_mode == "disabled":
             # No preprocessing
             self._preprocessor = None
             return train_data, eval_data
