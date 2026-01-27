@@ -15,6 +15,7 @@ wheels/
 # Local data and checkpoints
 datasets/
 checkpoints/
+experiments/
 *.pt
 *.npy
 *.npx
