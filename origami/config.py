@@ -266,11 +266,11 @@ class DataConfig(PrettyReprMixin):
         schema: Optional JSON Schema dict to constrain model outputs.
             Applied as semantic constraints on top of the syntactic grammar PDA.
         derive_schema: If True, auto-derive a JSON Schema from training data.
-            Uses cat_threshold as the enum threshold. When both schema and
-            derive_schema are set, the user-provided schema takes precedence.
+            When both schema and derive_schema are set, the user-provided
+            schema takes precedence.
     """
 
-    numeric_mode: Literal["none", "discretize", "scale"] = "none"
+    numeric_mode: Literal["disabled", "discretize", "scale"] = "disabled"
     cat_threshold: int = 100
     n_bins: int = 20
     bin_strategy: Literal["quantile", "uniform", "kmeans"] = "quantile"
@@ -280,7 +280,7 @@ class DataConfig(PrettyReprMixin):
 
     def __post_init__(self) -> None:
         """Validate configuration."""
-        valid_numeric_modes = {"none", "discretize", "scale"}
+        valid_numeric_modes = {"disabled", "discretize", "scale"}
         if self.numeric_mode not in valid_numeric_modes:
             raise ValueError(
                 f"numeric_mode must be one of {valid_numeric_modes}, got '{self.numeric_mode}'"

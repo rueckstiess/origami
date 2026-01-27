@@ -234,10 +234,10 @@ def parse_set_params(set_params: tuple[str, ...]) -> dict:
 @click.option(
     "-n",
     "--numeric-mode",
-    type=click.Choice(["none", "discretize", "scale"]),
-    default="none",
+    type=click.Choice(["disabled", "discretize", "scale"]),
+    default="disabled",
     show_default=True,
-    help="Numeric field handling: none, discretize (binning), or scale (continuous).",
+    help="Numeric field handling: disabled, discretize (binning), or scale (continuous).",
 )
 @click.option(
     "-o",
@@ -377,7 +377,7 @@ def train(
     }
 
     # Enable continuous head when using scale mode
-    actual_numeric_mode = data_kwargs.get("numeric_mode", "none")
+    actual_numeric_mode = data_kwargs.get("numeric_mode", "disabled")
     if actual_numeric_mode == "scale":
         model_kwargs.setdefault("use_continuous_head", True)
 

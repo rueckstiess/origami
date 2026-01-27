@@ -20,7 +20,7 @@ class TestOrigamiConfigNested:
         assert config.model.d_model == 128
         assert config.model.n_heads == 4
         assert config.model.n_layers == 4
-        assert config.data.numeric_mode == "none"
+        assert config.data.numeric_mode == "disabled"
         assert config.training.batch_size == 32
         assert config.training.num_epochs == 10
 
@@ -187,7 +187,7 @@ class TestPipelineFit:
         assert pipeline._fitted
         assert pipeline._model is not None
         assert pipeline._tokenizer is not None
-        assert pipeline._preprocessor is None  # numeric_mode="none"
+        assert pipeline._preprocessor is None  # numeric_mode="disabled"
 
     def test_fit_with_eval_data(self, simple_data):
         """Test fitting with evaluation data."""
@@ -606,7 +606,7 @@ class TestPipelineRepr:
         """Test repr for unfitted pipeline."""
         pipeline = OrigamiPipeline()
         assert "not fitted" in repr(pipeline)
-        assert "none" in repr(pipeline)
+        assert "disabled" in repr(pipeline)
 
     def test_repr_fitted(self):
         """Test repr for fitted pipeline."""
@@ -973,7 +973,7 @@ class TestPipelinePreprocessorSerialization:
         """Test that preprocessor_to_dict handles None preprocessor."""
         config = OrigamiConfig(
             model=ModelConfig(d_model=32, n_layers=2),
-            data=DataConfig(numeric_mode="none"),  # No preprocessing
+            data=DataConfig(numeric_mode="disabled"),  # No preprocessing
         )
         pipeline = OrigamiPipeline(config)
 
