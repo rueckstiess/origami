@@ -150,31 +150,75 @@ class ContinuousHead(nn.Module):
         weights: Tensor,  # (batch, seq_len, n_components)
         means: Tensor,  # (batch, seq_len, n_components)
         log_vars: Tensor,  # (batch, seq_len, n_components)
+        lower: Tensor | None = None,  # (batch, seq_len) or None
+        upper: Tensor | None = None,  # (batch, seq_len) or None
     ) -> Tensor:
-        """Sample from the mixture distribution.
+        """Sample from the mixture distribution, optionally truncated to [lower, upper].
+
+        When bounds are provided, uses inverse CDF sampling from the truncated
+        distribution: reweight components by their mass within [lower, upper],
+        then sample via u ~ Uniform(CDF(lower), CDF(upper)), x = ICDF(u).
 
         Args:
             weights: Mixture weights
             means: Component means
             log_vars: Component log-variances
+            lower: Per-position lower bounds, or None for unbounded
+            upper: Per-position upper bounds, or None for unbounded
 
         Returns:
             Samples of shape (batch, seq_len)
         """
         batch_size, seq_len, n_components = weights.shape
 
-        # Sample component indices
-        indices = torch.multinomial(weights.view(-1, n_components), num_samples=1).view(
+        if lower is None and upper is None:
+            # Unconstrained path — original sampling logic
+            indices = torch.multinomial(weights.view(-1, n_components), num_samples=1).view(
+                batch_size, seq_len
+            )
+            indices_expanded = indices.unsqueeze(-1)
+            selected_means = torch.gather(means, dim=-1, index=indices_expanded).squeeze(-1)
+            selected_log_vars = torch.gather(log_vars, dim=-1, index=indices_expanded).squeeze(-1)
+            selected_stds = torch.exp(0.5 * selected_log_vars)
+            return selected_means + selected_stds * torch.randn_like(selected_means)
+
+        # Truncated sampling via inverse CDF
+        stds = torch.exp(0.5 * log_vars)  # (batch, seq, n_components)
+        dist = torch.distributions.Normal(means, stds)
+
+        # Expand bounds to (batch, seq, 1) for broadcasting with components
+        lo = lower.unsqueeze(-1) if lower is not None else means.new_full(means.shape, float("-inf"))
+        hi = upper.unsqueeze(-1) if upper is not None else means.new_full(means.shape, float("inf"))
+
+        # CDF at bounds per component
+        cdf_lo = dist.cdf(lo)  # (batch, seq, n_components)
+        cdf_hi = dist.cdf(hi)
+
+        # Reweight components by mass within [lower, upper]
+        mass = (cdf_hi - cdf_lo).clamp(min=1e-12)
+        reweighted = weights * mass
+        reweighted = reweighted / reweighted.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+
+        # Sample component index from reweighted distribution
+        indices = torch.multinomial(reweighted.view(-1, n_components), num_samples=1).view(
             batch_size, seq_len
         )
+        idx = indices.unsqueeze(-1)
 
-        # Gather means and stds for selected components
-        indices_expanded = indices.unsqueeze(-1)
-        selected_means = torch.gather(means, dim=-1, index=indices_expanded).squeeze(-1)
-        selected_log_vars = torch.gather(log_vars, dim=-1, index=indices_expanded).squeeze(-1)
-        selected_stds = torch.exp(0.5 * selected_log_vars)
+        # Gather selected component parameters and CDF bounds
+        sel_cdf_lo = torch.gather(cdf_lo, -1, idx).squeeze(-1)
+        sel_cdf_hi = torch.gather(cdf_hi, -1, idx).squeeze(-1)
+        sel_means = torch.gather(means, -1, idx).squeeze(-1)
+        sel_stds = torch.gather(stds, -1, idx).squeeze(-1)
 
-        # Sample from Gaussian
-        samples = selected_means + selected_stds * torch.randn_like(selected_means)
+        # Inverse CDF: u ~ Uniform(cdf_lo, cdf_hi), x = icdf(u)
+        u = sel_cdf_lo + (sel_cdf_hi - sel_cdf_lo) * torch.rand_like(sel_means)
+        u = u.clamp(1e-6, 1 - 1e-6)  # Avoid numerical issues at tails
+
+        # x = mean + std * Phi_inv(u) where Phi_inv is standard normal ICDF
+        standard_normal = torch.distributions.Normal(
+            torch.zeros_like(sel_means), torch.ones_like(sel_stds)
+        )
+        samples = sel_means + sel_stds * standard_normal.icdf(u)
 
         return samples

@@ -344,6 +344,101 @@ class TestContinuousHead:
 
         assert samples.device.type == device.type
 
+    def test_truncated_sample_within_bounds(self, config):
+        """Truncated samples should fall within [lower, upper]."""
+        head = ContinuousHead(config)
+        batch_size, seq_len = 4, 1
+        n_comp = config.num_mixture_components
+
+        # Fixed MoG: mean=0, std=1, equal weights
+        weights = torch.ones(batch_size, seq_len, n_comp) / n_comp
+        means = torch.zeros(batch_size, seq_len, n_comp)
+        log_vars = torch.zeros(batch_size, seq_len, n_comp)
+
+        lower = torch.full((batch_size, seq_len), -1.0)
+        upper = torch.full((batch_size, seq_len), 1.0)
+
+        torch.manual_seed(42)
+        # Sample many times to check bounds
+        for _ in range(50):
+            samples = head.sample(weights, means, log_vars, lower=lower, upper=upper)
+            assert samples.shape == (batch_size, seq_len)
+            assert (samples >= -1.0 - 1e-5).all(), f"Sample below lower bound: {samples.min()}"
+            assert (samples <= 1.0 + 1e-5).all(), f"Sample above upper bound: {samples.max()}"
+
+    def test_truncated_sample_lower_only(self, config):
+        """Only lower bound should be respected when upper is None."""
+        head = ContinuousHead(config)
+        batch_size, seq_len = 2, 1
+        n_comp = config.num_mixture_components
+
+        weights = torch.ones(batch_size, seq_len, n_comp) / n_comp
+        means = torch.zeros(batch_size, seq_len, n_comp)
+        log_vars = torch.zeros(batch_size, seq_len, n_comp)
+
+        lower = torch.full((batch_size, seq_len), 2.0)
+
+        torch.manual_seed(0)
+        for _ in range(50):
+            samples = head.sample(weights, means, log_vars, lower=lower, upper=None)
+            assert (samples >= 2.0 - 1e-5).all()
+
+    def test_truncated_sample_upper_only(self, config):
+        """Only upper bound should be respected when lower is None."""
+        head = ContinuousHead(config)
+        batch_size, seq_len = 2, 1
+        n_comp = config.num_mixture_components
+
+        weights = torch.ones(batch_size, seq_len, n_comp) / n_comp
+        means = torch.zeros(batch_size, seq_len, n_comp)
+        log_vars = torch.zeros(batch_size, seq_len, n_comp)
+
+        upper = torch.full((batch_size, seq_len), -2.0)
+
+        torch.manual_seed(0)
+        for _ in range(50):
+            samples = head.sample(weights, means, log_vars, lower=None, upper=upper)
+            assert (samples <= -2.0 + 1e-5).all()
+
+    def test_truncated_sample_no_bounds_unchanged(self, config):
+        """Without bounds, truncated path is not taken (same as unconstrained)."""
+        head = ContinuousHead(config)
+        batch_size, seq_len = 2, 1
+        n_comp = config.num_mixture_components
+
+        weights = torch.ones(batch_size, seq_len, n_comp) / n_comp
+        means = torch.zeros(batch_size, seq_len, n_comp)
+        log_vars = torch.zeros(batch_size, seq_len, n_comp)
+
+        torch.manual_seed(42)
+        samples_no_bounds = head.sample(weights, means, log_vars)
+        torch.manual_seed(42)
+        samples_none = head.sample(weights, means, log_vars, lower=None, upper=None)
+
+        assert torch.allclose(samples_no_bounds, samples_none)
+
+    def test_truncated_sample_per_batch_bounds(self, config):
+        """Different bounds per batch item should be respected."""
+        head = ContinuousHead(config)
+        batch_size, seq_len = 2, 1
+        n_comp = config.num_mixture_components
+
+        weights = torch.ones(batch_size, seq_len, n_comp) / n_comp
+        means = torch.zeros(batch_size, seq_len, n_comp)
+        log_vars = torch.zeros(batch_size, seq_len, n_comp)
+
+        # Item 0: [0, 5], Item 1: [-5, 0]
+        lower = torch.tensor([[0.0], [-5.0]])
+        upper = torch.tensor([[5.0], [0.0]])
+
+        torch.manual_seed(42)
+        for _ in range(50):
+            samples = head.sample(weights, means, log_vars, lower=lower, upper=upper)
+            assert (samples[0] >= 0.0 - 1e-5).all()
+            assert (samples[0] <= 5.0 + 1e-5).all()
+            assert (samples[1] >= -5.0 - 1e-5).all()
+            assert (samples[1] <= 0.0 + 1e-5).all()
+
 
 class TestOrigamiModel:
     """Tests for OrigamiModel."""

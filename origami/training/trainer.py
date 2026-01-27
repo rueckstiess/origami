@@ -41,6 +41,8 @@ from origami.tokenizer.vocabulary import KeyToken
 from origami.utils import get_device
 
 from .callbacks import CallbackHandler, TrainerCallback
+from .collator import OrigamiDataCollator
+from .dataset import OrigamiDataset
 
 
 def _worker_init_fn(worker_id: int) -> None:
@@ -56,10 +58,6 @@ def _worker_init_fn(worker_id: int) -> None:
     import os
 
     os.environ["NUMBA_NUM_THREADS"] = "1"
-
-
-from .collator import OrigamiDataCollator
-from .dataset import OrigamiDataset
 
 if TYPE_CHECKING:
     from origami.config import TrainingConfig

@@ -435,6 +435,7 @@ class OrigamiGenerator:
             torch.manual_seed(seed)
 
         max_length = max_length or 512
+
         results: list[dict] = []
 
         # Process in batches
@@ -728,9 +729,35 @@ class OrigamiGenerator:
                 w = weights[:, -1, :]  # (batch, n_components)
                 m = means[:, -1, :]
                 lv = log_vars[:, -1, :]
-                # Sample from MoG for all sequences (even if they didn't generate NUM)
+
+                # Resolve schema min/max bounds for truncated sampling
+                lower = None
+                upper = None
+                if self._schema_pda is not None:
+                    lo_vals = torch.full((batch_size,), float("-inf"), device=self.device)
+                    hi_vals = torch.full((batch_size,), float("inf"), device=self.device)
+                    has_bounds = False
+                    for i, ps in enumerate(path_states):
+                        if not is_num[i]:
+                            continue
+                        schema_path = self._resolve_schema_path(ps)
+                        if schema_path is not None:
+                            constraints = self._schema_pda.get_constraints(schema_path)
+                            if constraints:
+                                if constraints.minimum is not None:
+                                    lo_vals[i] = constraints.minimum
+                                    has_bounds = True
+                                if constraints.maximum is not None:
+                                    hi_vals[i] = constraints.maximum
+                                    has_bounds = True
+                    if has_bounds:
+                        lower = lo_vals.unsqueeze(1)  # (batch, 1) for seq_len=1
+                        upper = hi_vals.unsqueeze(1)
+
+                # Sample from MoG (truncated if bounds available)
                 sampled = self.model.continuous_head.sample(
-                    w.unsqueeze(1), m.unsqueeze(1), lv.unsqueeze(1)
+                    w.unsqueeze(1), m.unsqueeze(1), lv.unsqueeze(1),
+                    lower=lower, upper=upper,
                 ).squeeze(1)  # (batch,)
                 # Only use sampled value where NUM was generated
                 new_numeric_values[:, 0] = torch.where(is_num, sampled, new_numeric_values[:, 0])
