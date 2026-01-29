@@ -28,6 +28,11 @@ def simple_tokenizer():
 @pytest.fixture
 def simple_model(simple_tokenizer):
     """Create a small model for testing."""
+    import torch
+    from origami.constraints.json_grammar import JSONGrammarPDA
+
+    # Seed for reproducible model weights
+    torch.manual_seed(42)
     config = ModelConfig(
         d_model=32,
         n_heads=2,
@@ -35,7 +40,10 @@ def simple_model(simple_tokenizer):
         d_ff=64,
         max_depth=simple_tokenizer.max_depth,
     )
-    return OrigamiModel(config, vocab=simple_tokenizer.vocab)
+    model = OrigamiModel(config, vocab=simple_tokenizer.vocab)
+    # Attach grammar PDA for generation tests (normally done by trainer)
+    model._grammar_pda = JSONGrammarPDA(simple_tokenizer.vocab, max_depth=config.max_depth)
+    return model
 
 
 def _make_batch(input_ids, path_types, path_ids, path_lengths, attention_mask, device):
@@ -506,6 +514,8 @@ class TestGeneratorWithNestedData:
     @pytest.fixture
     def nested_model(self, nested_tokenizer):
         """Create a model for nested data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -513,7 +523,9 @@ class TestGeneratorWithNestedData:
             d_ff=64,
             max_depth=nested_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=nested_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=nested_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(nested_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_generate_nested(self, nested_model, nested_tokenizer):
         """Test generating nested objects."""
@@ -543,6 +555,8 @@ class TestGeneratorWithArrays:
     @pytest.fixture
     def array_model(self, array_tokenizer):
         """Create a model for array data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -550,7 +564,9 @@ class TestGeneratorWithArrays:
             d_ff=64,
             max_depth=array_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=array_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=array_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(array_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_generate_with_arrays(self, array_model, array_tokenizer):
         """Test generating objects with arrays."""
@@ -655,6 +671,8 @@ class TestGenerateFromTensorsAdvanced:
     @pytest.fixture
     def model(self, tokenizer):
         """Create model for advanced tests."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -662,7 +680,10 @@ class TestGenerateFromTensorsAdvanced:
             d_ff=64,
             max_depth=tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=tokenizer.vocab)
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        # Attach grammar PDA for generation tests (normally done by trainer)
+        model._grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_generate_from_batch_with_left_padding(self, model, tokenizer):
         """Test generate_from_batch handles left-padded inputs correctly."""
@@ -832,9 +853,15 @@ class TestGeneratorGrammarConstraints:
             n_layers=1,
             d_ff=64,
             max_depth=constrained_tokenizer.max_depth,
-            use_grammar_constraints=True,
         )
-        return OrigamiModel(config, vocab=constrained_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=constrained_tokenizer.vocab)
+        # Attach grammar PDA for tests (normally done by trainer)
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
+        model._grammar_pda = JSONGrammarPDA(
+            constrained_tokenizer.vocab, max_depth=config.max_depth
+        )
+        return model
 
     def test_generate_respects_grammar(self, constrained_model, constrained_tokenizer):
         """Test that generated objects follow JSON grammar."""
@@ -899,6 +926,8 @@ class TestGeneratorEdgeCases:
     @pytest.fixture
     def edge_model(self, edge_tokenizer):
         """Create model for edge case tests."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -906,7 +935,9 @@ class TestGeneratorEdgeCases:
             d_ff=64,
             max_depth=edge_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=edge_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=edge_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(edge_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_generate_handles_max_tokens_limit(self, edge_model, edge_tokenizer):
         """Test generation stops at max_tokens limit."""
@@ -961,6 +992,8 @@ class TestDuplicateKeyPrevention:
     @pytest.fixture
     def dup_key_model(self, dup_key_tokenizer):
         """Create a model for duplicate key testing."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -968,7 +1001,9 @@ class TestDuplicateKeyPrevention:
             d_ff=64,
             max_depth=dup_key_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=dup_key_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=dup_key_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(dup_key_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_prevent_duplicate_keys_default_true(self, dup_key_model, dup_key_tokenizer):
         """Test that prevent_duplicate_keys is True by default."""

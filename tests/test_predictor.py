@@ -25,6 +25,8 @@ def simple_tokenizer():
 @pytest.fixture
 def simple_model(simple_tokenizer):
     """Create a small model for testing."""
+    from origami.constraints.json_grammar import JSONGrammarPDA
+
     # Seed for reproducible model weights
     torch.manual_seed(42)
     config = ModelConfig(
@@ -34,7 +36,10 @@ def simple_model(simple_tokenizer):
         d_ff=64,
         max_depth=simple_tokenizer.max_depth,
     )
-    return OrigamiModel(config, vocab=simple_tokenizer.vocab)
+    model = OrigamiModel(config, vocab=simple_tokenizer.vocab)
+    # Attach grammar PDA for tests (normally done by trainer)
+    model._grammar_pda = JSONGrammarPDA(simple_tokenizer.vocab, max_depth=config.max_depth)
+    return model
 
 
 class TestOrigamiPredictor:
@@ -136,6 +141,8 @@ class TestOrigamiPredictor:
 
     def test_always_uses_cpu(self, simple_tokenizer):
         """Test that predictor always runs on CPU for performance."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
@@ -144,6 +151,7 @@ class TestOrigamiPredictor:
             max_depth=simple_tokenizer.max_depth,
         )
         model = OrigamiModel(config, vocab=simple_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(simple_tokenizer.vocab, max_depth=config.max_depth)
 
         predictor = OrigamiPredictor(model, simple_tokenizer)
 
@@ -179,6 +187,8 @@ class TestPredictorWithNestedData:
     @pytest.fixture
     def nested_model(self, nested_tokenizer):
         """Create a model for nested data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         torch.manual_seed(42)
         config = ModelConfig(
             d_model=32,
@@ -187,7 +197,9 @@ class TestPredictorWithNestedData:
             d_ff=64,
             max_depth=nested_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=nested_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=nested_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(nested_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_predict_nested_key(self, nested_model, nested_tokenizer):
         """Test predicting nested key value."""
@@ -243,6 +255,8 @@ class TestPredictorWithArrayData:
     @pytest.fixture
     def array_model(self, array_tokenizer):
         """Create a model for array data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         torch.manual_seed(42)
         config = ModelConfig(
             d_model=32,
@@ -251,7 +265,9 @@ class TestPredictorWithArrayData:
             d_ff=64,
             max_depth=array_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=array_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=array_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(array_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_predict_with_array_context(self, array_model, array_tokenizer):
         """Test prediction with arrays in context."""
@@ -318,6 +334,8 @@ class TestPredictorBatchVariations:
     @pytest.fixture
     def varied_model(self, varied_tokenizer):
         """Create model for varied data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         torch.manual_seed(42)
         config = ModelConfig(
             d_model=32,
@@ -326,7 +344,9 @@ class TestPredictorBatchVariations:
             d_ff=64,
             max_depth=varied_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=varied_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=varied_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(varied_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_batch_predict_different_sizes(self, varied_model, varied_tokenizer):
         """Test batch prediction with objects of different sizes."""
@@ -398,6 +418,8 @@ class TestPredictorComplexValues:
     @pytest.fixture
     def complex_model(self, complex_tokenizer):
         """Create model for complex data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         torch.manual_seed(42)
         config = ModelConfig(
             d_model=32,
@@ -406,7 +428,9 @@ class TestPredictorComplexValues:
             d_ff=64,
             max_depth=complex_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=complex_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=complex_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(complex_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_predict_with_nested_context(self, complex_model, complex_tokenizer):
         """Test prediction when context contains nested objects."""
@@ -457,6 +481,8 @@ class TestPredictorRobustness:
     @pytest.fixture
     def multi_type_model(self, multi_type_tokenizer):
         """Create model for multi-type data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         torch.manual_seed(42)
         config = ModelConfig(
             d_model=32,
@@ -465,7 +491,9 @@ class TestPredictorRobustness:
             d_ff=64,
             max_depth=multi_type_tokenizer.max_depth,
         )
-        return OrigamiModel(config, vocab=multi_type_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=multi_type_tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(multi_type_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_predict_string_field(self, multi_type_model, multi_type_tokenizer):
         """Test prediction for string field."""
@@ -544,9 +572,13 @@ class TestPredictorIntegration:
             n_layers=1,
             d_ff=64,
             max_depth=integration_tokenizer.max_depth,
-            use_grammar_constraints=True,
         )
-        return OrigamiModel(config, vocab=integration_tokenizer.vocab)
+        model = OrigamiModel(config, vocab=integration_tokenizer.vocab)
+        # Attach grammar PDA for tests that need it (normally done by trainer)
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
+        model._grammar_pda = JSONGrammarPDA(integration_tokenizer.vocab, max_depth=config.max_depth)
+        return model
 
     def test_predictor_uses_generator_internally(self, integration_model, integration_tokenizer):
         """Test that predictor uses generator for value generation."""
@@ -596,9 +628,13 @@ class TestAllowComplexValues:
             n_layers=1,
             d_ff=64,
             max_depth=tokenizer_with_complex.max_depth,
-            use_grammar_constraints=True,
         )
-        return OrigamiModel(config, vocab=tokenizer_with_complex.vocab)
+        model = OrigamiModel(config, vocab=tokenizer_with_complex.vocab)
+        # Attach grammar PDA for tests that need it (normally done by trainer)
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
+        model._grammar_pda = JSONGrammarPDA(tokenizer_with_complex.vocab, max_depth=config.max_depth)
+        return model
 
     def test_allow_complex_values_false_returns_primitive(
         self, model_with_complex, tokenizer_with_complex

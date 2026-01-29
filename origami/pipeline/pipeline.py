@@ -122,7 +122,7 @@ class OrigamiPipeline:
     def schema(self) -> dict | None:
         """Get the current JSON Schema (None if not set).
 
-        The schema is populated after preprocess() when derive_schema=True
+        The schema is populated after preprocess() when infer_schema=True
         or when a schema is provided in DataConfig. It can also be set
         manually after loading a model.
         """
@@ -276,8 +276,8 @@ class OrigamiPipeline:
                     f"(frequency threshold: {stats.value_frequency_threshold})"
                 )
 
-        # Step 3: Derive or set schema
-        if self.config.data.derive_schema:
+        # Step 3: Infer or set schema
+        if self.config.data.infer_schema:
             from origami.constraints import SchemaDeriver
 
             deriver = SchemaDeriver()

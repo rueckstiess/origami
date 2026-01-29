@@ -91,12 +91,8 @@ class OrigamiModel(nn.Module):
         if config.use_continuous_head:
             self.continuous_head = ContinuousHead(config)
 
-        # Grammar constraints PDA (optional)
+        # Grammar constraints PDA (set by trainer if constrain_grammar=True)
         self._grammar_pda = None
-        if config.use_grammar_constraints:
-            from origami.constraints.json_grammar import JSONGrammarPDA
-
-            self._grammar_pda = JSONGrammarPDA(vocab, max_depth=config.max_depth)
 
     def forward(
         self,

@@ -43,7 +43,6 @@ class TestModelConfig:
         assert config.max_depth == 32
         assert config.max_array_position == 256
         assert config.use_continuous_head is False
-        assert config.use_grammar_constraints is True
 
     def test_validation_d_model_divisible_by_n_heads(self):
         """Test that d_model must be divisible by n_heads."""
@@ -1083,13 +1082,12 @@ class TestOrigamiModelGrammar:
         tokenizer.fit([{"a": 1, "b": 2}])
         return tokenizer
 
-    def test_compute_grammar_mask_disabled(self, tokenizer):
-        """Test compute_grammar_mask returns None when grammar is disabled."""
+    def test_compute_grammar_mask_no_pda(self, tokenizer):
+        """Test compute_grammar_mask returns None when no grammar PDA is attached."""
         config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
-            use_grammar_constraints=False,
             max_depth=tokenizer.max_depth,
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
@@ -1099,16 +1097,19 @@ class TestOrigamiModelGrammar:
 
         assert mask is None
 
-    def test_compute_grammar_mask_enabled(self, tokenizer):
-        """Test compute_grammar_mask returns valid mask when enabled."""
+    def test_compute_grammar_mask_with_pda(self, tokenizer):
+        """Test compute_grammar_mask returns valid mask when grammar PDA is attached."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         config = ModelConfig(
             d_model=32,
             n_heads=2,
             n_layers=1,
-            use_grammar_constraints=True,
             max_depth=tokenizer.max_depth,
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
+        # Attach grammar PDA (normally done by trainer)
+        model._grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=config.max_depth)
 
         batch = OrigamiDataCollator(tokenizer, include_labels=False).collate_objects([{"a": 1}])
         mask = model.compute_grammar_mask(batch.input_ids)

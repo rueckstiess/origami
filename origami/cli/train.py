@@ -55,7 +55,6 @@ _PARAM_SECTION_MAP = {
     "kvpe_pooling": "model",
     "backbone": "model",
     "num_mixture_components": "model",
-    "use_grammar_constraints": "model",
     "max_seq_length": "model",
     # Training params
     "batch_size": "training",
@@ -71,12 +70,15 @@ _PARAM_SECTION_MAP = {
     "eval_sample_size": "training",
     "eval_on_train": "training",
     "target_key": "training",
+    "constrain_grammar": "training",
+    "constrain_schema": "training",
     # Data params
     "numeric_mode": "data",
     "cat_threshold": "data",
     "n_bins": "data",
     "bin_strategy": "data",
     "max_vocab_size": "data",
+    "infer_schema": "data",
 }
 
 

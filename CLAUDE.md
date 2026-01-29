@@ -511,7 +511,6 @@ ModelConfig(
     kvpe_pooling="sum",   # KVPE pooling: "sum", "weighted", "rotary", "gru", "transformer"
     backbone="transformer",  # "transformer", "lstm", "mamba"
     num_mixture_components=5,  # MoG components for continuous output
-    use_grammar_constraints=True,
 )
 ```
 
@@ -525,6 +524,8 @@ TrainingConfig(
     weight_decay=0.01,
     shuffle_keys=True,     # Key-order shuffling augmentation
     target_key=None,       # Target field for prediction tasks
+    constrain_grammar=True,  # Apply grammar constraints during training
+    constrain_schema=False,  # Apply schema constraints during training
 )
 ```
 
@@ -535,6 +536,7 @@ DataConfig(
     cat_threshold=100,     # Fields with >N unique values get preprocessed
     n_bins=20,             # Number of bins for discretization
     max_vocab_size=0,      # Max vocabulary size (0 = unlimited). Prunes rare ValueTokens.
+    infer_schema=False,    # Auto-infer JSON Schema from training data
 )
 ```
 
@@ -599,9 +601,12 @@ def tokenizer(self):
 ### Testing Grammar Constraints
 ```python
 def test_grammar(self):
-    config = ModelConfig(use_grammar_constraints=True)
+    config = ModelConfig()
     model = OrigamiModel(config, vocab=tokenizer.vocab)
-    # Grammar only applied when labels provided
+    # Attach grammar PDA (normally done by trainer when constrain_grammar=True)
+    from origami.constraints.json_grammar import JSONGrammarPDA
+    model._grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=config.max_depth)
+    # Grammar applied via compute_grammar_mask() when labels provided
     output = model(..., labels=labels)
 ```
 

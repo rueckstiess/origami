@@ -216,9 +216,14 @@ class OrigamiTrainer:
         # 2. Using DataLoader workers (tensors must stay on CPU for pickling)
         use_workers = self.config.dataloader_num_workers > 0
         collator_device = None if self._use_accelerate or use_workers else self.device
-        # Pass grammar PDA to collator for parallel computation in DataLoader workers
-        # This pre-computes grammar masks during data loading instead of in training loop
-        grammar_pda = getattr(model, "_grammar_pda", None)
+        # Create grammar PDA if constrain_grammar is enabled and attach to model.
+        # This pre-computes grammar masks during data loading instead of in training loop.
+        grammar_pda = None
+        if self.config.constrain_grammar:
+            from origami.constraints.json_grammar import JSONGrammarPDA
+
+            grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=model.config.max_depth)
+            model._grammar_pda = grammar_pda
 
         # Create SchemaPDA for training masks only if constrain_schema is enabled.
         # By default (constrain_schema=False), schema constraints are only applied
@@ -228,6 +233,7 @@ class OrigamiTrainer:
             from origami.constraints import SchemaPDA
 
             schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=model.config.max_depth)
+            model._schema_pda = schema_pda
 
         self.collator = OrigamiDataCollator(
             tokenizer,

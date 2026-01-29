@@ -363,7 +363,6 @@ class TestLeftPadding:
             n_layers=1,
             d_ff=64,
             max_depth=lp_tokenizer.max_depth,
-            use_grammar_constraints=True,
         )
         model = OrigamiModel(config, vocab=lp_tokenizer.vocab)
 
@@ -401,9 +400,12 @@ class TestLeftPadding:
             n_layers=1,
             d_ff=64,
             max_depth=lp_tokenizer.max_depth,
-            use_grammar_constraints=True,
         )
         model = OrigamiModel(config, vocab=lp_tokenizer.vocab)
+        # Attach grammar PDA for this test (normally done by trainer)
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
+        model._grammar_pda = JSONGrammarPDA(lp_tokenizer.vocab, max_depth=config.max_depth)
 
         # Create batch with different length sequences
         objects = [
@@ -956,6 +958,8 @@ class TestEvaluator:
     @pytest.fixture
     def setup(self):
         """Set up model, tokenizer, and test data."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         data = [
             {"label": "A", "x": 1},
             {"label": "B", "x": 2},
@@ -974,6 +978,7 @@ class TestEvaluator:
             max_depth=tokenizer.max_depth,
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=config.max_depth)
 
         return model, tokenizer, data
 
@@ -1063,6 +1068,8 @@ class TestEvaluationScheduling:
     @pytest.fixture
     def setup(self):
         """Set up model, tokenizer, and data for scheduling tests."""
+        from origami.constraints.json_grammar import JSONGrammarPDA
+
         data = [{"label": "A", "x": i} for i in range(20)]
 
         tokenizer = JSONTokenizer()
@@ -1076,6 +1083,7 @@ class TestEvaluationScheduling:
             max_depth=tokenizer.max_depth,
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
+        model._grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=config.max_depth)
 
         return model, tokenizer, data
 

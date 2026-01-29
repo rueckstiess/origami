@@ -1486,16 +1486,16 @@ class TestPipelineSchemaConstraints:
         assert vocab.encode(ValueToken("large")) == vocab.unk_value_id
 
     def test_eval_loss_with_schema_not_inf(self):
-        """Test that eval loss is finite when using constrain_schema + derive_schema.
+        """Test that eval loss is finite when using constrain_schema + infer_schema.
 
-        When constrain_schema=True and derive_schema=True, the evaluator applies
+        When constrain_schema=True and infer_schema=True, the evaluator applies
         schema masks during loss computation. With the tokenizer fitted on training
         data only, eval-only values become UNK tokens. The schema must allow UNK
         tokens so that eval loss doesn't become inf.
         """
         torch.manual_seed(42)
 
-        # Training data — schema will be derived from these values only
+        # Training data — schema will be inferred from these values only
         train_data = [{"label": v, "x": i} for i, v in enumerate(["A", "B", "C"] * 10)]
 
         # Eval data — "D" is unseen during training
@@ -1507,7 +1507,7 @@ class TestPipelineSchemaConstraints:
                 num_epochs=1,
                 constrain_schema=True,
             ),
-            data=DataConfig(derive_schema=True),
+            data=DataConfig(infer_schema=True),
         )
 
         pipeline = OrigamiPipeline(config)

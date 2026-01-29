@@ -105,7 +105,6 @@ class ModelConfig(PrettyReprMixin):
         backbone: Type of sequence modeling backbone.
         lstm_num_layers: Number of LSTM layers.
         num_mixture_components: Number of mixture components for continuous head.
-        use_grammar_constraints: Whether to apply grammar constraints to logits.
     """
 
     # Architecture
@@ -129,9 +128,6 @@ class ModelConfig(PrettyReprMixin):
     use_continuous_head: bool = False
     num_mixture_components: int = 5
     continuous_loss_weight: float = -1.0  # -1 = auto-calculate from NUM token proportion
-
-    # Grammar constraints
-    use_grammar_constraints: bool = True
 
     # Sequence limits
     max_seq_length: int = 2048
@@ -188,6 +184,9 @@ class TrainingConfig(PrettyReprMixin):
         allow_complex_values: Whether to allow complex values (objects/arrays) during
             evaluation predictions. If None (default), auto-detected based on metrics.
             Set True for array_f1, array_jaccard, object_key_accuracy metrics.
+        constrain_grammar: If True (default), apply grammar constraints during training
+            to ensure valid JSON syntax. The grammar PDA is created and attached to
+            the model, and is also used during inference.
         constrain_schema: If True, apply schema constraints during training
             (intersected with grammar mask). If False (default), schema constraints
             are only applied during inference. Training with schema masks can
@@ -224,6 +223,9 @@ class TrainingConfig(PrettyReprMixin):
     target_key: str | None = None
     target_loss_weight: float = 1.0
     allow_complex_values: bool | None = None
+
+    # Constraints
+    constrain_grammar: bool = True
     constrain_schema: bool = False
 
     def __post_init__(self) -> None:
@@ -258,8 +260,8 @@ class DataConfig(PrettyReprMixin):
             If > 0, rare tokens are replaced with UNK after tokenizer.fit().
         schema: Optional JSON Schema dict to constrain model outputs.
             Applied as semantic constraints on top of the syntactic grammar PDA.
-        derive_schema: If True, auto-derive a JSON Schema from training data.
-            When both schema and derive_schema are set, the user-provided
+        infer_schema: If True, auto-infer a JSON Schema from training data.
+            When both schema and infer_schema are set, the user-provided
             schema takes precedence.
     """
 
@@ -269,7 +271,7 @@ class DataConfig(PrettyReprMixin):
     bin_strategy: Literal["quantile", "uniform", "kmeans"] = "quantile"
     max_vocab_size: int = 0  # 0 = unlimited
     schema: dict | None = None
-    derive_schema: bool = False
+    infer_schema: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration."""

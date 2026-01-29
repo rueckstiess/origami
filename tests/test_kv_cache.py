@@ -257,7 +257,7 @@ class TestKVCacheIntegration:
             d_ff=256,
             dropout=0.0,
             backbone="cached_transformer",
-            use_grammar_constraints=False,  # Disable for simpler testing
+            # Note: Grammar constraints are now handled by trainer, not model config
         )
 
     def test_model_with_cached_backbone(self, tokenizer, model_config):
