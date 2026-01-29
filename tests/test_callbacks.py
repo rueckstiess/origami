@@ -324,6 +324,19 @@ class TestCallbackHandler:
 
         assert events == ["cb1", "cb2"]
 
+    def test_on_best_callback_fires(self):
+        """Test that on_best callback is fired correctly."""
+        events = []
+
+        class TestCallback(TrainerCallback):
+            def on_best(self, trainer, state, payload):
+                events.append(("best", payload))
+
+        handler = CallbackHandler([TestCallback()])
+        handler.fire_event("on_best", None, None, {"val_loss": 0.5})
+
+        assert events == [("best", {"val_loss": 0.5})]
+
 
 class TestProgressCallback:
     """Tests for ProgressCallback."""

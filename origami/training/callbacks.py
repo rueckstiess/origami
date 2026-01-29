@@ -110,6 +110,27 @@ class TrainerCallback:
         """
         pass
 
+    def on_best(
+        self,
+        trainer: OrigamiTrainer,
+        state: TrainResult,
+        payload: dict[str, float],
+    ) -> None:
+        """Called when a new best model is found (val_loss improved).
+
+        Fires AFTER on_evaluate and AFTER state.best_eval_loss is updated.
+        The payload contains the same evaluation metrics dict as on_evaluate.
+
+        Use this to save checkpoints with additional state that the trainer
+        doesn't know about (e.g., preprocessor, schema in OrigamiPipeline).
+
+        Args:
+            trainer: The trainer instance.
+            state: Current training state. state.best_eval_loss contains the new best.
+            payload: Dict of evaluation metrics (same as on_evaluate payload).
+        """
+        pass
+
     def on_interrupt(
         self,
         trainer: OrigamiTrainer,

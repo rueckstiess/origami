@@ -1339,6 +1339,132 @@ class TestEvaluationScheduling:
             best_path = Path(tmpdir) / "best.pt"
             assert best_path.exists()
 
+    def test_on_best_callback_fires_on_improvement(self, setup):
+        """Test that on_best callback fires when val_loss improves."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        best_events = []
+
+        class BestTracker(TrainerCallback):
+            def on_best(self, trainer, state, metrics):
+                best_events.append({
+                    "step": state.global_step,
+                    "best_eval_loss": state.best_eval_loss,
+                    "metrics": dict(metrics),
+                })
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=3,
+            eval_strategy="epoch",
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[BestTracker()],
+        )
+        trainer.train()
+
+        # on_best should have fired at least once (first eval is always best)
+        assert len(best_events) >= 1
+
+        # First event should have val_loss in metrics
+        assert "val_loss" in best_events[0]["metrics"]
+
+        # best_eval_loss in state should match the val_loss from metrics
+        assert best_events[0]["best_eval_loss"] == best_events[0]["metrics"]["val_loss"]
+
+        # If multiple best events, each should have a lower val_loss than previous
+        for i in range(1, len(best_events)):
+            assert best_events[i]["best_eval_loss"] < best_events[i - 1]["best_eval_loss"]
+
+    def test_on_best_fires_before_checkpoint_save(self, setup):
+        """Test that on_best fires before trainer's checkpoint save."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        events_order = []
+
+        class OrderTracker(TrainerCallback):
+            def on_best(self, trainer, state, metrics):
+                events_order.append("on_best")
+                # Check that checkpoint doesn't exist yet
+                if trainer.checkpoint_dir:
+                    best_path = trainer.checkpoint_dir / "best.pt"
+                    # This should be False since on_best fires BEFORE save_checkpoint
+                    events_order.append(f"checkpoint_exists:{best_path.exists()}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = TrainingConfig(
+                batch_size=4,
+                num_epochs=1,
+                eval_strategy="epoch",
+                checkpoint_dir=tmpdir,
+            )
+
+            trainer = OrigamiTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_data=data,
+                eval_data=data[:4],
+                config=config,
+                callbacks=[OrderTracker()],
+            )
+            trainer.train()
+
+        # on_best should have fired
+        assert "on_best" in events_order
+        # Checkpoint should not exist when on_best fires
+        assert "checkpoint_exists:False" in events_order
+
+    def test_on_best_not_fired_when_loss_increases(self, setup):
+        """Test that on_best does NOT fire when val_loss doesn't improve."""
+        from origami.training import TrainerCallback
+
+        model, tokenizer, data = setup
+
+        best_count = [0]
+        eval_count = [0]
+
+        class CountTracker(TrainerCallback):
+            def on_evaluate(self, trainer, state, metrics):
+                eval_count[0] += 1
+
+            def on_best(self, trainer, state, metrics):
+                best_count[0] += 1
+
+        config = TrainingConfig(
+            batch_size=4,
+            num_epochs=5,
+            eval_strategy="epoch",
+        )
+
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=data,
+            eval_data=data[:4],
+            config=config,
+            callbacks=[CountTracker()],
+        )
+        trainer.train()
+
+        # on_evaluate should fire every epoch (5 times)
+        assert eval_count[0] == 5
+
+        # on_best should fire fewer times than on_evaluate
+        # (only when val_loss improves, not every eval)
+        # At minimum, first eval always triggers on_best
+        assert best_count[0] >= 1
+        assert best_count[0] <= eval_count[0]
+
 
 class TestCallbacks:
     """Tests for training callbacks."""

@@ -506,7 +506,8 @@ class OrigamiTrainer:
         This consolidates the common pattern of:
         1. Running evaluation
         2. Checking if val_loss improved
-        3. Saving "best" checkpoint if configured
+        3. Firing on_best callback if improved
+        4. Saving "best" checkpoint if configured
 
         Returns:
             Dict of evaluation metrics
@@ -518,6 +519,9 @@ class OrigamiTrainer:
         if val_loss is not None and not math.isnan(val_loss):
             if val_loss < self.state.best_eval_loss:
                 self.state.best_eval_loss = val_loss
+                # Fire on_best callback (allows external saving with additional state)
+                self.callback_handler.fire_event("on_best", self, self.state, eval_metrics)
+                # Save trainer's own checkpoint if configured
                 if self.checkpoint_dir:
                     self.save_checkpoint("best")
 
