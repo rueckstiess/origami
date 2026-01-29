@@ -374,11 +374,12 @@ class OrigamiPipeline:
             schema=self._schema,
         )
 
+        # Mark as fitted before training starts (all components are initialized)
+        # This allows callbacks to save the pipeline during training
+        self._fitted = True
+
         # Run training (handles KeyboardInterrupt gracefully)
         result = trainer.train()
-
-        # Mark as fitted regardless of whether training completed or was interrupted
-        self._fitted = True
         self._train_result = result
 
         # Capture training state for potential checkpoint save
