@@ -1000,6 +1000,109 @@ class TestUNKTokenHandling:
         assert state.container_stack == ["object"]
 
 
+class TestUNKFlags:
+    """Test configurable allow_unk_key and allow_unk_value flags."""
+
+    def test_default_allow_unk_key_false(self, vocab, simple_schema):
+        """By default, allow_unk_key is False."""
+        pda = SchemaPDA(simple_schema, vocab)
+        assert pda._allow_unk_key is False
+
+    def test_default_allow_unk_value_true(self, vocab, simple_schema):
+        """By default, allow_unk_value is True."""
+        pda = SchemaPDA(simple_schema, vocab)
+        assert pda._allow_unk_value is True
+
+    def test_unk_value_blocked_with_enum(self, vocab, simple_schema):
+        """With allow_unk_value=False, UNK_VALUE is blocked at enum positions."""
+        pda = SchemaPDA(simple_schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("name")
+
+        # Enum values still allowed
+        assert mask[vocab.encode(ValueToken("Alice"))].item()
+        assert mask[vocab.encode(ValueToken("Bob"))].item()
+        # UNK_VALUE blocked
+        assert not mask[vocab.unk_value_id].item()
+
+    def test_unk_value_blocked_with_type(self, vocab, simple_schema):
+        """With allow_unk_value=False, UNK_VALUE is blocked at type-constrained positions."""
+        pda = SchemaPDA(simple_schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("age")
+
+        # Integer values and NUM still allowed
+        assert mask[vocab.encode(ValueToken(25))].item()
+        assert mask[vocab.num_token_id].item()
+        # UNK_VALUE blocked
+        assert not mask[vocab.unk_value_id].item()
+
+    def test_unk_value_allowed_with_enum(self, vocab, simple_schema):
+        """With allow_unk_value=True (default), UNK_VALUE is allowed at enum positions."""
+        pda = SchemaPDA(simple_schema, vocab, allow_unk_value=True)
+        mask = pda.get_mask_for_schema_path("name")
+        assert mask[vocab.unk_value_id].item()
+
+    def test_unk_key_allowed_with_additional_properties_false(self, vocab, schema_no_additional):
+        """With allow_unk_key=True, UNK_KEY is allowed even with additionalProperties: false."""
+        pda = SchemaPDA(schema_no_additional, vocab, allow_unk_key=True)
+        mask = pda.get_mask_for_schema_path("")  # root object
+
+        # UNK_KEY allowed
+        assert mask[vocab.unk_key_id].item()
+        # Defined keys still allowed
+        assert mask[vocab.encode(KeyToken("name"))].item()
+        assert mask[vocab.encode(KeyToken("age"))].item()
+        # Other specific keys still blocked
+        assert not mask[vocab.encode(KeyToken("color"))].item()
+        assert not mask[vocab.encode(KeyToken("extra"))].item()
+
+    def test_unk_key_blocked_by_default_with_additional_properties_false(
+        self, vocab, schema_no_additional
+    ):
+        """With default allow_unk_key=False, UNK_KEY is blocked when additionalProperties: false."""
+        pda = SchemaPDA(schema_no_additional, vocab)
+        mask = pda.get_mask_for_schema_path("")
+        assert not mask[vocab.unk_key_id].item()
+
+    def test_strict_mode_both_blocked(self, vocab, simple_schema):
+        """With both flags False (strict/generation mode), neither UNK is allowed."""
+        # Need a schema with additionalProperties: false for key constraint
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "enum": ["Alice", "Bob"]},
+            },
+            "additionalProperties": False,
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_key=False, allow_unk_value=False)
+
+        # Value position: UNK_VALUE blocked
+        name_mask = pda.get_mask_for_schema_path("name")
+        assert not name_mask[vocab.unk_value_id].item()
+
+        # Key position: UNK_KEY blocked
+        root_mask = pda.get_mask_for_schema_path("")
+        assert not root_mask[vocab.unk_key_id].item()
+
+    def test_lenient_mode_both_allowed(self, vocab):
+        """With both flags True (evaluation mode), both UNKs are allowed."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "enum": ["Alice", "Bob"]},
+            },
+            "additionalProperties": False,
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_key=True, allow_unk_value=True)
+
+        # Value position: UNK_VALUE allowed
+        name_mask = pda.get_mask_for_schema_path("name")
+        assert name_mask[vocab.unk_value_id].item()
+
+        # Key position: UNK_KEY allowed
+        root_mask = pda.get_mask_for_schema_path("")
+        assert root_mask[vocab.unk_key_id].item()
+
+
 class TestSummary:
     def test_summary_output(self, vocab, simple_schema):
         pda = SchemaPDA(simple_schema, vocab)

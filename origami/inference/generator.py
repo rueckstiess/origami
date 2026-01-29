@@ -192,12 +192,20 @@ class OrigamiGenerator:
         # Get grammar PDA reference from model for incremental constraint application
         self._grammar_pda = model._grammar_pda
 
-        # Schema constraints for semantic restriction
+        # Schema constraints for semantic restriction.
+        # Uses strict UNK settings: UNK_KEY and UNK_VALUE are blocked so the
+        # model cannot escape schema constraints by generating unknown tokens.
         self._schema_pda = None
         if schema is not None:
             from origami.constraints import SchemaPDA
 
-            self._schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=model.config.max_depth)
+            self._schema_pda = SchemaPDA(
+                schema,
+                tokenizer.vocab,
+                max_depth=model.config.max_depth,
+                allow_unk_key=False,
+                allow_unk_value=False,
+            )
 
         # Check if backbone supports KV caching
         self._supports_kv_cache = self._check_kv_cache_support()

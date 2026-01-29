@@ -64,6 +64,8 @@ class OrigamiEvaluator:
         allow_complex_values: bool = False,
         schema: dict | None = None,
         constrain_schema: bool = False,
+        allow_unk_key: bool = True,
+        allow_unk_value: bool = True,
     ):
         """Initialize evaluator.
 
@@ -82,6 +84,10 @@ class OrigamiEvaluator:
             constrain_schema: If True and schema is provided, also apply schema
                 constraints during loss computation (to match training loss when
                 the trainer uses constrain_schema=True).
+            allow_unk_key: Whether UNK_KEY is allowed in schema masks. Default
+                True for evaluation so unseen keys in eval data don't cause inf loss.
+            allow_unk_value: Whether UNK_VALUE is allowed in schema masks. Default
+                True for evaluation so unseen values in eval data don't cause inf loss.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -91,13 +97,19 @@ class OrigamiEvaluator:
         self._schema = schema
         self._predictor: OrigamiPredictor | None = None
 
-        # Create SchemaPDA for loss computation only if constrain_schema is True
+        # Create SchemaPDA for loss computation only if constrain_schema is True.
+        # Uses lenient UNK settings by default so eval data with unseen tokens
+        # doesn't produce inf loss.
         self._schema_pda = None
         if constrain_schema and schema is not None:
             from origami.constraints import SchemaPDA
 
             self._schema_pda = SchemaPDA(
-                schema, tokenizer.vocab, max_depth=model.config.max_depth
+                schema,
+                tokenizer.vocab,
+                max_depth=model.config.max_depth,
+                allow_unk_key=allow_unk_key,
+                allow_unk_value=allow_unk_value,
             )
 
     @property

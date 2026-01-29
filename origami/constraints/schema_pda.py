@@ -120,13 +120,30 @@ class SchemaPDA:
         schema: JSON Schema dict (draft 2020-12 subset)
         vocab: Fitted Vocabulary instance
         max_depth: Maximum nesting depth
+        allow_unk_key: If True, UNK_KEY is allowed even when
+            additionalProperties is false. Use True for evaluation
+            (prevents inf loss on unseen keys), False for generation
+            (prevents schema escape). Default False.
+        allow_unk_value: If True, UNK_VALUE is allowed at enum/type-
+            constrained positions. Use True for evaluation (prevents
+            inf loss on unseen values), False for generation (forces
+            the model to commit to known values). Default True.
     """
 
-    def __init__(self, schema: dict, vocab: Vocabulary, max_depth: int = 32):
+    def __init__(
+        self,
+        schema: dict,
+        vocab: Vocabulary,
+        max_depth: int = 32,
+        allow_unk_key: bool = False,
+        allow_unk_value: bool = True,
+    ):
         self._vocab = vocab
         self._vocab_size = vocab.size
         self._max_depth = max_depth
         self._schema = schema
+        self._allow_unk_key = allow_unk_key
+        self._allow_unk_value = allow_unk_value
 
         # Build type → token ID mapping
         self._type_to_token_ids = self._build_type_to_token_ids()
@@ -264,8 +281,10 @@ class SchemaPDA:
                 token = ValueToken(value)
                 if token in vocab._token_to_id:
                     mask[vocab._token_to_id[token]] = True
-            # Always allow UNK_VALUE as fallback
-            mask[vocab.unk_value_id] = True
+            # Allow UNK_VALUE as fallback for unseen values (e.g., in eval data).
+            # Disabled during generation to prevent escape from schema constraints.
+            if self._allow_unk_value:
+                mask[vocab.unk_value_id] = True
 
             # If enum includes only primitives, don't allow containers
             # But if we also have type constraints, check for object/array
@@ -285,8 +304,8 @@ class SchemaPDA:
                     for tid in self._type_to_token_ids[t]:
                         mask[tid] = True
 
-            # Always allow UNK_VALUE as fallback
-            mask[vocab.unk_value_id] = True
+            if self._allow_unk_value:
+                mask[vocab.unk_value_id] = True
 
         return mask
 
@@ -303,9 +322,11 @@ class SchemaPDA:
             return mask  # No key constraint
 
         # Restrict keys to only those defined in properties.
-        # UNK_KEY is NOT allowed — additionalProperties: false means
-        # only known keys are valid. Allowing UNK_KEY would let the model
-        # escape schema constraints by nesting objects under unknown keys.
+        # By default, UNK_KEY is blocked — additionalProperties: false means
+        # only known keys are valid. When allow_unk_key=True (e.g., during
+        # evaluation), UNK_KEY is permitted so eval data with unseen keys
+        # doesn't produce inf loss. During generation, allow_unk_key=False
+        # prevents the model from escaping schema constraints via UNK_KEY.
         all_key_ids = vocab.get_all_key_ids()  # includes UNK_KEY
         allowed_key_ids: set[int] = set()
 
@@ -313,6 +334,9 @@ class SchemaPDA:
             kid = self._key_name_to_id(key)
             if kid is not None:
                 allowed_key_ids.add(kid)
+
+        if self._allow_unk_key:
+            allowed_key_ids.add(vocab.unk_key_id)
 
         # Disable disallowed keys
         for kid in all_key_ids:
