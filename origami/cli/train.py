@@ -65,7 +65,6 @@ _PARAM_SECTION_MAP = {
     "weight_decay": "training",
     "dataloader_num_workers": "training",
     "shuffle_keys": "training",
-    "save_every_n_epochs": "training",
     "eval_strategy": "training",
     "eval_steps": "training",
     "eval_epochs": "training",

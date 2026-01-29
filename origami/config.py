@@ -173,9 +173,6 @@ class TrainingConfig(PrettyReprMixin):
             With grammar constraints enabled, this is critical for performance as
             grammar masks are computed in parallel by workers while GPU trains.
         shuffle_keys: Whether to shuffle key order during tokenization.
-        save_every_n_epochs: Save checkpoint every N epochs.
-        checkpoint_dir: Directory for saving checkpoints. If None, no checkpoints
-            are saved automatically.
         eval_strategy: When to evaluate - "no", "steps", or "epoch".
         eval_steps: Evaluate every N steps (when eval_strategy="steps").
         eval_epochs: Evaluate every N epochs (when eval_strategy="epoch").
@@ -214,10 +211,6 @@ class TrainingConfig(PrettyReprMixin):
 
     # Data augmentation
     shuffle_keys: bool = True
-
-    # Checkpointing
-    save_every_n_epochs: int = 5
-    checkpoint_dir: str | None = None
 
     # Evaluation scheduling
     eval_strategy: Literal["no", "steps", "epoch"] = "epoch"

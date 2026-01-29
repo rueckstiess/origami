@@ -13,8 +13,7 @@ import gc
 import math
 import time
 import warnings
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -196,13 +195,6 @@ class OrigamiTrainer:
         # Enable TF32 for faster float32 matmuls on Ampere+ GPUs (A100, etc.)
         if torch.cuda.is_available():
             torch.set_float32_matmul_precision("high")
-
-        # Checkpoint directory
-        self.checkpoint_dir = (
-            Path(self.config.checkpoint_dir) if self.config.checkpoint_dir else None
-        )
-        if self.checkpoint_dir:
-            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Store raw data for evaluator (Evaluator needs original dicts, not tokenized)
         self.train_data = train_data
@@ -501,29 +493,25 @@ class OrigamiTrainer:
         return metrics
 
     def _run_evaluation_and_checkpoint(self) -> dict[str, float]:
-        """Run evaluation and save best checkpoint if loss improved.
+        """Run evaluation and fire on_best callback if loss improved.
 
         This consolidates the common pattern of:
         1. Running evaluation
         2. Checking if val_loss improved
         3. Firing on_best callback if improved
-        4. Saving "best" checkpoint if configured
 
         Returns:
             Dict of evaluation metrics
         """
         eval_metrics = self._run_evaluation()
 
-        # Save best model based on val_loss (skip if nan or no val_loss)
+        # Track best model based on val_loss (skip if nan or no val_loss)
         val_loss = eval_metrics.get("val_loss")
         if val_loss is not None and not math.isnan(val_loss):
             if val_loss < self.state.best_eval_loss:
                 self.state.best_eval_loss = val_loss
                 # Fire on_best callback (allows external saving with additional state)
                 self.callback_handler.fire_event("on_best", self, self.state, eval_metrics)
-                # Save trainer's own checkpoint if configured
-                if self.checkpoint_dir:
-                    self.save_checkpoint("best")
 
         return eval_metrics
 
@@ -562,10 +550,6 @@ class OrigamiTrainer:
                 # Epoch-based evaluation (using unified system)
                 if self._should_evaluate_epoch():
                     self._run_evaluation_and_checkpoint()
-
-                # Periodic checkpointing
-                if self.checkpoint_dir and (epoch + 1) % self.config.save_every_n_epochs == 0:
-                    self.save_checkpoint(f"epoch_{epoch + 1}")
 
             # Final evaluation if we haven't evaluated recently
             if self.config.eval_strategy != "no" and self.eval_data:
@@ -813,75 +797,6 @@ class OrigamiTrainer:
         num_tokens = batch.attention_mask.sum().item()
 
         return loss.item(), int(num_tokens)
-
-    def save_checkpoint(self, name: str) -> Path | None:
-        """Save model checkpoint.
-
-        Saves model weights, optimizer state, scheduler state, training state,
-        model config, and tokenizer. The checkpoint can be loaded with
-        `OrigamiModel.load()` for inference or `load_checkpoint()` to resume training.
-
-        When using accelerate for distributed training, only the main process
-        saves checkpoints to avoid conflicts.
-
-        Args:
-            name: Checkpoint name (e.g., "best", "epoch_10")
-
-        Returns:
-            Path to saved checkpoint, or None if not the main process
-        """
-        # Only save on main process when using distributed training
-        if not self.is_main_process:
-            return None
-
-        if self.checkpoint_dir is None:
-            raise ValueError("No checkpoint directory specified")
-
-        # Use unwrapped model to get the state dict (without DDP wrapper)
-        model_to_save = self.unwrapped_model
-
-        checkpoint_path = self.checkpoint_dir / f"{name}.pt"
-        torch.save(
-            {
-                # Model weights and config
-                "model_state_dict": model_to_save.state_dict(),
-                "model_config": asdict(model_to_save.config),
-                # Tokenizer state for full reconstruction
-                "tokenizer_state": {
-                    "vocab": self.tokenizer.vocab.to_dict(),
-                    "max_depth": self.tokenizer.max_depth,
-                    "max_array_index": self.tokenizer.max_array_index,
-                },
-                # Training state for resumption
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "state": {
-                    "epoch": self.state.epoch,
-                    "global_step": self.state.global_step,
-                    "best_eval_loss": self.state.best_eval_loss,
-                },
-                "training_config": asdict(self.config),
-            },
-            checkpoint_path,
-        )
-        return checkpoint_path
-
-    def load_checkpoint(self, path: str | Path) -> None:
-        """Load model checkpoint.
-
-        Args:
-            path: Path to checkpoint file
-        """
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        # Use unwrapped_model to load state dict (without DDP wrapper)
-        self.unwrapped_model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
-        state_dict = checkpoint["state"]
-        self.state.epoch = state_dict["epoch"]
-        self.state.global_step = state_dict["global_step"]
-        self.state.best_eval_loss = state_dict["best_eval_loss"]
 
     def get_training_state(self) -> dict:
         """Get current training state for checkpoint resumption.

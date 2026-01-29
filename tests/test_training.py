@@ -1,8 +1,5 @@
 """Tests for ORIGAMI training infrastructure."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -622,55 +619,6 @@ class TestOrigamiTrainer:
         assert "loss" in results
         assert results["loss"] > 0
 
-    def test_save_and_load_checkpoint(self, model_and_tokenizer):
-        """Test checkpoint save and load."""
-        model, tokenizer = model_and_tokenizer
-        train_data = [{"name": "Alice", "age": 30}] * 4
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = TrainingConfig(batch_size=2, num_epochs=2, checkpoint_dir=tmpdir)
-            trainer = OrigamiTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_data=train_data,
-                config=config,
-            )
-
-            # Train a bit
-            trainer._train_epoch()
-            trainer.state.epoch = 1
-            trainer.state.best_eval_loss = 0.5
-
-            # Save checkpoint
-            path = trainer.save_checkpoint("test")
-            assert Path(path).exists()
-
-            # Modify state
-            trainer.state.epoch = 999
-            trainer.state.best_eval_loss = 999.0
-
-            # Load checkpoint
-            trainer.load_checkpoint(path)
-
-            assert trainer.state.epoch == 1
-            assert trainer.state.best_eval_loss == 0.5
-
-    def test_save_checkpoint_without_dir_raises(self, model_and_tokenizer):
-        """Test that save_checkpoint raises without checkpoint_dir."""
-        model, tokenizer = model_and_tokenizer
-        train_data = [{"name": "Alice", "age": 30}]
-
-        config = TrainingConfig(num_epochs=1)
-        trainer = OrigamiTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=train_data,
-            config=config,
-        )
-
-        with pytest.raises(ValueError, match="No checkpoint directory"):
-            trainer.save_checkpoint("test")
-
     def test_callbacks(self, model_and_tokenizer):
         """Test epoch end callbacks."""
         model, tokenizer = model_and_tokenizer
@@ -793,7 +741,6 @@ class TestEndToEndTraining:
     def test_full_pipeline_synthetic_data(self):
         """Test complete training pipeline on synthetic user data."""
         import random
-        import tempfile
 
         random.seed(42)
         torch.manual_seed(42)
@@ -837,56 +784,45 @@ class TestEndToEndTraining:
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create trainer
-            train_config = TrainingConfig(
-                batch_size=4,
-                num_epochs=3,
-                learning_rate=1e-2,
-                save_every_n_epochs=3,
-                checkpoint_dir=tmpdir,
-            )
+        # Create trainer
+        train_config = TrainingConfig(
+            batch_size=4,
+            num_epochs=3,
+            learning_rate=1e-2,
+        )
 
-            # Track metrics using new callback API
-            from origami.training import TrainerCallback
+        # Track metrics using new callback API
+        from origami.training import TrainerCallback
 
-            train_losses = []
-            eval_losses = []
+        train_losses = []
+        eval_losses = []
 
-            class MetricsTracker(TrainerCallback):
-                def on_epoch_end(self, trainer, state, metrics):
-                    train_losses.append(metrics.loss)
+        class MetricsTracker(TrainerCallback):
+            def on_epoch_end(self, trainer, state, metrics):
+                train_losses.append(metrics.loss)
 
-                def on_evaluate(self, trainer, state, metrics):
-                    # metrics is now a dict with prefixed keys
-                    eval_losses.append(metrics.get("val_loss"))
+            def on_evaluate(self, trainer, state, metrics):
+                # metrics is now a dict with prefixed keys
+                eval_losses.append(metrics.get("val_loss"))
 
-            trainer = OrigamiTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_data=train_data,
-                eval_data=eval_data,
-                config=train_config,
-                callbacks=[MetricsTracker()],
-            )
+        trainer = OrigamiTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_data=train_data,
+            eval_data=eval_data,
+            config=train_config,
+            callbacks=[MetricsTracker()],
+        )
 
-            # Train
-            state = trainer.train()
+        # Train
+        state = trainer.train()
 
-            # Verify training completed
-            assert state.epoch == train_config.num_epochs - 1
-            assert state.global_step > 0
+        # Verify training completed
+        assert state.epoch == train_config.num_epochs - 1
+        assert state.global_step > 0
 
-            # Verify loss decreased
-            assert train_losses[-1] < train_losses[0], "Training loss should decrease"
-
-            # Verify checkpoint was saved
-            checkpoint_path = Path(tmpdir) / "epoch_3.pt"
-            assert checkpoint_path.exists()
-
-            # Verify best model was saved
-            best_path = Path(tmpdir) / "best.pt"
-            assert best_path.exists()
+        # Verify loss decreased
+        assert train_losses[-1] < train_losses[0], "Training loss should decrease"
 
     def test_training_with_arrays(self):
         """Test training on data with nested arrays."""
@@ -1313,32 +1249,6 @@ class TestEvaluationScheduling:
         assert "train_loss" in received_metrics[0]
         assert "val_loss" in received_metrics[0]
 
-    def test_best_model_saved_on_val_loss_improvement(self, setup):
-        """Test that best model is saved when val_loss improves."""
-        model, tokenizer, data = setup
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = TrainingConfig(
-                batch_size=4,
-                num_epochs=3,
-                eval_strategy="epoch",
-                checkpoint_dir=tmpdir,
-                # No eval_metrics = just loss
-            )
-
-            trainer = OrigamiTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_data=data,
-                eval_data=data[:4],
-                config=config,
-            )
-            trainer.train()
-
-            # Best checkpoint should exist
-            best_path = Path(tmpdir) / "best.pt"
-            assert best_path.exists()
-
     def test_on_best_callback_fires_on_improvement(self, setup):
         """Test that on_best callback fires when val_loss improves."""
         from origami.training import TrainerCallback
@@ -1383,46 +1293,6 @@ class TestEvaluationScheduling:
         # If multiple best events, each should have a lower val_loss than previous
         for i in range(1, len(best_events)):
             assert best_events[i]["best_eval_loss"] < best_events[i - 1]["best_eval_loss"]
-
-    def test_on_best_fires_before_checkpoint_save(self, setup):
-        """Test that on_best fires before trainer's checkpoint save."""
-        from origami.training import TrainerCallback
-
-        model, tokenizer, data = setup
-
-        events_order = []
-
-        class OrderTracker(TrainerCallback):
-            def on_best(self, trainer, state, metrics):
-                events_order.append("on_best")
-                # Check that checkpoint doesn't exist yet
-                if trainer.checkpoint_dir:
-                    best_path = trainer.checkpoint_dir / "best.pt"
-                    # This should be False since on_best fires BEFORE save_checkpoint
-                    events_order.append(f"checkpoint_exists:{best_path.exists()}")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = TrainingConfig(
-                batch_size=4,
-                num_epochs=1,
-                eval_strategy="epoch",
-                checkpoint_dir=tmpdir,
-            )
-
-            trainer = OrigamiTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                train_data=data,
-                eval_data=data[:4],
-                config=config,
-                callbacks=[OrderTracker()],
-            )
-            trainer.train()
-
-        # on_best should have fired
-        assert "on_best" in events_order
-        # Checkpoint should not exist when on_best fires
-        assert "checkpoint_exists:False" in events_order
 
     def test_on_best_not_fired_when_loss_increases(self, setup):
         """Test that on_best does NOT fire when val_loss doesn't improve."""
