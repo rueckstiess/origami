@@ -550,6 +550,16 @@ class OrigamiPipeline:
         pipeline._model.load_state_dict(state_dict["model_state_dict"])
         pipeline._model.eval()
 
+        # Recreate PDAs based on training config (trainer creates these during fit)
+        if config.training.constrain_grammar:
+            from origami.constraints.json_grammar import JSONGrammarPDA
+
+            pipeline._model._grammar_pda = JSONGrammarPDA(
+                pipeline._tokenizer.vocab, max_depth=model_config.max_depth
+            )
+
+        # Schema PDA is created after schema is loaded (below)
+
         # Set training device for potential future fit() calls
         pipeline._training_device = pipeline._resolve_device()
 
@@ -559,6 +569,16 @@ class OrigamiPipeline:
 
         # Load schema if present
         pipeline._schema = state_dict.get("schema")
+
+        # Create schema PDA if schema exists and constrain_schema was enabled
+        if config.training.constrain_schema and pipeline._schema is not None:
+            from origami.constraints import SchemaPDA
+
+            pipeline._model._schema_pda = SchemaPDA(
+                pipeline._schema,
+                pipeline._tokenizer.vocab,
+                max_depth=model_config.max_depth,
+            )
 
         pipeline._fitted = True
         return pipeline
