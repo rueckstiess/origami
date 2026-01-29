@@ -5,19 +5,13 @@ When used with DataLoader workers (num_workers > 0), each worker
 processes batches sequentially - the parallelism comes from multiple
 workers, not from threading within each worker.
 
-To avoid thread contention when running in DataLoader workers,
-NUMBA_NUM_THREADS is set to 1 at import time.
+To avoid thread contention in DataLoader workers, the trainer's
+worker_init_fn sets NUMBA_NUM_THREADS=1 per-worker (see trainer.py).
 """
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
-
-# Limit Numba threads to 1 to avoid contention with DataLoader workers.
-# This must be set BEFORE importing numba.
-os.environ.setdefault("NUMBA_NUM_THREADS", "1")
 
 try:
     from numba import njit, prange

@@ -254,13 +254,15 @@ class OrigamiPipeline:
                     n_bins = discretizer.n_bins_[0]
                     print(f"  - {path}: {n_bins} bins")
 
-        # Step 2: Fit tokenizer on all preprocessed data
-        all_processed = train_processed + (eval_processed or [])
+        # Step 2: Fit tokenizer on training data only.
+        # Eval data uses the training vocabulary; unseen values/keys map to
+        # UNK_VALUE/UNK_KEY. This prevents data leakage from eval into the
+        # vocabulary and ensures schema masks handle eval UNK tokens properly.
         self._tokenizer = JSONTokenizer(
             max_depth=self.config.model.max_depth,
             max_array_index=self.config.model.max_array_position,
         )
-        self._tokenizer.fit(all_processed, max_vocab_size=self.config.data.max_vocab_size)
+        self._tokenizer.fit(train_processed, max_vocab_size=self.config.data.max_vocab_size)
 
         if verbose:
             print(f"Vocabulary size: {self._tokenizer.vocab.size}")
@@ -281,9 +283,9 @@ class OrigamiPipeline:
             deriver = SchemaDeriver()
             self._schema = deriver.derive(train_processed)
             if verbose:
-                import json
+                from origami.utils import format_schema
 
-                print(f"Derived schema:\n{json.dumps(self._schema, indent=2)}")
+                print(f"Derived schema:\n{format_schema(self._schema)}")
         elif self.config.data.schema is not None:
             self._schema = self.config.data.schema
         else:

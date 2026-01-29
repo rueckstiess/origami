@@ -300,18 +300,18 @@ class OrigamiTrainer:
         # Resolve allow_complex_values with auto-detection and warning
         allow_complex_values = self._resolve_allow_complex_values()
 
-        # Never apply schema constraints during evaluation loss computation.
-        # Schema constraints are a training signal (reducing effective vocabulary
-        # per position), but evaluation should measure the model's raw predictive
-        # ability. Schema masks derived from training data would block valid
-        # tokens in eval data that weren't seen during training, causing inf loss.
+        # Apply schema constraints during evaluation to match training loss.
+        # Uses lenient UNK settings (allow_unk_key=True, allow_unk_value=True)
+        # so eval data with unseen tokens maps to UNK and doesn't cause inf loss.
         self.evaluator = OrigamiEvaluator(
             model=model,
             tokenizer=tokenizer,
             target_key=self.config.target_key,
             allow_complex_values=allow_complex_values,
             schema=self._schema,
-            constrain_schema=False,
+            constrain_schema=self.config.constrain_schema,
+            allow_unk_key=True,
+            allow_unk_value=True,
         )
 
         # Track last evaluation step to avoid duplicate evals

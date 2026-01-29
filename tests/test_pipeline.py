@@ -1448,3 +1448,76 @@ class TestPipelineEvaluateRegressionMetrics:
 
         # If we get here without error, ScaledNumeric was properly unwrapped
         assert "mse" in results
+
+
+class TestPipelineSchemaConstraints:
+    """Tests for schema constraint handling in pipeline preprocessing and evaluation."""
+
+    def test_tokenizer_fitted_on_train_only(self):
+        """Test that tokenizer is fitted on training data only.
+
+        Eval-only values should NOT be in the vocabulary — they should map to
+        UNK_VALUE when tokenized. This prevents data leakage from eval into the
+        vocabulary and ensures schema masks work correctly for eval data.
+        """
+        from origami.tokenizer.vocabulary import ValueToken
+
+        train_data = [
+            {"color": "red", "size": "small"},
+            {"color": "blue", "size": "medium"},
+        ]
+        eval_data = [
+            {"color": "green", "size": "large"},  # "green" and "large" are eval-only
+        ]
+
+        pipeline = OrigamiPipeline()
+        pipeline.preprocess(train_data, eval_data=eval_data)
+
+        vocab = pipeline._tokenizer.vocab
+
+        # Training values should be in vocabulary (not mapped to UNK)
+        assert vocab.encode(ValueToken("red")) != vocab.unk_value_id
+        assert vocab.encode(ValueToken("blue")) != vocab.unk_value_id
+        assert vocab.encode(ValueToken("small")) != vocab.unk_value_id
+        assert vocab.encode(ValueToken("medium")) != vocab.unk_value_id
+
+        # Eval-only values should NOT be in vocabulary (mapped to UNK)
+        assert vocab.encode(ValueToken("green")) == vocab.unk_value_id
+        assert vocab.encode(ValueToken("large")) == vocab.unk_value_id
+
+    def test_eval_loss_with_schema_not_inf(self):
+        """Test that eval loss is finite when using constrain_schema + derive_schema.
+
+        When constrain_schema=True and derive_schema=True, the evaluator applies
+        schema masks during loss computation. With the tokenizer fitted on training
+        data only, eval-only values become UNK tokens. The schema must allow UNK
+        tokens so that eval loss doesn't become inf.
+        """
+        torch.manual_seed(42)
+
+        # Training data — schema will be derived from these values only
+        train_data = [{"label": v, "x": i} for i, v in enumerate(["A", "B", "C"] * 10)]
+
+        # Eval data — "D" is unseen during training
+        eval_data = [{"label": "D", "x": i} for i in range(5)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            training=TrainingConfig(
+                num_epochs=1,
+                constrain_schema=True,
+            ),
+            data=DataConfig(derive_schema=True),
+        )
+
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(train_data, eval_data=eval_data, epochs=1)
+
+        # Evaluate on eval data containing unseen value "D"
+        results = pipeline.evaluate(eval_data)
+
+        assert "loss" in results
+        assert np.isfinite(results["loss"]), (
+            f"Eval loss is {results['loss']} — expected finite. "
+            "Schema masks may be blocking UNK tokens."
+        )
