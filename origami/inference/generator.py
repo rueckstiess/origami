@@ -764,8 +764,11 @@ class OrigamiGenerator:
 
                 # Sample from MoG (truncated if bounds available)
                 sampled = self.model.continuous_head.sample(
-                    w.unsqueeze(1), m.unsqueeze(1), lv.unsqueeze(1),
-                    lower=lower, upper=upper,
+                    w.unsqueeze(1),
+                    m.unsqueeze(1),
+                    lv.unsqueeze(1),
+                    lower=lower,
+                    upper=upper,
                 ).squeeze(1)  # (batch,)
                 # Only use sampled value where NUM was generated
                 new_numeric_values[:, 0] = torch.where(is_num, sampled, new_numeric_values[:, 0])

@@ -362,6 +362,10 @@ class OrigamiPipeline:
         # When device is explicitly specified, pass it to respect user's choice
         trainer_device = None if self.config.device == "auto" else self._training_device
 
+        # Create inverse transform function for scaled numeric fields
+        # This allows the trainer's evaluator to compute metrics on original scale
+        inverse_fn = self._create_inverse_transform_fn()
+
         trainer = OrigamiTrainer(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -372,6 +376,7 @@ class OrigamiPipeline:
             device=trainer_device,
             training_state=self._training_state,  # Resume from checkpoint if available
             schema=self._schema,
+            inverse_transform_fn=inverse_fn,
         )
 
         # Mark as fitted before training starts (all components are initialized)

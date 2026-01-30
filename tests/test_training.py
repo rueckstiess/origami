@@ -1267,11 +1267,13 @@ class TestEvaluationScheduling:
 
         class BestTracker(TrainerCallback):
             def on_best(self, trainer, state, metrics):
-                best_events.append({
-                    "step": state.global_step,
-                    "best_eval_loss": state.best_eval_loss,
-                    "metrics": dict(metrics),
-                })
+                best_events.append(
+                    {
+                        "step": state.global_step,
+                        "best_eval_loss": state.best_eval_loss,
+                        "metrics": dict(metrics),
+                    }
+                )
 
         config = TrainingConfig(
             batch_size=4,
@@ -1811,9 +1813,7 @@ class TestAccelerateIntegration:
         config = TrainingConfig(use_accelerate=True, num_epochs=1)
 
         # Passing explicit device should disable accelerate
-        trainer = OrigamiTrainer(
-            model, tokenizer, data, config=config, device=torch.device("cpu")
-        )
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config, device=torch.device("cpu"))
 
         # Should not use accelerate when device is explicitly passed
         assert trainer._accelerator is None

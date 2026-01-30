@@ -913,16 +913,16 @@ class TestArrayOfObjectsCounting:
 
         tokens = [
             vocab.start_id,
-            vocab.obj_start_id,      # root object
-            vocab.array_start_id,    # array
-            vocab.obj_start_id,      # first object in array
+            vocab.obj_start_id,  # root object
+            vocab.array_start_id,  # array
+            vocab.obj_start_id,  # first object in array
             name_id,
             alice_id,
-            vocab.obj_end_id,        # close first object
-            vocab.obj_start_id,      # second object in array
+            vocab.obj_end_id,  # close first object
+            vocab.obj_start_id,  # second object in array
             name_id,
             alice_id,
-            vocab.obj_end_id,        # close second object
+            vocab.obj_end_id,  # close second object
         ]
         state = pda.init_state_from_tokens(tokens, vocab)
 
@@ -989,8 +989,8 @@ class TestUNKTokenHandling:
         tokens = [
             vocab.start_id,
             vocab.obj_start_id,
-            vocab.unk_key_id,     # acts like a key
-            vocab.unk_value_id,   # acts like a value
+            vocab.unk_key_id,  # acts like a key
+            vocab.unk_value_id,  # acts like a value
         ]
         state = pda.init_state_from_tokens(tokens, vocab)
 

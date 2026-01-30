@@ -29,6 +29,7 @@ def simple_tokenizer():
 def simple_model(simple_tokenizer):
     """Create a small model for testing."""
     import torch
+
     from origami.constraints.json_grammar import JSONGrammarPDA
 
     # Seed for reproducible model weights
@@ -858,9 +859,7 @@ class TestGeneratorGrammarConstraints:
         # Attach grammar PDA for tests (normally done by trainer)
         from origami.constraints.json_grammar import JSONGrammarPDA
 
-        model._grammar_pda = JSONGrammarPDA(
-            constrained_tokenizer.vocab, max_depth=config.max_depth
-        )
+        model._grammar_pda = JSONGrammarPDA(constrained_tokenizer.vocab, max_depth=config.max_depth)
         return model
 
     def test_generate_respects_grammar(self, constrained_model, constrained_tokenizer):

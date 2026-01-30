@@ -300,7 +300,11 @@ class OrigamiEvaluator:
             value = value.value
 
         # Apply inverse transform if configured (to match y_pred)
-        if self.inverse_transform and isinstance(value, (int, float)) and not isinstance(value, bool):
+        if (
+            self.inverse_transform
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
             return self.inverse_transform(value, self.target_key)
 
         return value

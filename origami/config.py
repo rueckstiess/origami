@@ -192,6 +192,13 @@ class TrainingConfig(PrettyReprMixin):
             are only applied during inference. Training with schema masks can
             reduce effective vocabulary per position, making loss artificially
             low without improving generation quality.
+        best_metric: Metric key for triggering on_best callback. Must be a key from
+            eval_metrics (e.g., "acc" if eval_metrics={"acc": "accuracy"}) or "loss"
+            which is always computed. Default "loss" preserves backwards compatibility.
+        best_metric_direction: Optimization direction for best_metric. "maximize" means
+            higher is better (e.g., accuracy), "minimize" means lower is better (e.g., loss).
+            If None (default), auto-detected from METRIC_DIRECTION registry. Required for
+            custom metrics not in the registry.
     """
 
     # Optimization
@@ -228,6 +235,10 @@ class TrainingConfig(PrettyReprMixin):
     constrain_grammar: bool = True
     constrain_schema: bool = False
 
+    # Best model selection
+    best_metric: str = "loss"  # Metric key for on_best callback (e.g., "loss", "acc")
+    best_metric_direction: Literal["maximize", "minimize"] | None = None  # None = auto-detect
+
     def __post_init__(self) -> None:
         """Validate configuration."""
         if self.batch_size < 1:
@@ -241,6 +252,14 @@ class TrainingConfig(PrettyReprMixin):
         if self.eval_strategy not in valid_eval_strategies:
             raise ValueError(
                 f"eval_strategy must be one of {valid_eval_strategies}, got '{self.eval_strategy}'"
+            )
+
+        # Validate best_metric_direction
+        valid_directions = {None, "maximize", "minimize"}
+        if self.best_metric_direction not in valid_directions:
+            raise ValueError(
+                f"best_metric_direction must be None, 'maximize', or 'minimize', "
+                f"got '{self.best_metric_direction}'"
             )
 
 

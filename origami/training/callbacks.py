@@ -116,9 +116,13 @@ class TrainerCallback:
         state: TrainResult,
         payload: dict[str, float],
     ) -> None:
-        """Called when a new best model is found (val_loss improved).
+        """Called when a new best model is found (configurable metric improved).
 
-        Fires AFTER on_evaluate and AFTER state.best_eval_loss is updated.
+        By default, triggers when val_loss improves (lower is better). The metric
+        can be configured via TrainingConfig.best_metric (e.g., "acc" for accuracy)
+        and TrainingConfig.best_metric_direction ("maximize" or "minimize").
+
+        Fires AFTER on_evaluate and AFTER state.best_metric_value is updated.
         The payload contains the same evaluation metrics dict as on_evaluate.
 
         Use this to save checkpoints with additional state that the trainer
@@ -126,7 +130,8 @@ class TrainerCallback:
 
         Args:
             trainer: The trainer instance.
-            state: Current training state. state.best_eval_loss contains the new best.
+            state: Current training state. state.best_metric_value contains the new best,
+                state.best_metric_name contains the metric key (e.g., "loss", "acc").
             payload: Dict of evaluation metrics (same as on_evaluate payload).
         """
         pass
@@ -250,7 +255,7 @@ class ProgressCallback(TrainerCallback):
             self._pbar.set_postfix(
                 loss=f"{state.current_batch_loss:.4f}",
                 lr=f"{state.current_lr:.2e}",
-                dt=f"{state.current_batch_dt*1000:.0f}ms",
+                dt=f"{state.current_batch_dt * 1000:.0f}ms",
             )
 
     def on_epoch_end(

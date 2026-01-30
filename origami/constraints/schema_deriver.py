@@ -142,11 +142,13 @@ class SchemaDeriver:
 
         # Handle scaled numerics — type + bounds only, no enum
         if scaled_values:
-            sub_schemas.append({
-                "type": "number",
-                "minimum": min(scaled_values),
-                "maximum": max(scaled_values),
-            })
+            sub_schemas.append(
+                {
+                    "type": "number",
+                    "minimum": min(scaled_values),
+                    "maximum": max(scaled_values),
+                }
+            )
 
         if not sub_schemas:
             # No recognized values — permissive schema

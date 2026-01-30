@@ -633,7 +633,9 @@ class TestAllowComplexValues:
         # Attach grammar PDA for tests that need it (normally done by trainer)
         from origami.constraints.json_grammar import JSONGrammarPDA
 
-        model._grammar_pda = JSONGrammarPDA(tokenizer_with_complex.vocab, max_depth=config.max_depth)
+        model._grammar_pda = JSONGrammarPDA(
+            tokenizer_with_complex.vocab, max_depth=config.max_depth
+        )
         return model
 
     def test_allow_complex_values_false_returns_primitive(

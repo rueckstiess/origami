@@ -13,8 +13,9 @@ import gc
 import math
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch.optim import AdamW
@@ -58,6 +59,7 @@ def _worker_init_fn(worker_id: int) -> None:
 
     os.environ["NUMBA_NUM_THREADS"] = "1"
 
+
 if TYPE_CHECKING:
     from origami.config import TrainingConfig
     from origami.model.origami_model import OrigamiModel
@@ -75,13 +77,18 @@ class TrainResult:
     # Training progress (updated during training)
     epoch: int = 0
     global_step: int = 0
-    best_eval_loss: float = float("inf")
+    best_eval_loss: float = float(
+        "inf"
+    )  # Backwards compat: tracks val_loss when best_metric="loss"
     epoch_step: int = 0
     epoch_completed: bool = False  # True after epoch finishes, False at start
     epoch_resume_step: int = 0  # Steps skipped at start of epoch when resuming mid-epoch
     current_batch_loss: float = 0.0
     current_lr: float = 0.0
     current_batch_dt: float = 0.0  # Batch time in seconds
+    # Generalized best metric tracking (for configurable best_metric)
+    best_metric_value: float = float("inf")  # Initialized based on direction in Trainer.__init__
+    best_metric_name: str = "loss"  # Key from eval_metrics (or "loss")
     # Completion status (set when training ends)
     completed: bool = False  # True if all epochs finished
     interrupted: bool = False  # True if stopped via KeyboardInterrupt
@@ -149,6 +156,7 @@ class OrigamiTrainer:
         callbacks: list[TrainerCallback] | None = None,
         training_state: dict | None = None,
         schema: dict | None = None,
+        inverse_transform_fn: Callable[[Any, str], Any] | None = None,
     ):
         """Initialize trainer.
 
@@ -167,6 +175,9 @@ class OrigamiTrainer:
             schema: Optional JSON Schema dict for semantic constraints.
                      When provided, schema-based masks are intersected with grammar
                      masks during training to restrict outputs by type/enum/keys.
+            inverse_transform_fn: Optional function to inverse-transform predicted values.
+                     Signature: (value, target_key) -> transformed_value.
+                     Used for scaled numeric values to compute metrics on original scale.
         """
         from origami.config import TrainingConfig
 
@@ -292,6 +303,16 @@ class OrigamiTrainer:
         # Callback handler
         self.callback_handler = CallbackHandler(callbacks or [])
 
+        # Validate and resolve best_metric direction
+        self._best_metric_direction = self._resolve_best_metric_direction()
+
+        # Initialize best_metric_value based on direction
+        if self._best_metric_direction == "maximize":
+            self.state.best_metric_value = float("-inf")
+        else:
+            self.state.best_metric_value = float("inf")
+        self.state.best_metric_name = self.config.best_metric
+
         # Create evaluator for unified evaluation (lazy import to avoid circular)
         from origami.inference import OrigamiEvaluator
 
@@ -305,6 +326,7 @@ class OrigamiTrainer:
             model=model,
             tokenizer=tokenizer,
             target_key=self.config.target_key,
+            inverse_transform=inverse_transform_fn,
             allow_complex_values=allow_complex_values,
             schema=self._schema,
             constrain_schema=self.config.constrain_schema,
@@ -421,6 +443,59 @@ class OrigamiTrainer:
 
         return config_value
 
+    def _resolve_best_metric_direction(self) -> str:
+        """Validate best_metric and resolve its optimization direction.
+
+        Validates that best_metric is either "loss" (always available) or a key
+        in eval_metrics. Then resolves the direction from config or METRIC_DIRECTION.
+
+        Returns:
+            "maximize" or "minimize"
+
+        Raises:
+            ValueError: If best_metric is not in eval_metrics keys (except "loss")
+            ValueError: If metric direction cannot be resolved (unknown metric without
+                explicit best_metric_direction)
+        """
+        from origami.training.metrics import get_metric_direction
+
+        # Validate best_metric is available (except "loss" which is always computed)
+        if self.config.best_metric != "loss":
+            if (
+                not self.config.eval_metrics
+                or self.config.best_metric not in self.config.eval_metrics
+            ):
+                available = (
+                    list(self.config.eval_metrics.keys()) if self.config.eval_metrics else []
+                )
+                raise ValueError(
+                    f"best_metric='{self.config.best_metric}' not found in eval_metrics keys "
+                    f"{available}. Use one of these keys, or use best_metric='loss'."
+                )
+
+        # Resolve direction
+        # For "loss", direction is always "minimize"
+        # For other metrics, resolve alias -> function name -> direction
+        if self.config.best_metric == "loss":
+            metric_name = "loss"
+        else:
+            metric_spec = self.config.eval_metrics[self.config.best_metric]
+            metric_name = (
+                metric_spec
+                if isinstance(metric_spec, str)
+                else getattr(metric_spec, "__name__", "")
+            )
+
+        direction = self.config.best_metric_direction or get_metric_direction(metric_name)
+        if direction is None:
+            raise ValueError(
+                f"Metric '{metric_name}' (from best_metric='{self.config.best_metric}') "
+                f"has no registered direction. Set best_metric_direction='maximize' or "
+                f"'minimize' explicitly in TrainingConfig."
+            )
+
+        return direction
+
     def _should_evaluate_step(self) -> bool:
         """Check if we should evaluate at the current step.
 
@@ -499,11 +574,11 @@ class OrigamiTrainer:
         return metrics
 
     def _run_evaluation_and_checkpoint(self) -> dict[str, float]:
-        """Run evaluation and fire on_best callback if loss improved.
+        """Run evaluation and fire on_best callback if metric improved.
 
         This consolidates the common pattern of:
         1. Running evaluation
-        2. Checking if val_loss improved
+        2. Checking if best_metric improved (based on direction)
         3. Firing on_best callback if improved
 
         Returns:
@@ -511,11 +586,28 @@ class OrigamiTrainer:
         """
         eval_metrics = self._run_evaluation()
 
-        # Track best model based on val_loss (skip if nan or no val_loss)
-        val_loss = eval_metrics.get("val_loss")
-        if val_loss is not None and not math.isnan(val_loss):
-            if val_loss < self.state.best_eval_loss:
-                self.state.best_eval_loss = val_loss
+        # Find the metric value (try val_ prefix first, then train_)
+        metric_key = f"val_{self.config.best_metric}"
+        metric_value = eval_metrics.get(metric_key)
+
+        if metric_value is None:
+            # Fall back to train_ prefix if no eval data
+            metric_key = f"train_{self.config.best_metric}"
+            metric_value = eval_metrics.get(metric_key)
+
+        if metric_value is not None and not math.isnan(metric_value):
+            # Check if improved based on direction
+            if self._best_metric_direction == "maximize":
+                improved = metric_value > self.state.best_metric_value
+            else:
+                improved = metric_value < self.state.best_metric_value
+
+            if improved:
+                self.state.best_metric_value = metric_value
+                self.state.best_metric_name = self.config.best_metric
+                # Backwards compat: also update best_eval_loss if tracking loss
+                if self.config.best_metric == "loss" and metric_key == "val_loss":
+                    self.state.best_eval_loss = metric_value
                 # Fire on_best callback (allows external saving with additional state)
                 self.callback_handler.fire_event("on_best", self, self.state, eval_metrics)
 
@@ -821,6 +913,9 @@ class OrigamiTrainer:
             "best_eval_loss": self.state.best_eval_loss,
             "epoch_completed": self.state.epoch_completed,
             "steps_in_epoch": self.state.epoch_step,  # For mid-epoch resumption
+            # Generalized best metric tracking
+            "best_metric_value": self.state.best_metric_value,
+            "best_metric_name": self.state.best_metric_name,
         }
 
     def _restore_training_state(self, state: dict) -> None:
@@ -844,6 +939,13 @@ class OrigamiTrainer:
         self.state.epoch_completed = state.get(
             "epoch_completed", True
         )  # Default True for backwards compat
+
+        # Restore generalized best metric tracking
+        # Default to current state values (set in __init__ based on direction)
+        if "best_metric_value" in state:
+            self.state.best_metric_value = state["best_metric_value"]
+        if "best_metric_name" in state:
+            self.state.best_metric_name = state["best_metric_name"]
 
         # Track steps to skip for mid-epoch resumption
         # Only relevant if epoch was not completed

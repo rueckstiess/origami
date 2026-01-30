@@ -187,7 +187,9 @@ class ContinuousHead(nn.Module):
         dist = torch.distributions.Normal(means, stds)
 
         # Expand bounds to (batch, seq, 1) for broadcasting with components
-        lo = lower.unsqueeze(-1) if lower is not None else means.new_full(means.shape, float("-inf"))
+        lo = (
+            lower.unsqueeze(-1) if lower is not None else means.new_full(means.shape, float("-inf"))
+        )
         hi = upper.unsqueeze(-1) if upper is not None else means.new_full(means.shape, float("inf"))
 
         # CDF at bounds per component

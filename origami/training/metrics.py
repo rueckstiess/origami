@@ -25,6 +25,7 @@ def root_mean_squared_error(y_true: list, y_pred: list) -> float:
     """Root Mean Squared Error (RMSE)."""
     return mean_squared_error(y_true, y_pred) ** 0.5
 
+
 # Metrics that require allow_complex_values=True for correct predictions.
 # These metrics expect arrays or objects as predictions and will return 0.0
 # if the predictor only generates primitive values.
@@ -117,7 +118,18 @@ def accuracy(y_true: list[Any], y_pred: list[Any]) -> float:
 
 
 def _values_equal(a: Any, b: Any) -> bool:
-    """Check if two JSON values are equal (order-independent for dicts)."""
+    """Check if two JSON values are equal (order-independent for dicts).
+
+    Numeric types (int/float) are compared by value, not type, since JSON
+    does not distinguish between them. For example, int(0) == float(0.0).
+    Bool is excluded from this relaxation since Python's bool is a subclass
+    of int but semantically distinct in JSON (true vs 1).
+    """
+    # Allow int/float comparison (JSON doesn't distinguish numeric types)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if isinstance(a, bool) or isinstance(b, bool):
+            return type(a) is type(b) and a == b
+        return a == b
     if type(a) is not type(b):
         return False
     if isinstance(a, dict):
@@ -384,6 +396,45 @@ METRIC_REGISTRY: dict[str, MetricFn] = {
     "mae": mean_absolute_error,
     "rmse": root_mean_squared_error,
 }
+
+# Optimization direction for metrics: "maximize" (higher is better) or "minimize" (lower is better).
+# Used by Trainer to determine when on_best callback should fire.
+METRIC_DIRECTION: dict[str, str] = {
+    # Classification metrics (maximize)
+    "accuracy": "maximize",
+    "array_f1": "maximize",
+    "array_precision": "maximize",
+    "array_recall": "maximize",
+    "array_jaccard": "maximize",
+    "object_key_accuracy": "maximize",
+    # Regression metrics (minimize)
+    "mse": "minimize",
+    "mae": "minimize",
+    "rmse": "minimize",
+    # Special (always computed by evaluator)
+    "loss": "minimize",
+}
+
+
+def get_metric_direction(metric: str) -> str | None:
+    """Get optimization direction for a metric.
+
+    Args:
+        metric: The metric name (e.g., "accuracy", "rmse", "loss").
+
+    Returns:
+        "maximize" if higher is better, "minimize" if lower is better,
+        or None if the metric is not registered (requires explicit direction).
+
+    Example:
+        >>> get_metric_direction("accuracy")
+        'maximize'
+        >>> get_metric_direction("rmse")
+        'minimize'
+        >>> get_metric_direction("custom_metric")
+        None
+    """
+    return METRIC_DIRECTION.get(metric)
 
 
 def get_metric(name: str) -> MetricFn:
