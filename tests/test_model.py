@@ -1119,6 +1119,120 @@ class TestOrigamiModelGrammar:
         assert mask.dtype == torch.bool
 
 
+class TestMaskedLabelLoss:
+    """Tests that loss handles masked-out label tokens gracefully."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        tokenizer = JSONTokenizer()
+        tokenizer.fit([{"a": 1, "b": 2}])
+        return tokenizer
+
+    @pytest.fixture
+    def config(self, tokenizer):
+        return ModelConfig(
+            d_model=32, n_heads=2, n_layers=1, max_depth=tokenizer.max_depth
+        )
+
+    def test_loss_finite_when_label_masked_by_grammar(self, config, tokenizer):
+        """Loss should be finite even when some labels are masked to -inf.
+
+        This simulates what happens when schema constraints block the
+        actual data token at a position (e.g. an eval-data value that
+        exists in the vocabulary but is not in the field-specific enum).
+        """
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        batch = OrigamiDataCollator(tokenizer).collate_objects([{"a": 1, "b": 2}])
+
+        # Build a grammar mask that blocks the actual label at one position
+        grammar_mask = torch.ones(
+            batch.input_ids.shape[0],
+            batch.input_ids.shape[1],
+            tokenizer.vocab.size,
+            dtype=torch.bool,
+        )
+        # Mask out the label token at position 3 (an arbitrary real-token position)
+        label_at_3 = batch.input_ids[0, 4].item()  # shifted: logits[3] predicts token[4]
+        grammar_mask[0, 3, label_at_3] = False
+
+        output = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
+            grammar_mask=grammar_mask,
+        )
+
+        assert output.loss is not None
+        assert torch.isfinite(output.loss), f"Loss should be finite, got {output.loss.item()}"
+
+    def test_loss_finite_when_all_labels_masked(self, config, tokenizer):
+        """Loss should be finite even when ALL non-pad labels are masked."""
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        batch = OrigamiDataCollator(tokenizer).collate_objects([{"a": 1}])
+
+        # Build a mask that blocks the label at every real position
+        grammar_mask = torch.ones(
+            batch.input_ids.shape[0],
+            batch.input_ids.shape[1],
+            tokenizer.vocab.size,
+            dtype=torch.bool,
+        )
+        seq_len = batch.input_ids.shape[1]
+        for t in range(seq_len - 1):
+            if batch.attention_mask[0, t + 1]:
+                label_id = batch.input_ids[0, t + 1].item()
+                grammar_mask[0, t, label_id] = False
+
+        output = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
+            grammar_mask=grammar_mask,
+        )
+
+        assert output.loss is not None
+        assert torch.isfinite(output.loss), f"Loss should be finite, got {output.loss.item()}"
+
+    def test_loss_unchanged_when_no_labels_masked(self, config, tokenizer):
+        """When no labels are masked, the fix should not change the loss."""
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        batch = OrigamiDataCollator(tokenizer).collate_objects([{"a": 1, "b": 2}])
+
+        # All-True mask (nothing blocked)
+        grammar_mask = torch.ones(
+            batch.input_ids.shape[0],
+            batch.input_ids.shape[1],
+            tokenizer.vocab.size,
+            dtype=torch.bool,
+        )
+
+        output_with_mask = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
+            grammar_mask=grammar_mask,
+        )
+        output_without_mask = model(
+            input_ids=batch.input_ids,
+            path_types=batch.path_types,
+            path_ids=batch.path_ids,
+            path_lengths=batch.path_lengths,
+            attention_mask=batch.attention_mask,
+            labels=batch.labels,
+        )
+
+        assert torch.allclose(output_with_mask.loss, output_without_mask.loss, atol=1e-5)
+
+
 class TestOrigamiModelContinuousLossWeight:
     """Tests for continuous loss weight configuration."""
 

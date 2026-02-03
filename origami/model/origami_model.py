@@ -260,10 +260,24 @@ class OrigamiModel(nn.Module):
             # Set padding positions to ignore_index
             shift_labels = shift_labels.masked_fill(~shift_mask, -100)
 
+        # Exclude positions where the label token was masked to -inf by
+        # grammar/schema constraints. This happens when eval data contains
+        # a value that exists in the vocabulary but isn't in the field-
+        # specific schema enum. Including these would produce inf loss.
+        valid_pos = shift_labels >= 0
+        if valid_pos.any():
+            label_logits = shift_logits.gather(2, shift_labels.clamp(min=0).unsqueeze(2)).squeeze(2)
+            masked_out = valid_pos & (label_logits == float("-inf"))
+            if masked_out.any():
+                shift_labels = shift_labels.masked_fill(masked_out, -100)
+
         # Flatten for cross-entropy
         vocab_size = shift_logits.size(-1)
 
-        if loss_weights is not None:
+        # Guard: if no valid labels remain, return zero loss.
+        if not (shift_labels >= 0).any():
+            loss = shift_logits.new_zeros((), requires_grad=True)
+        elif loss_weights is not None:
             # Weighted cross-entropy: use reduction="none" and apply weights
             per_token_loss = F.cross_entropy(
                 shift_logits.view(-1, vocab_size),
