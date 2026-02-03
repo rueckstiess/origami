@@ -1215,7 +1215,7 @@ class TestPipelineCheckpointResume:
         pipeline.fit(data, epochs=1, verbose=False)
 
         state = pipeline.state_dict()
-        assert state["version"] == "1.2"
+        assert state["version"] == "1.3"
 
     def test_resume_via_fit(self, tmp_path):
         """Test that resume works via fit() as well as preprocess()/train()."""
@@ -1521,3 +1521,323 @@ class TestPipelineSchemaConstraints:
             f"Eval loss is {results['loss']} — expected finite. "
             "Schema masks may be blocking UNK tokens."
         )
+
+
+class TestTransformSchemaForPda:
+    """Tests for _transform_schema_for_pda."""
+
+    def test_no_preprocessor_returns_schema_unchanged(self):
+        """Identity transform when no preprocessor."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "age": {"type": "integer", "minimum": 0, "maximum": 120},
+            },
+        }
+        result = _transform_schema_for_pda(schema, None)
+        assert result is schema
+
+    def test_scaler_transforms_type_and_bounds(self):
+        """Scaled fields become type 'number' with scaled bounds."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": i} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == "number"
+        # Bounds should be in scaled space (not 0/99)
+        assert x_schema["minimum"] != 0
+        assert x_schema["maximum"] != 99
+        # Scaled min should be negative (0 < mean), max positive (99 > mean)
+        assert x_schema["minimum"] < 0
+        assert x_schema["maximum"] > 0
+
+    def test_scaler_removes_enum(self):
+        """Scaled fields should not have enum (continuous distribution)."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": i} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "enum": list(range(100)), "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+        assert "enum" not in result["properties"]["x"]
+
+    def test_discretizer_produces_bin_center_enum(self):
+        """Discretized fields get enum of bin centers."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+
+        data = [{"x": i} for i in range(100)]
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, disc)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert "enum" in x_schema
+        assert len(x_schema["enum"]) == 5
+        # Bin centers should be floats
+        assert all(isinstance(v, float) for v in x_schema["enum"])
+        # Min/max should match bin center range
+        assert x_schema["minimum"] == min(x_schema["enum"])
+        assert x_schema["maximum"] == max(x_schema["enum"])
+
+    def test_passthrough_fields_unchanged(self):
+        """Fields not in preprocessor pass through unchanged."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        # "label" has only 2 unique values → below cat_threshold → passthrough
+        data = [{"label": "A" if i % 2 == 0 else "B", "x": i} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "enum": ["A", "B"]},
+                "x": {"type": "integer", "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        # "label" should be unchanged
+        assert result["properties"]["label"] == schema["properties"]["label"]
+        # "x" should be transformed
+        assert result["properties"]["x"]["type"] == "number"
+
+    def test_nested_fields(self):
+        """Transform works on nested object fields."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"stats": {"score": float(i)}} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        assert "stats.score" in scaler.scaled_fields
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "stats": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "number", "minimum": 0.0, "maximum": 99.0},
+                    },
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        score_schema = result["properties"]["stats"]["properties"]["score"]
+        assert score_schema["type"] == "number"
+        assert score_schema["minimum"] != 0.0
+
+
+class TestPipelineSchemaPostProcessing:
+    """Tests for schema-based post-processing of generated/predicted values."""
+
+    def test_output_schema_derived_from_original_data(self):
+        """Test that _output_schema is derived from original (pre-preprocessing) data."""
+        data = [{"label": "A", "count": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10, infer_schema=True),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        # Output schema should reflect original types
+        assert pipeline._output_schema is not None
+        count_schema = pipeline._output_schema["properties"]["count"]
+        assert count_schema["type"] == "integer"
+
+        # PDA schema (from preprocessed data) should have "number" for scaled fields
+        assert pipeline._schema is not None
+        count_pda_schema = pipeline._schema["properties"]["count"]
+        assert count_pda_schema["type"] == "number"
+
+    def test_output_schema_from_external_schema(self):
+        """Test that user-provided schema is used as output schema and transformed for PDA."""
+        data = [{"label": "A", "count": i} for i in range(50)]
+
+        external_schema = {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "enum": ["A", "B"]},
+                "count": {"type": "integer", "minimum": 0, "maximum": 100},
+            },
+        }
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(schema=external_schema, numeric_mode="scale", cat_threshold=10),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        # Output schema is the user-provided schema (original types)
+        assert pipeline._output_schema is external_schema
+
+        # PDA schema should be transformed: "count" becomes "number" with scaled bounds
+        assert pipeline._schema is not None
+        count_pda = pipeline._schema["properties"]["count"]
+        assert count_pda["type"] == "number"
+        assert "enum" not in count_pda
+        # Bounds should be scaled (not the original 0/100)
+        assert count_pda["minimum"] != 0
+        assert count_pda["maximum"] != 100
+
+        # "label" should pass through unchanged (not a preprocessed field)
+        label_pda = pipeline._schema["properties"]["label"]
+        assert label_pda["type"] == "string"
+        assert label_pda["enum"] == ["A", "B"]
+
+    def test_no_output_schema_when_not_configured(self):
+        """Test that _output_schema is None when infer_schema=False and no schema provided."""
+        data = [{"label": "A", "count": i} for i in range(50)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        assert pipeline._output_schema is None
+
+    def test_output_schema_saved_and_loaded(self):
+        """Test that _output_schema survives save/load cycle."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "count": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10, infer_schema=True),
+            training=TrainingConfig(num_epochs=1),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model.pt"
+            pipeline.save(path)
+            loaded = OrigamiPipeline.load(path)
+
+        assert loaded._output_schema is not None
+        assert loaded._output_schema["properties"]["count"]["type"] == "integer"
+
+    def test_backward_compat_old_checkpoint_no_output_schema(self):
+        """Test that loading a v1.2 checkpoint (no output_schema) doesn't break."""
+        torch.manual_seed(42)
+        data = [{"label": "A", "count": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10, infer_schema=True),
+            training=TrainingConfig(num_epochs=1),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.fit(data, epochs=1)
+
+        # Simulate a v1.2 checkpoint by removing output_schema from state_dict
+        state = pipeline.state_dict()
+        del state["output_schema"]
+        state["version"] = "1.2"
+
+        loaded = OrigamiPipeline.from_state_dict(state)
+        assert loaded._output_schema is None
+        # Pipeline should still work (no post-processing)
+        assert loaded._fitted is True
+
+    def test_value_transform_chains_inverse_and_postprocess(self):
+        """Test that _create_value_transform_fn chains both transforms."""
+        import random
+
+        torch.manual_seed(42)
+        random.seed(42)
+
+        # Create data with high-cardinality integer field (will be scaled)
+        data = [{"label": random.choice(["A", "B"]), "count": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2, use_continuous_head=True),
+            data=DataConfig(numeric_mode="scale", cat_threshold=10, infer_schema=True),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        # The combined transform should exist
+        transform = pipeline._create_value_transform_fn()
+        assert transform is not None
+
+        # Test it: a scaled value should be inverse-transformed then rounded to int
+        # The scaler was fit on [0, 1, ..., 99], so mean≈49.5, std≈29
+        # A scaled value of 0.0 should inverse-transform to ~49.5, then round to 50
+        result = transform(0.0, "count")
+        assert isinstance(result, int)
+
+    def test_postprocessor_with_discretize_mode(self):
+        """Test that post-processing works with discretize mode."""
+        data = [{"label": "A", "count": i} for i in range(100)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            data=DataConfig(numeric_mode="discretize", cat_threshold=10, infer_schema=True),
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        # Output schema should have integer type for "count"
+        assert pipeline._output_schema["properties"]["count"]["type"] == "integer"
+
+        # The combined transform should apply post-processing (no inverse transform for discretize)
+        transform = pipeline._create_value_transform_fn()
+        assert transform is not None
+
+        # A float bin center should be rounded to integer
+        result = transform(27.5, "count")
+        assert isinstance(result, int)
+
+    def test_postprocessor_noop_for_disabled_numeric_mode(self):
+        """Test that post-processing is a no-op when schema is not available."""
+        data = [{"label": "A", "count": i} for i in range(50)]
+
+        config = OrigamiConfig(
+            model=ModelConfig(d_model=32, n_layers=2),
+            # No infer_schema, no schema → no output schema
+        )
+        pipeline = OrigamiPipeline(config)
+        pipeline.preprocess(data)
+
+        transform = pipeline._create_value_transform_fn()
+        assert transform is None

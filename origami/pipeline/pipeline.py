@@ -19,13 +19,72 @@ import torch
 from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
 from origami.inference import OrigamiEmbedder, OrigamiEvaluator, OrigamiGenerator, OrigamiPredictor
 from origami.model import OrigamiModel
-from origami.preprocessing import NumericDiscretizer, NumericScaler
+from origami.preprocessing import NumericDiscretizer, NumericScaler, SchemaPostProcessor
 from origami.tokenizer import JSONTokenizer
 from origami.training.metrics import MetricSpec
 from origami.utils.device import auto_device
 
 if TYPE_CHECKING:
     from origami.training import TrainResult
+
+
+def _transform_schema_for_pda(
+    schema: dict,
+    preprocessor: NumericScaler | NumericDiscretizer | None,
+    path: str = "",
+) -> dict:
+    """Transform an original-data schema for use with SchemaPDA.
+
+    Adjusts type, enum, and bounds for fields that have been scaled or
+    discretized by the preprocessor. Passthrough fields are unchanged.
+
+    Args:
+        schema: JSON Schema node (object, property, or items schema).
+        preprocessor: Fitted NumericScaler or NumericDiscretizer, or None.
+        path: Dot-separated field path for the current node.
+
+    Returns:
+        Transformed schema suitable for SchemaPDA mask computation.
+    """
+    if preprocessor is None:
+        return schema
+
+    result = dict(schema)
+
+    # Check if this leaf field was preprocessed
+    if isinstance(preprocessor, NumericScaler) and path in preprocessor.scaled_fields:
+        scaler = preprocessor.scalers[path]
+        result["type"] = "number"
+        result.pop("enum", None)
+        if "minimum" in schema:
+            result["minimum"] = float(scaler.transform([[schema["minimum"]]])[0, 0])
+        if "maximum" in schema:
+            result["maximum"] = float(scaler.transform([[schema["maximum"]]])[0, 0])
+        return result
+
+    if isinstance(preprocessor, NumericDiscretizer) and path in preprocessor.discretized_fields:
+        edges = preprocessor.discretizers[path].bin_edges_[0]
+        centers = [float((edges[i] + edges[i + 1]) / 2) for i in range(len(edges) - 1)]
+        result["type"] = "number"
+        result["enum"] = centers
+        result["minimum"] = min(centers)
+        result["maximum"] = max(centers)
+        return result
+
+    # Recurse into nested structures
+    if "properties" in schema:
+        result["properties"] = {}
+        for key, prop_schema in schema["properties"].items():
+            sub_path = f"{path}.{key}" if path else key
+            result["properties"][key] = _transform_schema_for_pda(
+                prop_schema, preprocessor, sub_path
+            )
+
+    if "items" in schema:
+        sub_path = f"{path}.*" if path else "*"
+        result["items"] = _transform_schema_for_pda(schema["items"], preprocessor, sub_path)
+
+    return result
 
 
 class OrigamiPipeline:
@@ -87,6 +146,7 @@ class OrigamiPipeline:
         self._tokenizer: JSONTokenizer | None = None
         self._model: OrigamiModel | None = None
         self._schema: dict | None = None
+        self._output_schema: dict | None = None
         self._fitted = False
         self._train_result: TrainResult | None = None
 
@@ -107,6 +167,7 @@ class OrigamiPipeline:
         self._generator: OrigamiGenerator | None = None
         self._predictor: OrigamiPredictor | None = None
         self._embedder: OrigamiEmbedder | None = None
+        self._postprocessor: SchemaPostProcessor | None = None
 
     @property
     def model(self) -> OrigamiModel | None:
@@ -233,6 +294,20 @@ class OrigamiPipeline:
             return self
 
         # Fresh start: full preprocessing pipeline
+
+        # Step 0: Derive output schema from ORIGINAL data (before preprocessing).
+        # This captures the original types (integer vs number) and enum values
+        # for post-processing generated/predicted values back to realistic formats.
+        if self.config.data.infer_schema:
+            from origami.constraints import SchemaDeriver
+
+            output_deriver = SchemaDeriver()
+            self._output_schema = output_deriver.derive(data)
+        elif self.config.data.schema is not None:
+            self._output_schema = self.config.data.schema
+        else:
+            self._output_schema = None
+
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
 
@@ -276,18 +351,18 @@ class OrigamiPipeline:
                     f"(frequency threshold: {stats.value_frequency_threshold})"
                 )
 
-        # Step 3: Infer or set schema
-        if self.config.data.infer_schema:
-            from origami.constraints import SchemaDeriver
-
-            deriver = SchemaDeriver()
-            self._schema = deriver.derive(train_processed)
+        # Step 3: Derive PDA schema by transforming the output schema through
+        # the preprocessor. This ensures the PDA schema reflects preprocessed
+        # types/values (e.g., scaled floats, bin centers) while the output
+        # schema retains original types for post-processing.
+        if self._output_schema is not None:
+            self._schema = _transform_schema_for_pda(
+                self._output_schema, self._preprocessor
+            )
             if verbose:
                 from origami.utils import format_schema
 
-                print(f"Derived schema:\n{format_schema(self._schema)}")
-        elif self.config.data.schema is not None:
-            self._schema = self.config.data.schema
+                print(f"Derived schema:\n{format_schema(self._output_schema)}")
         else:
             self._schema = None
 
@@ -307,6 +382,7 @@ class OrigamiPipeline:
         self._generator = None
         self._predictor = None
         self._embedder = None
+        self._postprocessor = None
 
         return self
 
@@ -362,10 +438,6 @@ class OrigamiPipeline:
         # When device is explicitly specified, pass it to respect user's choice
         trainer_device = None if self.config.device == "auto" else self._training_device
 
-        # Create inverse transform function for scaled numeric fields
-        # This allows the trainer's evaluator to compute metrics on original scale
-        inverse_fn = self._create_inverse_transform_fn()
-
         trainer = OrigamiTrainer(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -376,7 +448,7 @@ class OrigamiPipeline:
             device=trainer_device,
             training_state=self._training_state,  # Resume from checkpoint if available
             schema=self._schema,
-            inverse_transform_fn=inverse_fn,
+            inverse_transform_fn=self._create_value_transform_fn(),
         )
 
         # Mark as fitted before training starts (all components are initialized)
@@ -499,7 +571,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         state = {
-            "version": "1.2",  # Bumped for schema support
+            "version": "1.3",  # Bumped for output_schema support
             "config": asdict(self.config),
             "model_state_dict": self._model.state_dict(),
             "model_config": asdict(self._model.config),
@@ -507,6 +579,7 @@ class OrigamiPipeline:
             "preprocessor_type": self._get_preprocessor_type(),
             "preprocessor_state": self._preprocessor_to_dict(),
             "schema": self._schema,
+            "output_schema": self._output_schema,
         }
 
         # Include training state if available and requested
@@ -572,8 +645,9 @@ class OrigamiPipeline:
         if "training_state" in state_dict:
             pipeline._training_state = state_dict["training_state"]
 
-        # Load schema if present
+        # Load schemas if present
         pipeline._schema = state_dict.get("schema")
+        pipeline._output_schema = state_dict.get("output_schema")
 
         # Create schema PDA if schema exists and constrain_schema was enabled
         if config.training.constrain_schema and pipeline._schema is not None:
@@ -784,6 +858,11 @@ class OrigamiPipeline:
         if self._preprocessor is not None and self.config.data.numeric_mode == "scale":
             samples = [self._inverse_transform_object(s) for s in samples]
 
+        # Post-process to match original data types (integer rounding, enum snapping)
+        postprocessor = self._get_postprocessor()
+        if postprocessor is not None:
+            samples = [postprocessor.process_object(s) for s in samples]
+
         return samples
 
     def evaluate(
@@ -843,11 +922,6 @@ class OrigamiPipeline:
         # Move to CPU for faster evaluation
         self._ensure_inference_device()
 
-        # Create inverse transform function if needed
-        inverse_fn = None
-        if isinstance(self._preprocessor, NumericScaler):
-            inverse_fn = self._create_inverse_transform_fn()
-
         # Resolve allow_complex_values with auto-detection
         effective_allow_complex = self._resolve_allow_complex_values(allow_complex_values, metrics)
 
@@ -856,7 +930,7 @@ class OrigamiPipeline:
             self._model,
             self._tokenizer,
             target_key=effective_target_key,
-            inverse_transform=inverse_fn,
+            inverse_transform=self._create_value_transform_fn(),
             allow_complex_values=effective_allow_complex,
             schema=self._schema,
             constrain_schema=self.config.training.constrain_schema,
@@ -1023,15 +1097,10 @@ class OrigamiPipeline:
         """
         self._ensure_inference_device()
         if self._predictor is None:
-            inverse_fn = None
-            if isinstance(self._preprocessor, NumericScaler):
-                # Create inverse transform function for the predictor
-                inverse_fn = self._create_inverse_transform_fn()
-
             self._predictor = OrigamiPredictor(
                 self._model,
                 self._tokenizer,
-                inverse_transform_fn=inverse_fn,
+                inverse_transform_fn=self._create_value_transform_fn(),
                 schema=self._schema,
             )
         return self._predictor
@@ -1056,6 +1125,42 @@ class OrigamiPipeline:
             return value
 
         return inverse_transform
+
+    def _create_value_transform_fn(self):
+        """Create a combined inverse-transform + post-processing function.
+
+        Chains the inverse transform (for scaled numerics) with schema-based
+        post-processing (integer rounding, enum snapping). Used for prediction
+        and evaluation so that output values match the original data format.
+
+        Returns:
+            Function (value, target_key) -> transformed_value, or None.
+        """
+        inverse_fn = self._create_inverse_transform_fn()
+        postprocessor = self._get_postprocessor()
+
+        if inverse_fn is None and postprocessor is None:
+            return None
+
+        def transform(value, target_key: str):
+            if inverse_fn is not None:
+                value = inverse_fn(value, target_key)
+            if postprocessor is not None:
+                value = postprocessor.process_value(value, target_key)
+            return value
+
+        return transform
+
+    def _get_postprocessor(self) -> SchemaPostProcessor | None:
+        """Get or create the schema post-processor.
+
+        Returns None if no output schema is available.
+        """
+        if self._output_schema is None:
+            return None
+        if self._postprocessor is None:
+            self._postprocessor = SchemaPostProcessor(self._output_schema)
+        return self._postprocessor
 
     def _resolve_allow_complex_values(
         self,

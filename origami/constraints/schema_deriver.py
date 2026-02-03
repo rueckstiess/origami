@@ -212,6 +212,7 @@ class SchemaDeriver:
         json_types: set[str] = set()
         numeric_values: list[int | float] = []
 
+        has_non_whole_float = False
         for v in values:
             if isinstance(v, bool):
                 json_types.add("boolean")
@@ -221,10 +222,19 @@ class SchemaDeriver:
             elif isinstance(v, float):
                 json_types.add("number")
                 numeric_values.append(v)
+                if not v.is_integer():
+                    has_non_whole_float = True
             elif isinstance(v, str):
                 json_types.add("string")
             elif v is None:
                 json_types.add("null")
+
+        # Promote whole-number floats to integer: if all float values are
+        # whole numbers (e.g., 34.0, 66122.0 from CSV parsing), treat them
+        # as integers semantically.
+        if "number" in json_types and not has_non_whole_float:
+            json_types.discard("number")
+            json_types.add("integer")
 
         # If we have both integer and number, consolidate to number
         if "integer" in json_types and "number" in json_types:
