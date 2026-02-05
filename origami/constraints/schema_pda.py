@@ -405,7 +405,24 @@ class SchemaPDA:
                 # Look up constraint for the NEXT token's path
                 if t + 1 < len(paths):
                     next_path = paths[t + 1]
-                    norm = self.normalize_path(next_path)
+                    current_path = paths[t]
+
+                    # When the current token is an array element and the next
+                    # token closes the array (ARRAY_END), use the element path
+                    # instead of ARRAY_END's parent path.  Without this, the
+                    # mask for the parent array schema (type=array) masks out
+                    # all value tokens, making ARRAY_END the only valid option.
+                    # The model then never learns the stopping probability
+                    # because there is no choice to make at training time.
+                    if (
+                        current_path
+                        and isinstance(current_path[-1], IndexElement)
+                        and len(next_path) < len(current_path)
+                    ):
+                        norm = self.normalize_path(current_path)
+                    else:
+                        norm = self.normalize_path(next_path)
+
                     indices[b, pos] = self._path_to_index.get(norm, 0)
                 # else: last position → index 0 (all-True)
 

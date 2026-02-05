@@ -1103,6 +1103,221 @@ class TestUNKFlags:
         assert root_mask[vocab.unk_key_id].item()
 
 
+class TestResolveMaskIndicesArrayEnd:
+    """Tests for array-end mask index resolution.
+
+    When the last element of an array is followed by ARRAY_END, the mask
+    at that position should use the element path (e.g., "color.*") not
+    the parent array path ("color"). This ensures the model sees both
+    value tokens and ARRAY_END as valid options during training, so it
+    learns the stopping probability.
+    """
+
+    def test_last_element_before_array_end(self, vocab):
+        """Last value before ARRAY_END should use element-level mask."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "color": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["red", "blue"]},
+                    "minItems": 1,
+                    "maxItems": 5,
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+
+        # Sequence: START OBJ_START KEY(color) ARR_START VALUE(red) ARR_END OBJ_END END
+        # Indices:  0     1         2          3         4          5       6       7
+        paths = [
+            (),                                         # START
+            (),                                         # OBJ_START
+            (),                                         # KEY(color)
+            (KeyElement("color"),),                     # ARRAY_START
+            (KeyElement("color"), IndexElement(0)),     # VALUE(red)
+            (KeyElement("color"),),                     # ARRAY_END
+            (),                                         # OBJ_END
+            (),                                         # END
+        ]
+
+        indices = pda.resolve_mask_indices(
+            batch_paths=[paths], batch_size=1, seq_len=8, start_positions=[0]
+        )
+
+        # At position 4 (VALUE(red)), next token is ARRAY_END.
+        # Should use element path "color.*", NOT parent array path "color".
+        assert indices[0, 4].item() == pda._path_to_index["color.*"]
+
+        # Verify element mask allows value tokens (the whole point of the fix)
+        element_mask = pda.mask_table[pda._path_to_index["color.*"]]
+        array_mask = pda.mask_table[pda._path_to_index["color"]]
+        red_id = vocab.encode(ValueToken("red"))
+        assert element_mask[red_id].item(), "Element mask should allow enum values"
+        assert not array_mask[red_id].item(), "Array mask should NOT allow enum values"
+
+    def test_mid_array_position_unaffected(self, vocab):
+        """Mid-array value followed by another value should be unaffected."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "color": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["red", "blue"]},
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+
+        # Sequence: START OBJ_START KEY(color) ARR_START VALUE(red) VALUE(blue) ARR_END OBJ_END END
+        paths = [
+            (),                                         # START
+            (),                                         # OBJ_START
+            (),                                         # KEY(color)
+            (KeyElement("color"),),                     # ARRAY_START
+            (KeyElement("color"), IndexElement(0)),     # VALUE(red)
+            (KeyElement("color"), IndexElement(1)),     # VALUE(blue)
+            (KeyElement("color"),),                     # ARRAY_END
+            (),                                         # OBJ_END
+            (),                                         # END
+        ]
+
+        indices = pda.resolve_mask_indices(
+            batch_paths=[paths], batch_size=1, seq_len=9, start_positions=[0]
+        )
+
+        # Position 4 (VALUE(red)): next is VALUE(blue) — normal element path
+        assert indices[0, 4].item() == pda._path_to_index["color.*"]
+
+        # Position 5 (VALUE(blue)): next is ARRAY_END — fix should apply,
+        # also giving element path
+        assert indices[0, 5].item() == pda._path_to_index["color.*"]
+
+    def test_array_of_objects(self, vocab):
+        """OBJ_END before ARRAY_END should use element-level mask."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                    "minItems": 1,
+                    "maxItems": 5,
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab)
+
+        # Sequence: START OBJ_START KEY(items) ARR_START OBJ_START KEY(name) VALUE(Alice) OBJ_END ARR_END OBJ_END END
+        # The critical position is OBJ_END (pos 7) before ARR_END (pos 8)
+        paths = [
+            (),                                                             # START
+            (),                                                             # OBJ_START
+            (),                                                             # KEY(items)
+            (KeyElement("items"),),                                         # ARRAY_START
+            (KeyElement("items"), IndexElement(0)),                         # OBJ_START
+            (KeyElement("items"), IndexElement(0)),                         # KEY(name)
+            (KeyElement("items"), IndexElement(0), KeyElement("name")),     # VALUE(Alice)
+            (KeyElement("items"), IndexElement(0)),                         # OBJ_END
+            (KeyElement("items"),),                                         # ARRAY_END
+            (),                                                             # OBJ_END
+            (),                                                             # END
+        ]
+
+        indices = pda.resolve_mask_indices(
+            batch_paths=[paths], batch_size=1, seq_len=11, start_positions=[0]
+        )
+
+        # At position 7 (OBJ_END), next is ARRAY_END.
+        # Current path ends with IndexElement(0), next path is shorter.
+        # Should use element path "items.*" (type=object), NOT "items" (type=array).
+        assert indices[0, 7].item() == pda._path_to_index["items.*"]
+
+        # Verify: element mask allows OBJ_START (for nested objects),
+        # array mask does not.
+        element_mask = pda.mask_table[pda._path_to_index["items.*"]]
+        array_mask = pda.mask_table[pda._path_to_index["items"]]
+        assert element_mask[vocab.obj_start_id].item(), "Element mask should allow OBJ_START"
+        assert not array_mask[vocab.obj_start_id].item(), "Array mask should NOT allow OBJ_START"
+
+    def test_array_of_arrays(self):
+        """Inner ARRAY_END before outer ARRAY_END should use element-level mask."""
+        v = Vocabulary()
+        v.add_key("grid")
+        v.add_value(25)
+        v.add_value(30)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "grid": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                },
+            },
+        }
+        pda = SchemaPDA(schema, v)
+
+        # Sequence: START OBJ_START KEY(grid) ARR_START ARR_START VALUE(25) ARR_END ARR_END OBJ_END END
+        paths = [
+            (),                                                             # START
+            (),                                                             # OBJ_START
+            (),                                                             # KEY(grid)
+            (KeyElement("grid"),),                                          # outer ARRAY_START
+            (KeyElement("grid"), IndexElement(0)),                          # inner ARRAY_START
+            (KeyElement("grid"), IndexElement(0), IndexElement(0)),         # VALUE(25)
+            (KeyElement("grid"), IndexElement(0)),                          # inner ARRAY_END
+            (KeyElement("grid"),),                                          # outer ARRAY_END
+            (),                                                             # OBJ_END
+            (),                                                             # END
+        ]
+
+        indices = pda.resolve_mask_indices(
+            batch_paths=[paths], batch_size=1, seq_len=10, start_positions=[0]
+        )
+
+        # Position 5 (VALUE(25)): next is inner ARRAY_END.
+        # Current path ends with IndexElement(0), next is shorter.
+        # Should use "grid.*.*" (inner element), NOT "grid.*" (inner array).
+        assert indices[0, 5].item() == pda._path_to_index["grid.*.*"]
+
+        # Position 6 (inner ARRAY_END): next is outer ARRAY_END.
+        # Current path ends with IndexElement(0), next is shorter.
+        # Should use "grid.*" (outer element), NOT "grid" (outer array).
+        assert indices[0, 6].item() == pda._path_to_index["grid.*"]
+
+    def test_plain_obj_end_unaffected(self, vocab, simple_schema):
+        """OBJ_END at root level should NOT be affected by the fix."""
+        pda = SchemaPDA(simple_schema, vocab)
+
+        # Sequence: START OBJ_START KEY(name) VALUE(Alice) OBJ_END END
+        paths = [
+            (),                      # START
+            (),                      # OBJ_START
+            (),                      # KEY(name)
+            (KeyElement("name"),),   # VALUE(Alice)
+            (),                      # OBJ_END
+            (),                      # END
+        ]
+
+        indices = pda.resolve_mask_indices(
+            batch_paths=[paths], batch_size=1, seq_len=6, start_positions=[0]
+        )
+
+        # Position 3 (VALUE(Alice)): next is OBJ_END with path ().
+        # Current path ends with KeyElement("name"), NOT IndexElement.
+        # Fix should NOT apply — uses next token's path as before.
+        root_idx = pda._path_to_index.get("", 0)
+        assert indices[0, 3].item() == root_idx
+
+
 class TestSummary:
     def test_summary_output(self, vocab, simple_schema):
         pda = SchemaPDA(simple_schema, vocab)
