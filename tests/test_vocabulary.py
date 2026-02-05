@@ -69,15 +69,34 @@ class TestTokenTypes:
         assert len(token_set) == 2
 
     def test_value_token_type_preservation(self):
-        """ValueToken(42) should not equal ValueToken("42")."""
+        """ValueToken preserves Python type: different types are never equal."""
         int_token = ValueToken(42)
         str_token = ValueToken("42")
         float_token = ValueToken(42.0)
 
-        # String vs numeric types are different
         assert int_token != str_token
         assert str_token != float_token
-        # Note: int_token == float_token due to Python's 42 == 42.0
+        assert int_token != float_token  # int vs float distinguished
+
+    def test_value_token_bool_int_distinction(self):
+        """ValueToken(True) must not collide with ValueToken(1).
+
+        Python treats True == 1 and hash(True) == hash(1), but the
+        vocabulary needs them as separate tokens for correct schema
+        constraint enforcement and decoding.
+        """
+        assert ValueToken(True) != ValueToken(1)
+        assert ValueToken(False) != ValueToken(0)
+        assert hash(ValueToken(True)) != hash(ValueToken(1))
+        assert hash(ValueToken(False)) != hash(ValueToken(0))
+
+        # Same type, same value → still equal
+        assert ValueToken(True) == ValueToken(True)
+        assert ValueToken(1) == ValueToken(1)
+
+        # Distinct entries in a dict
+        d = {ValueToken(True): "bool", ValueToken(1): "int"}
+        assert len(d) == 2
 
     def test_grammar_token_constants(self):
         """Grammar token constants should have correct values."""

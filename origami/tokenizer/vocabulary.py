@@ -63,10 +63,22 @@ class ValueToken(Token):
 
     The value's Python type is preserved (int, float, str, bool, None),
     so ValueToken(42) != ValueToken("42").
+
+    Custom __eq__ and __hash__ are needed because Python treats
+    True == 1 and False == 0, which would make ValueToken(True) and
+    ValueToken(1) indistinguishable with default dataclass hashing.
     """
 
     value: Any
     token_type: TokenType = field(default=TokenType.VALUE, init=False)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ValueToken):
+            return NotImplemented
+        return type(self.value) is type(other.value) and self.value == other.value
+
+    def __hash__(self) -> int:
+        return hash((type(self.value), self.value))
 
     def __repr__(self) -> str:
         return f"ValueToken({self.value!r})"
