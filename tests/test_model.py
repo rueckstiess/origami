@@ -1130,9 +1130,7 @@ class TestMaskedLabelLoss:
 
     @pytest.fixture
     def config(self, tokenizer):
-        return ModelConfig(
-            d_model=32, n_heads=2, n_layers=1, max_depth=tokenizer.max_depth
-        )
+        return ModelConfig(d_model=32, n_heads=2, n_layers=1, max_depth=tokenizer.max_depth)
 
     def test_loss_finite_when_label_masked_by_grammar(self, config, tokenizer):
         """Loss should be finite even when some labels are masked to -inf.

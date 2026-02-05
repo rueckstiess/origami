@@ -1131,14 +1131,14 @@ class TestResolveMaskIndicesArrayEnd:
         # Sequence: START OBJ_START KEY(color) ARR_START VALUE(red) ARR_END OBJ_END END
         # Indices:  0     1         2          3         4          5       6       7
         paths = [
-            (),                                         # START
-            (),                                         # OBJ_START
-            (),                                         # KEY(color)
-            (KeyElement("color"),),                     # ARRAY_START
-            (KeyElement("color"), IndexElement(0)),     # VALUE(red)
-            (KeyElement("color"),),                     # ARRAY_END
-            (),                                         # OBJ_END
-            (),                                         # END
+            (),  # START
+            (),  # OBJ_START
+            (),  # KEY(color)
+            (KeyElement("color"),),  # ARRAY_START
+            (KeyElement("color"), IndexElement(0)),  # VALUE(red)
+            (KeyElement("color"),),  # ARRAY_END
+            (),  # OBJ_END
+            (),  # END
         ]
 
         indices = pda.resolve_mask_indices(
@@ -1171,15 +1171,15 @@ class TestResolveMaskIndicesArrayEnd:
 
         # Sequence: START OBJ_START KEY(color) ARR_START VALUE(red) VALUE(blue) ARR_END OBJ_END END
         paths = [
-            (),                                         # START
-            (),                                         # OBJ_START
-            (),                                         # KEY(color)
-            (KeyElement("color"),),                     # ARRAY_START
-            (KeyElement("color"), IndexElement(0)),     # VALUE(red)
-            (KeyElement("color"), IndexElement(1)),     # VALUE(blue)
-            (KeyElement("color"),),                     # ARRAY_END
-            (),                                         # OBJ_END
-            (),                                         # END
+            (),  # START
+            (),  # OBJ_START
+            (),  # KEY(color)
+            (KeyElement("color"),),  # ARRAY_START
+            (KeyElement("color"), IndexElement(0)),  # VALUE(red)
+            (KeyElement("color"), IndexElement(1)),  # VALUE(blue)
+            (KeyElement("color"),),  # ARRAY_END
+            (),  # OBJ_END
+            (),  # END
         ]
 
         indices = pda.resolve_mask_indices(
@@ -1214,17 +1214,17 @@ class TestResolveMaskIndicesArrayEnd:
         # Sequence: START OBJ_START KEY(items) ARR_START OBJ_START KEY(name) VALUE(Alice) OBJ_END ARR_END OBJ_END END
         # The critical position is OBJ_END (pos 7) before ARR_END (pos 8)
         paths = [
-            (),                                                             # START
-            (),                                                             # OBJ_START
-            (),                                                             # KEY(items)
-            (KeyElement("items"),),                                         # ARRAY_START
-            (KeyElement("items"), IndexElement(0)),                         # OBJ_START
-            (KeyElement("items"), IndexElement(0)),                         # KEY(name)
-            (KeyElement("items"), IndexElement(0), KeyElement("name")),     # VALUE(Alice)
-            (KeyElement("items"), IndexElement(0)),                         # OBJ_END
-            (KeyElement("items"),),                                         # ARRAY_END
-            (),                                                             # OBJ_END
-            (),                                                             # END
+            (),  # START
+            (),  # OBJ_START
+            (),  # KEY(items)
+            (KeyElement("items"),),  # ARRAY_START
+            (KeyElement("items"), IndexElement(0)),  # OBJ_START
+            (KeyElement("items"), IndexElement(0)),  # KEY(name)
+            (KeyElement("items"), IndexElement(0), KeyElement("name")),  # VALUE(Alice)
+            (KeyElement("items"), IndexElement(0)),  # OBJ_END
+            (KeyElement("items"),),  # ARRAY_END
+            (),  # OBJ_END
+            (),  # END
         ]
 
         indices = pda.resolve_mask_indices(
@@ -1267,16 +1267,16 @@ class TestResolveMaskIndicesArrayEnd:
 
         # Sequence: START OBJ_START KEY(grid) ARR_START ARR_START VALUE(25) ARR_END ARR_END OBJ_END END
         paths = [
-            (),                                                             # START
-            (),                                                             # OBJ_START
-            (),                                                             # KEY(grid)
-            (KeyElement("grid"),),                                          # outer ARRAY_START
-            (KeyElement("grid"), IndexElement(0)),                          # inner ARRAY_START
-            (KeyElement("grid"), IndexElement(0), IndexElement(0)),         # VALUE(25)
-            (KeyElement("grid"), IndexElement(0)),                          # inner ARRAY_END
-            (KeyElement("grid"),),                                          # outer ARRAY_END
-            (),                                                             # OBJ_END
-            (),                                                             # END
+            (),  # START
+            (),  # OBJ_START
+            (),  # KEY(grid)
+            (KeyElement("grid"),),  # outer ARRAY_START
+            (KeyElement("grid"), IndexElement(0)),  # inner ARRAY_START
+            (KeyElement("grid"), IndexElement(0), IndexElement(0)),  # VALUE(25)
+            (KeyElement("grid"), IndexElement(0)),  # inner ARRAY_END
+            (KeyElement("grid"),),  # outer ARRAY_END
+            (),  # OBJ_END
+            (),  # END
         ]
 
         indices = pda.resolve_mask_indices(
@@ -1299,12 +1299,12 @@ class TestResolveMaskIndicesArrayEnd:
 
         # Sequence: START OBJ_START KEY(name) VALUE(Alice) OBJ_END END
         paths = [
-            (),                      # START
-            (),                      # OBJ_START
-            (),                      # KEY(name)
-            (KeyElement("name"),),   # VALUE(Alice)
-            (),                      # OBJ_END
-            (),                      # END
+            (),  # START
+            (),  # OBJ_START
+            (),  # KEY(name)
+            (KeyElement("name"),),  # VALUE(Alice)
+            (),  # OBJ_END
+            (),  # END
         ]
 
         indices = pda.resolve_mask_indices(

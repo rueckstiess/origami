@@ -356,9 +356,7 @@ class OrigamiPipeline:
         # types/values (e.g., scaled floats, bin centers) while the output
         # schema retains original types for post-processing.
         if self._output_schema is not None:
-            self._schema = _transform_schema_for_pda(
-                self._output_schema, self._preprocessor
-            )
+            self._schema = _transform_schema_for_pda(self._output_schema, self._preprocessor)
             if verbose:
                 from origami.utils import format_schema
 
