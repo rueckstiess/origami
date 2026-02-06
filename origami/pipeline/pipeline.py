@@ -308,6 +308,9 @@ class OrigamiPipeline:
         else:
             self._output_schema = None
 
+        if verbose:
+            print(f"Infer schema: {bool(self.config.data.infer_schema)}")
+
         # Step 1: Setup and apply preprocessing
         train_processed, eval_processed = self._preprocess_data(data, eval_data)
 
@@ -357,10 +360,6 @@ class OrigamiPipeline:
         # schema retains original types for post-processing.
         if self._output_schema is not None:
             self._schema = _transform_schema_for_pda(self._output_schema, self._preprocessor)
-            if verbose:
-                from origami.utils import format_schema
-
-                print(f"Derived schema:\n{format_schema(self._output_schema)}")
         else:
             self._schema = None
 

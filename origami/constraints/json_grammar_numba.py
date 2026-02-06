@@ -17,8 +17,10 @@ try:
     from numba import njit, prange
 
     NUMBA_AVAILABLE = True
+    print("Numba is available - using Numba-accelerated grammar mask computation.")
 except ImportError:
     NUMBA_AVAILABLE = False
+    print("Numba is not available - using non-accelerated grammar mask computation.")
 
     # Stub decorators when numba not available
     def njit(*args, **kwargs):  # type: ignore[misc]
@@ -151,11 +153,16 @@ def _get_valid_mask(
     array_start_id: int,
     array_end_id: int,
     pad_id: int,
-    key_ids: np.ndarray,
-    value_ids: np.ndarray,
+    # Pre-computed boolean masks (vocab_size,) - much faster than loops
+    keys_and_obj_end_mask: np.ndarray,
+    values_and_containers_mask: np.ndarray,
+    array_elements_mask: np.ndarray,
     vocab_size: int,
 ) -> np.ndarray:
     """Get valid tokens mask based on current PDA state.
+
+    Uses pre-computed boolean masks for O(vocab_size) vectorized operations
+    instead of O(n_keys + n_values) loop iterations.
 
     Returns: (vocab_size,) boolean mask
     """
@@ -185,29 +192,17 @@ def _get_valid_mask(
     # Get current container type
     current_container = stack[depth - 1]
 
-    # Case 5: Inside object, awaiting value -> values + containers
+    # Case 5: Inside object, awaiting value -> values + containers (vectorized)
     if current_container == STACK_OBJECT and awaiting_value:
-        for vid in value_ids:
-            valid[vid] = True
-        valid[obj_start_id] = True
-        valid[array_start_id] = True
-        return valid
+        return values_and_containers_mask.copy()
 
-    # Case 6: Inside object, not awaiting value -> keys + OBJ_END
+    # Case 6: Inside object, not awaiting value -> keys + OBJ_END (vectorized)
     if current_container == STACK_OBJECT and not awaiting_value:
-        for kid in key_ids:
-            valid[kid] = True
-        valid[obj_end_id] = True
-        return valid
+        return keys_and_obj_end_mask.copy()
 
-    # Case 7: Inside array -> values + containers + ARRAY_END
+    # Case 7: Inside array -> values + containers + ARRAY_END (vectorized)
     if current_container == STACK_ARRAY:
-        for vid in value_ids:
-            valid[vid] = True
-        valid[obj_start_id] = True
-        valid[array_start_id] = True
-        valid[array_end_id] = True
-        return valid
+        return array_elements_mask.copy()
 
     return valid
 
@@ -227,6 +222,10 @@ def _compute_single_sequence_mask(
     pad_id: int,
     key_ids: np.ndarray,
     value_ids: np.ndarray,
+    # Pre-computed boolean masks
+    keys_and_obj_end_mask: np.ndarray,
+    values_and_containers_mask: np.ndarray,
+    array_elements_mask: np.ndarray,
 ) -> np.ndarray:
     """Compute grammar mask for a single sequence.
 
@@ -283,8 +282,9 @@ def _compute_single_sequence_mask(
             array_start_id,
             array_end_id,
             pad_id,
-            key_ids,
-            value_ids,
+            keys_and_obj_end_mask,
+            values_and_containers_mask,
+            array_elements_mask,
             vocab_size,
         )
 
@@ -306,6 +306,10 @@ def compute_grammar_mask_parallel(
     pad_id: int,
     key_ids: np.ndarray,
     value_ids: np.ndarray,
+    # Pre-computed boolean masks
+    keys_and_obj_end_mask: np.ndarray,
+    values_and_containers_mask: np.ndarray,
+    array_elements_mask: np.ndarray,
 ) -> np.ndarray:
     """Compute grammar masks for a batch in parallel.
 
@@ -320,6 +324,9 @@ def compute_grammar_mask_parallel(
         start_id, end_id, etc.: Special token IDs
         key_ids: Array of key token IDs
         value_ids: Array of value token IDs
+        keys_and_obj_end_mask: Pre-computed mask for keys + OBJ_END
+        values_and_containers_mask: Pre-computed mask for values + containers
+        array_elements_mask: Pre-computed mask for array elements
 
     Returns:
         (batch_size, seq_len, vocab_size) boolean mask
@@ -342,6 +349,9 @@ def compute_grammar_mask_parallel(
             pad_id,
             key_ids,
             value_ids,
+            keys_and_obj_end_mask,
+            values_and_containers_mask,
+            array_elements_mask,
         )
 
     return masks

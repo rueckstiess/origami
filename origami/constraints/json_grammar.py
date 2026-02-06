@@ -93,6 +93,19 @@ class JSONGrammarPDA:
             self._value_ids_np = np.array(
                 sorted(vocab.get_all_primitive_value_ids()), dtype=np.int64
             )
+            # Pre-compute boolean masks for vectorized operations in numba
+            # This avoids O(n_keys + n_values) loops per position
+            self._keys_and_obj_end_mask_np = np.zeros(vocab_size, dtype=np.bool_)
+            self._keys_and_obj_end_mask_np[self._key_ids_np] = True
+            self._keys_and_obj_end_mask_np[vocab.obj_end_id] = True
+
+            self._values_and_containers_mask_np = np.zeros(vocab_size, dtype=np.bool_)
+            self._values_and_containers_mask_np[self._value_ids_np] = True
+            self._values_and_containers_mask_np[vocab.obj_start_id] = True
+            self._values_and_containers_mask_np[vocab.array_start_id] = True
+
+            self._array_elements_mask_np = self._values_and_containers_mask_np.copy()
+            self._array_elements_mask_np[vocab.array_end_id] = True
 
     def compute_valid_mask(
         self,
@@ -133,6 +146,8 @@ class JSONGrammarPDA:
         """Numba-accelerated grammar mask computation.
 
         Converts to NumPy, runs parallel computation, converts back to tensor.
+        Uses pre-computed boolean masks for O(vocab_size) vectorized operations
+        instead of O(n_keys + n_values) loops per position.
         """
         device = token_ids.device
         token_ids_np = token_ids.numpy()
@@ -150,6 +165,9 @@ class JSONGrammarPDA:
             pad_id=self.vocab.pad_token_id,
             key_ids=self._key_ids_np,
             value_ids=self._value_ids_np,
+            keys_and_obj_end_mask=self._keys_and_obj_end_mask_np,
+            values_and_containers_mask=self._values_and_containers_mask_np,
+            array_elements_mask=self._array_elements_mask_np,
         )
 
         return torch.from_numpy(masks_np).to(device)
