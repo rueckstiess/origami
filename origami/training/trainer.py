@@ -251,6 +251,11 @@ class OrigamiTrainer:
         # By default (constrain_schema=False), schema constraints are only applied
         # during inference (evaluator/generator), not during training.
         schema_pda = None
+        if self.config.constrain_schema and schema is None:
+            raise ValueError(
+                "constrain_schema=True requires schema to be provided. "
+                "Set data.schema, data.infer_schema=True, or constrain_schema=False."
+            )
         if schema is not None and self.config.constrain_schema:
             from origami.constraints import SchemaPDA
 
@@ -355,9 +360,10 @@ class OrigamiTrainer:
         # Resolve allow_complex_values with auto-detection and warning
         allow_complex_values = self._resolve_allow_complex_values()
 
-        # Apply schema constraints during evaluation to match training loss.
-        # Uses lenient UNK settings (allow_unk_key=True, allow_unk_value=True)
-        # so eval data with unseen tokens maps to UNK and doesn't cause inf loss.
+        # Apply constraints during evaluation to match training settings.
+        # UNK handling is automatic per component:
+        # - Evaluator loss: lenient (allows UNK so unseen tokens don't cause inf loss)
+        # - Evaluator predictions (via Predictor): strict (blocks UNK to prevent schema escape)
         self.evaluator = OrigamiEvaluator(
             model=model,
             tokenizer=tokenizer,
@@ -365,9 +371,8 @@ class OrigamiTrainer:
             inverse_transform=inverse_transform_fn,
             allow_complex_values=allow_complex_values,
             schema=self._schema,
+            constrain_grammar=self.config.constrain_grammar,
             constrain_schema=self.config.constrain_schema,
-            allow_unk_key=True,
-            allow_unk_value=True,
         )
 
         # Track last evaluation step to avoid duplicate evals

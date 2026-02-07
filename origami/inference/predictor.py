@@ -63,6 +63,8 @@ class OrigamiPredictor:
         tokenizer: "JSONTokenizer",
         inverse_transform_fn: Callable[[Any, str], Any] | None = None,
         schema: dict | None = None,
+        constrain_grammar: bool = True,
+        constrain_schema: bool = False,
     ):
         """Initialize predictor.
 
@@ -75,6 +77,10 @@ class OrigamiPredictor:
                 to original scale.
             schema: Optional JSON Schema dict for semantic constraints.
                 Passed through to the internal OrigamiGenerator.
+            constrain_grammar: If True (default), apply grammar constraints.
+                See OrigamiGenerator for details.
+            constrain_schema: If True, apply schema constraints. Requires schema.
+                See OrigamiGenerator for details.
 
         Note:
             The Predictor uses the model's current device dynamically.
@@ -89,7 +95,13 @@ class OrigamiPredictor:
         self._inverse_transform = inverse_transform_fn
 
         # Create generator for value generation (handles grammar + continuous values)
-        self._generator = OrigamiGenerator(model, tokenizer, schema=schema)
+        self._generator = OrigamiGenerator(
+            model,
+            tokenizer,
+            schema=schema,
+            constrain_grammar=constrain_grammar,
+            constrain_schema=constrain_schema,
+        )
 
         # Create collator for batch creation (include_labels=False for inference)
         self._collator = OrigamiDataCollator(tokenizer, include_labels=False)

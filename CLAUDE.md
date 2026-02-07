@@ -363,17 +363,26 @@ origami predict -m model.pt -d input.jsonl -t label -v
 
 ## Common Pitfalls and Mistakes
 
-### 1. Grammar Constraints: Training vs Inference
-Grammar masking is ONLY applied during training (when `labels` is provided):
+### 1. Grammar and Schema Constraints: Training vs Inference
+Grammar and schema constraints are controlled independently for training and inference
+via `TrainingConfig` and `InferenceConfig`. Grammar/schema masking during training is
+applied via the collator when `labels` is provided. During inference, the Generator
+handles constraints incrementally.
 
 ```python
-# WRONG: Expecting grammar mask during inference
-output = model(input_ids, ...)  # No grammar mask!
+# Constraints are explicit bool flags, not auto-detected
+generator = OrigamiGenerator(model, tokenizer, constrain_grammar=True)
+results = generator.generate(...)  # Grammar constraints applied incrementally
 
-# RIGHT: Use Generator for inference with grammar
-generator = OrigamiGenerator(model, tokenizer)
-results = generator.generate(...)  # Handles grammar incrementally
+# Train without constraints, apply only at inference
+config = OrigamiConfig(
+    training=TrainingConfig(constrain_grammar=False),
+    inference=InferenceConfig(constrain_grammar=True),
+)
 ```
+
+Note: `constrain_schema=True` requires a schema (via `data.schema` or `data.infer_schema=True`).
+A `ValueError` is raised if no schema is available.
 
 ### 2. Left-Padding Alignment
 When working with left-padded batches, path encoding must align with tokens:
@@ -473,10 +482,11 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 | Class | Responsibility |
 |-------|---------------|
 | `OrigamiPipeline` | End-to-end API: preprocessing, training, inference, save/load |
-| `OrigamiConfig` | Root configuration composing model, training, and data configs |
+| `OrigamiConfig` | Root configuration composing model, training, data, and inference configs |
 | `ModelConfig` | Model architecture parameters (d_model, n_layers, etc.) |
 | `TrainingConfig` | Training hyperparameters (batch_size, learning_rate, etc.) |
 | `DataConfig` | Data preprocessing parameters (numeric_mode, cat_threshold, etc.) |
+| `InferenceConfig` | Inference-time constraint settings (constrain_grammar, constrain_schema) |
 | `JSONTokenizer` | Tokenize JSON objects, manage vocabulary |
 | `OrigamiModel` | Main model with embeddings, backbone, heads |
 | `KeyValuePositionEncoding` | Encode paths through JSON structure |
@@ -497,7 +507,7 @@ probs = predictor.predict_proba(obj, target_key, top_k=5)  # Returns list[(Any, 
 
 ## Configuration
 
-Configuration uses nested dataclasses. The root `OrigamiConfig` composes `ModelConfig`, `TrainingConfig`, and `DataConfig`:
+Configuration uses nested dataclasses. The root `OrigamiConfig` composes `ModelConfig`, `TrainingConfig`, `DataConfig`, and `InferenceConfig`:
 
 ### ModelConfig (Model Architecture)
 ```python
@@ -540,12 +550,36 @@ DataConfig(
 )
 ```
 
+### InferenceConfig (Inference Constraints)
+```python
+InferenceConfig(
+    constrain_grammar=True,     # Apply grammar constraints during inference
+    constrain_schema=False,     # Apply schema constraints during inference
+)
+```
+
+UNK token handling is automatic per component — no configuration needed:
+- **Generation/Prediction**: Strict (UNK blocked to prevent schema escape)
+- **Loss computation**: Lenient (UNK allowed so unseen eval tokens don't cause inf loss)
+
+Training and inference constraints are independent. You can train without constraints
+and apply them only at inference time:
+
+```python
+config = OrigamiConfig(
+    training=TrainingConfig(constrain_grammar=False, constrain_schema=False),
+    inference=InferenceConfig(constrain_grammar=True, constrain_schema=True),
+    data=DataConfig(infer_schema=True),
+)
+```
+
 ### OrigamiConfig (Root - Nested Composition)
 ```python
 OrigamiConfig(
     model=ModelConfig(d_model=256, n_layers=6),
     training=TrainingConfig(batch_size=64, num_epochs=20),
     data=DataConfig(numeric_mode="scale"),
+    inference=InferenceConfig(constrain_grammar=True),
     device="auto",  # "auto", "cpu", "cuda", "mps"
 )
 ```

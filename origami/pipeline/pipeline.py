@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 import torch
 
-from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
+from origami.config import DataConfig, InferenceConfig, ModelConfig, OrigamiConfig, TrainingConfig
 from origami.inference import OrigamiEmbedder, OrigamiEvaluator, OrigamiGenerator, OrigamiPredictor
 from origami.model import OrigamiModel
 from origami.preprocessing import NumericDiscretizer, NumericScaler, SchemaPostProcessor
@@ -602,10 +602,12 @@ class OrigamiPipeline:
         """
         # Reconstruct config (nested dataclasses)
         config_dict = state_dict["config"]
+        inference_dict = config_dict.get("inference", {})
         config = OrigamiConfig(
             model=ModelConfig(**config_dict["model"]),
             training=TrainingConfig(**config_dict["training"]),
             data=DataConfig(**config_dict["data"]),
+            inference=InferenceConfig(**inference_dict) if inference_dict else InferenceConfig(),
             device=config_dict["device"],
         )
         pipeline = cls(config)
@@ -922,7 +924,8 @@ class OrigamiPipeline:
         # Resolve allow_complex_values with auto-detection
         effective_allow_complex = self._resolve_allow_complex_values(allow_complex_values, metrics)
 
-        # Create evaluator and run evaluation
+        # Create evaluator with inference constraint settings
+        inference_cfg = self.config.inference
         evaluator = OrigamiEvaluator(
             self._model,
             self._tokenizer,
@@ -930,7 +933,8 @@ class OrigamiPipeline:
             inverse_transform=self._create_value_transform_fn(),
             allow_complex_values=effective_allow_complex,
             schema=self._schema,
-            constrain_schema=self.config.training.constrain_schema,
+            constrain_grammar=inference_cfg.constrain_grammar,
+            constrain_schema=inference_cfg.constrain_schema,
         )
 
         return evaluator.evaluate(
@@ -1078,27 +1082,37 @@ class OrigamiPipeline:
             return value
 
     def _get_generator(self) -> OrigamiGenerator:
-        """Get or create the generator.
+        """Get or create the generator with inference constraint settings.
 
         Moves model to CPU for faster inference if not already there.
         """
         self._ensure_inference_device()
         if self._generator is None:
-            self._generator = OrigamiGenerator(self._model, self._tokenizer, schema=self._schema)
+            inference_cfg = self.config.inference
+            self._generator = OrigamiGenerator(
+                self._model,
+                self._tokenizer,
+                schema=self._schema,
+                constrain_grammar=inference_cfg.constrain_grammar,
+                constrain_schema=inference_cfg.constrain_schema,
+            )
         return self._generator
 
     def _get_predictor(self) -> OrigamiPredictor:
-        """Get or create the predictor with inverse transform configured.
+        """Get or create the predictor with inference constraint settings.
 
         Moves model to CPU for faster inference if not already there.
         """
         self._ensure_inference_device()
         if self._predictor is None:
+            inference_cfg = self.config.inference
             self._predictor = OrigamiPredictor(
                 self._model,
                 self._tokenizer,
                 inverse_transform_fn=self._create_value_transform_fn(),
                 schema=self._schema,
+                constrain_grammar=inference_cfg.constrain_grammar,
+                constrain_schema=inference_cfg.constrain_schema,
             )
         return self._predictor
 

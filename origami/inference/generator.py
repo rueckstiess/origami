@@ -162,6 +162,8 @@ class OrigamiGenerator:
         tokenizer: "JSONTokenizer",
         prevent_duplicate_keys: bool = True,
         schema: dict | None = None,
+        constrain_grammar: bool = True,
+        constrain_schema: bool = False,
     ):
         """Initialize generator.
 
@@ -171,8 +173,12 @@ class OrigamiGenerator:
             prevent_duplicate_keys: If True (default), prevent generating duplicate
                 keys within the same JSON object during generation.
             schema: Optional JSON Schema dict for semantic constraints.
-                When provided, schema-based masks are intersected with grammar
-                masks during generation to restrict outputs by type/enum/keys.
+            constrain_grammar: If True (default), apply grammar constraints during
+                generation. Uses model's grammar PDA if available, otherwise creates
+                a new one from the vocabulary.
+            constrain_schema: If True, apply schema constraints during generation.
+                Requires schema to be provided. Raises ValueError if True without
+                a schema.
 
         Note:
             The Generator uses the model's current device dynamically.
@@ -189,14 +195,27 @@ class OrigamiGenerator:
         # Collator for batch creation (include_labels=False for inference)
         self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
 
-        # Get grammar PDA reference from model for incremental constraint application
-        self._grammar_pda = model._grammar_pda
+        # Grammar PDA for incremental constraint application
+        if constrain_grammar:
+            self._grammar_pda = getattr(model, "_grammar_pda", None)
+            if self._grammar_pda is None:
+                from origami.constraints.json_grammar import JSONGrammarPDA
 
-        # Schema constraints for semantic restriction.
+                self._grammar_pda = JSONGrammarPDA(
+                    tokenizer.vocab, max_depth=model.config.max_depth
+                )
+        else:
+            self._grammar_pda = None
+
+        # Schema PDA for semantic constraints.
         # Uses strict UNK settings: UNK_KEY and UNK_VALUE are blocked so the
         # model cannot escape schema constraints by generating unknown tokens.
-        self._schema_pda = None
-        if schema is not None:
+        if constrain_schema:
+            if schema is None:
+                raise ValueError(
+                    "constrain_schema=True requires schema to be provided. "
+                    "Set data.schema, data.infer_schema=True, or constrain_schema=False."
+                )
             from origami.constraints import SchemaPDA
 
             self._schema_pda = SchemaPDA(
@@ -206,6 +225,8 @@ class OrigamiGenerator:
                 allow_unk_key=False,
                 allow_unk_value=False,
             )
+        else:
+            self._schema_pda = None
 
         # Check if backbone supports KV caching
         self._supports_kv_cache = self._check_kv_cache_support()

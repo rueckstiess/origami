@@ -313,6 +313,30 @@ class DataConfig(PrettyReprMixin):
 
 
 @dataclass(repr=False)
+class InferenceConfig(PrettyReprMixin):
+    """Inference-time constraint configuration.
+
+    Controls whether grammar and schema constraints are applied during
+    generation, prediction, and evaluation. Independent from training config.
+
+    UNK token handling is automatic per component:
+    - Generation/prediction: strict (UNK blocked to prevent schema escape)
+    - Loss computation: lenient (UNK allowed so unseen tokens don't cause inf loss)
+
+    Attributes:
+        constrain_grammar: Apply grammar constraints during inference.
+            If True, uses model's grammar PDA if available, otherwise creates one.
+            If False, no grammar constraints are applied.
+        constrain_schema: Apply schema constraints during inference.
+            Requires a schema to be provided (via DataConfig.schema or
+            DataConfig.infer_schema). Raises ValueError if True without schema.
+    """
+
+    constrain_grammar: bool = True
+    constrain_schema: bool = False
+
+
+@dataclass(repr=False)
 class OrigamiConfig(PrettyReprMixin):
     """Root configuration composing all sub-configs.
 
@@ -324,6 +348,7 @@ class OrigamiConfig(PrettyReprMixin):
         model: Model architecture configuration.
         training: Training hyperparameters.
         data: Data preprocessing configuration.
+        inference: Inference-time constraint configuration.
         device: Device for training/inference ("auto", "cpu", "cuda", "mps").
 
     Example:
@@ -331,15 +356,11 @@ class OrigamiConfig(PrettyReprMixin):
         # All defaults
         config = OrigamiConfig()
 
-        # Customize model architecture
-        config = OrigamiConfig(model=ModelConfig(d_model=256, n_layers=8))
-
-        # Full customization
+        # Train without constraints, apply at inference
         config = OrigamiConfig(
-            model=ModelConfig(d_model=256),
-            training=TrainingConfig(batch_size=64),
-            data=DataConfig(numeric_mode="scale"),
-            device="cuda",
+            training=TrainingConfig(constrain_grammar=False),
+            inference=InferenceConfig(constrain_grammar=True),
+            data=DataConfig(infer_schema=True),
         )
         ```
     """
@@ -347,6 +368,7 @@ class OrigamiConfig(PrettyReprMixin):
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
     device: str = "auto"
 
     def __post_init__(self) -> None:

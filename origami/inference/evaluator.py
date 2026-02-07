@@ -63,9 +63,8 @@ class OrigamiEvaluator:
         inverse_transform: Callable[[str, Any], Any] | None = None,
         allow_complex_values: bool = False,
         schema: dict | None = None,
+        constrain_grammar: bool = True,
         constrain_schema: bool = False,
-        allow_unk_key: bool = True,
-        allow_unk_value: bool = True,
     ):
         """Initialize evaluator.
 
@@ -78,16 +77,14 @@ class OrigamiEvaluator:
                 back to original scale. Signature: (leaf_key, value) -> value.
                 Used for continuous numeric fields that were scaled during preprocessing.
             allow_complex_values: Whether to allow complex values (objects/arrays)
-                during predictions. Default False for backward compatibility.
+                during predictions. Default False.
             schema: Optional JSON Schema dict for semantic constraints.
-                Passed through to the internal predictor/generator for predictions.
-            constrain_schema: If True and schema is provided, also apply schema
-                constraints during loss computation (to match training loss when
-                the trainer uses constrain_schema=True).
-            allow_unk_key: Whether UNK_KEY is allowed in schema masks. Default
-                True for evaluation so unseen keys in eval data don't cause inf loss.
-            allow_unk_value: Whether UNK_VALUE is allowed in schema masks. Default
-                True for evaluation so unseen values in eval data don't cause inf loss.
+            constrain_grammar: If True (default), apply grammar constraints during
+                loss computation and predictions. Uses model's grammar PDA if
+                available, otherwise creates one.
+            constrain_schema: If True, apply schema constraints during loss
+                computation and predictions. Requires schema. Raises ValueError
+                if True without a schema.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -95,22 +92,42 @@ class OrigamiEvaluator:
         self.inverse_transform = inverse_transform
         self.allow_complex_values = allow_complex_values
         self._schema = schema
+        self._constrain_grammar = constrain_grammar
+        self._constrain_schema = constrain_schema
         self._predictor: OrigamiPredictor | None = None
 
-        # Create SchemaPDA for loss computation only if constrain_schema is True.
-        # Uses lenient UNK settings by default so eval data with unseen tokens
-        # doesn't produce inf loss.
-        self._schema_pda = None
-        if constrain_schema and schema is not None:
+        # Grammar PDA for loss computation
+        if constrain_grammar:
+            self._grammar_pda = getattr(model, "_grammar_pda", None)
+            if self._grammar_pda is None:
+                from origami.constraints.json_grammar import JSONGrammarPDA
+
+                self._grammar_pda = JSONGrammarPDA(
+                    tokenizer.vocab, max_depth=model.config.max_depth
+                )
+        else:
+            self._grammar_pda = None
+
+        # Schema PDA for loss computation.
+        # Uses lenient UNK settings so eval data with unseen tokens doesn't
+        # produce inf loss. (Generator/Predictor use strict settings instead.)
+        if constrain_schema:
+            if schema is None:
+                raise ValueError(
+                    "constrain_schema=True requires schema to be provided. "
+                    "Set data.schema, data.infer_schema=True, or constrain_schema=False."
+                )
             from origami.constraints import SchemaPDA
 
             self._schema_pda = SchemaPDA(
                 schema,
                 tokenizer.vocab,
                 max_depth=model.config.max_depth,
-                allow_unk_key=allow_unk_key,
-                allow_unk_value=allow_unk_value,
+                allow_unk_key=True,
+                allow_unk_value=True,
             )
+        else:
+            self._schema_pda = None
 
     @property
     def device(self) -> torch.device:
@@ -192,17 +209,14 @@ class OrigamiEvaluator:
 
     @torch.no_grad()
     def _compute_loss(self, data: list[dict], batch_size: int, verbose: bool = False) -> float:
-        """Compute average loss over data with grammar and optional schema constraints.
+        """Compute average loss over data with optional grammar and schema constraints.
 
         Uses the same collator-based approach as the trainer to ensure consistent
-        loss computation. Grammar mask is always applied. Schema mask is applied
-        only when constrain_schema=True (matching training behavior).
+        loss computation. Grammar and schema masks are applied based on the
+        constrain_grammar and constrain_schema settings.
         """
         was_training = self.model.training
         self.model.eval()
-
-        # Get grammar PDA from model (same as trainer does)
-        grammar_pda = getattr(self.model, "_grammar_pda", None)
 
         # Create dataset and dataloader with PDA-enabled collator
         dataset = OrigamiDataset(data, self.tokenizer, shuffle=False)
@@ -210,7 +224,7 @@ class OrigamiEvaluator:
             self.tokenizer,
             max_length=self.model.config.max_seq_length,
             device=self.device,
-            grammar_pda=grammar_pda,
+            grammar_pda=self._grammar_pda,
             schema_pda=self._schema_pda,
         )
         loader = DataLoader(
@@ -266,13 +280,16 @@ class OrigamiEvaluator:
         if self.target_key is None:
             raise ValueError("target_key required for predictions")
 
-        # Lazy init predictor
+        # Lazy init predictor with same constraint settings
+        # Predictor uses strict UNK defaults (blocks UNK to prevent schema escape)
         if self._predictor is None:
             self._predictor = OrigamiPredictor(
                 self.model,
                 self.tokenizer,
                 inverse_transform_fn=self.inverse_transform,
                 schema=self._schema,
+                constrain_grammar=self._constrain_grammar,
+                constrain_schema=self._constrain_schema,
             )
 
         # Extract true values and prepare them (unwrap ScaledNumeric, inverse transform)
@@ -321,6 +338,7 @@ def evaluate(
     inverse_transform: Callable[[str, Any], Any] | None = None,
     allow_complex_values: bool = False,
     schema: dict | None = None,
+    constrain_grammar: bool = True,
     constrain_schema: bool = False,
 ) -> dict[str, float]:
     """Convenience function for one-shot evaluation.
@@ -339,8 +357,8 @@ def evaluate(
         allow_complex_values: Whether to allow complex values (objects/arrays)
             during predictions. Default False.
         schema: Optional JSON Schema dict for semantic constraints.
-        constrain_schema: If True and schema is provided, apply schema
-            constraints during loss computation (to match training loss).
+        constrain_grammar: If True (default), apply grammar constraints.
+        constrain_schema: If True, apply schema constraints. Requires schema.
 
     Returns:
         Dict mapping metric names to their values. Always includes "loss".
@@ -365,11 +383,12 @@ def evaluate(
     evaluator = OrigamiEvaluator(
         model,
         tokenizer,
-        target_key,
-        inverse_transform,
-        allow_complex_values,
-        schema,
-        constrain_schema,
+        target_key=target_key,
+        inverse_transform=inverse_transform,
+        allow_complex_values=allow_complex_values,
+        schema=schema,
+        constrain_grammar=constrain_grammar,
+        constrain_schema=constrain_schema,
     )
     return evaluator.evaluate(
         data,
