@@ -310,7 +310,7 @@ class OrigamiTrainer:
             batch_size=self.config.batch_size,
             shuffle=True,  # Shuffle sample order each epoch (creates new order per iteration)
             collate_fn=self.collator,
-            drop_last=True,  # Drop incomplete batches for consistent batch size
+            drop_last=False,  # Keep all data, especially important for small datasets
             num_workers=num_workers,
             # Use persistent workers if using multiple workers (avoids spawn overhead)
             persistent_workers=num_workers > 0,
