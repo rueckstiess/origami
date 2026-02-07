@@ -48,16 +48,19 @@ from .dataset import OrigamiDataset
 def _worker_init_fn(worker_id: int) -> None:
     """Initialize DataLoader worker with single-threaded Numba.
 
-    When using multiple DataLoader workers, each worker would otherwise spawn
-    its own Numba thread pool. With N workers each using M Numba threads,
-    you get N×M threads competing for CPU cores, causing contention.
+    Uses single-threaded mode to prevent thread contention. When using multiple
+    DataLoader workers, parallelism comes from multiple worker processes, not
+    from threading within each worker.
 
-    By setting NUMBA_NUM_THREADS=1 in each worker, we let the DataLoader
-    workers provide parallelism instead of Numba's internal threading.
+    Note: We use numba.set_num_threads() at runtime to explicitly set the
+    thread count, ensuring it matches the module-level NUMBA_NUM_THREADS setting.
     """
-    import os
+    try:
+        import numba
 
-    os.environ["NUMBA_NUM_THREADS"] = "1"
+        numba.set_num_threads(1)
+    except ImportError:
+        pass
 
 
 if TYPE_CHECKING:
@@ -231,6 +234,14 @@ class OrigamiTrainer:
         # This pre-computes grammar masks during data loading instead of in training loop.
         grammar_pda = None
         if self.config.constrain_grammar:
+            # When using DataLoader workers, set OMP_NUM_THREADS=1 BEFORE importing
+            # numba to prevent OpenMP from using multiple threads. This makes
+            # forking safe (fork + multi-threaded OpenMP causes crashes).
+            if use_workers:
+                import os
+
+                os.environ.setdefault("OMP_NUM_THREADS", "1")
+
             from origami.constraints.json_grammar import JSONGrammarPDA
 
             grammar_pda = JSONGrammarPDA(tokenizer.vocab, max_depth=model.config.max_depth)
@@ -252,6 +263,10 @@ class OrigamiTrainer:
             device=collator_device,
             grammar_pda=grammar_pda,
             schema_pda=schema_pda,
+            # Always use numba for grammar mask computation.
+            # Single-threaded mode is configured at module import (NUMBA_NUM_THREADS=1)
+            # to prevent thread contention and make forking safe.
+            use_numba=True,
         )
 
         # Store schema for inference use (evaluator predictions)
@@ -286,10 +301,31 @@ class OrigamiTrainer:
         if torch.cuda.is_available():
             self.model = torch.compile(self.model)
 
+        # Create DataLoader once and reuse across epochs to avoid memory leaks.
+        # With persistent_workers=True, recreating the DataLoader each epoch
+        # can cause worker processes to accumulate on Linux with fork.
+        num_workers = self.config.dataloader_num_workers
+        self._train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=True,  # Shuffle sample order each epoch (creates new order per iteration)
+            collate_fn=self.collator,
+            drop_last=True,  # Drop incomplete batches for consistent batch size
+            num_workers=num_workers,
+            # Use persistent workers if using multiple workers (avoids spawn overhead)
+            persistent_workers=num_workers > 0,
+            # Pin memory for faster CPU-GPU transfers on CUDA
+            pin_memory=torch.cuda.is_available(),
+            # Set single-threaded Numba in workers to avoid thread contention.
+            worker_init_fn=_worker_init_fn if num_workers > 0 else None,
+        )
+
         # Wrap with accelerate if enabled
         if self._use_accelerate:
-            self.model, self.optimizer, self.scheduler = self._accelerator.prepare(
-                self.model, self.optimizer, self.scheduler
+            self.model, self.optimizer, self.scheduler, self._train_loader = (
+                self._accelerator.prepare(
+                    self.model, self.optimizer, self.scheduler, self._train_loader
+                )
             )
 
         # Training state
@@ -678,25 +714,8 @@ class OrigamiTrainer:
         """
         self.model.train()
 
-        num_workers = self.config.dataloader_num_workers
-        train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=True,  # Shuffle sample order each epoch
-            collate_fn=self.collator,
-            drop_last=True,  # Drop incomplete batches for consistent batch size
-            num_workers=num_workers,
-            # Use persistent workers if using multiple workers (avoids spawn overhead)
-            persistent_workers=num_workers > 0,
-            # Pin memory for faster CPU-GPU transfers on CUDA
-            pin_memory=torch.cuda.is_available(),
-            # Set single-threaded Numba in workers to avoid thread contention
-            worker_init_fn=_worker_init_fn if num_workers > 0 else None,
-        )
-
-        # Wrap dataloader with accelerate for distributed training
-        if self._use_accelerate:
-            train_loader = self._accelerator.prepare(train_loader)
+        # Use the DataLoader created in __init__ (reused across epochs to avoid memory leaks)
+        train_loader = self._train_loader
 
         total_loss = 0.0
         total_tokens = 0

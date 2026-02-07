@@ -46,6 +46,7 @@ class OrigamiDataCollator:
         device: torch.device | None = None,
         grammar_pda: "JSONGrammarPDA | None" = None,
         schema_pda: "SchemaPDA | None" = None,
+        use_numba: bool = True,
     ):
         """Initialize collator.
 
@@ -61,6 +62,8 @@ class OrigamiDataCollator:
             schema_pda: Optional SchemaPDA for pre-computing schema masks.
                 When provided, schema masks are computed via mask table gather
                 and intersected with grammar masks.
+            use_numba: If True, use numba for grammar mask computation.
+                Set to False when using DataLoader workers (fork + OpenMP conflict).
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -68,6 +71,7 @@ class OrigamiDataCollator:
         self.device = device
         self.grammar_pda = grammar_pda
         self.schema_pda = schema_pda
+        self.use_numba = use_numba
 
     def __call__(
         self,
@@ -161,7 +165,8 @@ class OrigamiDataCollator:
         if self.grammar_pda is not None:
             # Grammar computation runs on CPU - this is the expensive operation
             # that we're parallelizing across DataLoader workers.
-            grammar_mask = self.grammar_pda.compute_valid_mask(input_ids)
+            # When using workers, disable numba to avoid fork + OpenMP conflicts.
+            grammar_mask = self.grammar_pda.compute_valid_mask(input_ids, use_numba=self.use_numba)
 
         # Compute schema mask if SchemaPDA is provided
         schema_mask = None

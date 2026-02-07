@@ -1,15 +1,26 @@
 """Numba-accelerated grammar mask computation.
 
 Provides grammar mask computation using Numba JIT compilation.
-When used with DataLoader workers (num_workers > 0), each worker
-processes batches sequentially - the parallelism comes from multiple
-workers, not from threading within each worker.
 
-To avoid thread contention in DataLoader workers, the trainer's
-worker_init_fn sets NUMBA_NUM_THREADS=1 per-worker (see trainer.py).
+Numba is configured to use single-threaded mode (NUMBA_NUM_THREADS=1) to:
+1. Prevent thread contention when running in the main process (num_workers=0)
+2. Make forking safe when using DataLoader workers (num_workers>0)
+
+When using workers, parallelism comes from multiple worker processes,
+not from threading within each worker.
 """
 
 from __future__ import annotations
+
+import os
+
+# Configure threading BEFORE importing numba.
+# Use single-threaded mode to prevent thread contention and ensure fork() safety.
+# When using DataLoader workers (num_workers>0), parallelism comes from multiple
+# worker processes, not from threading within each worker.
+# Must be done before numba import.
+os.environ.setdefault("NUMBA_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 
@@ -17,10 +28,8 @@ try:
     from numba import njit, prange
 
     NUMBA_AVAILABLE = True
-    print("Numba is available - using Numba-accelerated grammar mask computation.")
 except ImportError:
     NUMBA_AVAILABLE = False
-    print("Numba is not available - using non-accelerated grammar mask computation.")
 
     # Stub decorators when numba not available
     def njit(*args, **kwargs):  # type: ignore[misc]
@@ -31,6 +40,7 @@ except ImportError:
 
     prange = range  # type: ignore[misc]
 
+print(f"Numba available: {NUMBA_AVAILABLE}")
 
 # Stack content types (must match json_grammar.py)
 STACK_EMPTY = 0
