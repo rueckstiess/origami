@@ -337,10 +337,6 @@ class OrigamiTrainer:
         self.state = TrainResult()
         self._resume_steps_in_epoch = 0  # Steps to skip when resuming mid-epoch
 
-        # Restore training state if provided (for checkpoint resumption)
-        if training_state is not None:
-            self._restore_training_state(training_state)
-
         # Callback handler
         self.callback_handler = CallbackHandler(callbacks or [])
 
@@ -353,6 +349,12 @@ class OrigamiTrainer:
         else:
             self.state.best_metric_value = float("inf")
         self.state.best_metric_name = self.config.best_metric
+
+        # Restore training state if provided (for checkpoint resumption).
+        # This must happen AFTER best_metric initialization so restored
+        # values take precedence over defaults.
+        if training_state is not None:
+            self._restore_training_state(training_state)
 
         # Create evaluator for unified evaluation (lazy import to avoid circular)
         from origami.inference import OrigamiEvaluator

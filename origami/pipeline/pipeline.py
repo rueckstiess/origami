@@ -163,6 +163,10 @@ class OrigamiPipeline:
         # After inference, model stays on CPU (faster for autoregressive generation)
         self._training_device: torch.device | None = None
 
+        # Reference to active trainer (set during train(), used by state_dict()
+        # to provide live training state for callback-based saves)
+        self._active_trainer: Any = None
+
         # Lazy-initialized inference components
         self._generator: OrigamiGenerator | None = None
         self._predictor: OrigamiPredictor | None = None
@@ -452,9 +456,18 @@ class OrigamiPipeline:
         # This allows callbacks to save the pipeline during training
         self._fitted = True
 
+        # Store trainer reference so state_dict() can pull live training
+        # state when callbacks save the pipeline mid-training
+        self._active_trainer = trainer
+
         # Run training (handles KeyboardInterrupt gracefully)
-        result = trainer.train()
-        self._train_result = result
+        try:
+            result = trainer.train()
+            self._train_result = result
+        finally:
+            # Always clear trainer reference and capture final state,
+            # even if training raises an unexpected exception
+            self._active_trainer = None
 
         # Capture training state for potential checkpoint save
         self._training_state = trainer.get_training_state()
@@ -579,9 +592,14 @@ class OrigamiPipeline:
             "output_schema": self._output_schema,
         }
 
-        # Include training state if available and requested
-        if include_training_state and self._training_state is not None:
-            state["training_state"] = self._training_state
+        # Include training state if requested.
+        # During training, pull live state from the active trainer (for callback saves).
+        # After training, use the captured snapshot.
+        if include_training_state:
+            if self._active_trainer is not None:
+                state["training_state"] = self._active_trainer.get_training_state()
+            elif self._training_state is not None:
+                state["training_state"] = self._training_state
 
         return state
 
