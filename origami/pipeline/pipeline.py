@@ -28,6 +28,23 @@ if TYPE_CHECKING:
     from origami.training import TrainResult
 
 
+def _get_schema_types(schema_type: str | list[str] | None) -> set[str]:
+    """Extract type(s) from a schema ``type`` field as a set."""
+    if schema_type is None:
+        return set()
+    if isinstance(schema_type, list):
+        return set(schema_type)
+    return {schema_type}
+
+
+def _schema_type_value(types: set[str]) -> str | list[str]:
+    """Convert a set of types back to a schema type value (str or sorted list)."""
+    sorted_types = sorted(types)
+    if len(sorted_types) == 1:
+        return sorted_types[0]
+    return sorted_types
+
+
 def _transform_schema_for_pda(
     schema: dict,
     preprocessor: NumericScaler | NumericDiscretizer | None,
@@ -37,6 +54,10 @@ def _transform_schema_for_pda(
 
     Adjusts type, enum, and bounds for fields that have been scaled or
     discretized by the preprocessor. Passthrough fields are unchanged.
+
+    Non-numeric types (null, string, boolean) and their enum values are
+    preserved so that mixed-type fields (e.g., null + number, string + number)
+    remain valid under schema constraints.
 
     Args:
         schema: JSON Schema node (object, property, or items schema).
@@ -54,8 +75,26 @@ def _transform_schema_for_pda(
     # Check if this leaf field was preprocessed
     if isinstance(preprocessor, NumericScaler) and path in preprocessor.scaled_fields:
         scaler = preprocessor.scalers[path]
-        result["type"] = "number"
-        result.pop("enum", None)
+
+        # Preserve non-numeric types (null, string, boolean) alongside "number"
+        original_types = _get_schema_types(schema.get("type"))
+        non_numeric = original_types - {"number", "integer"}
+        result["type"] = _schema_type_value(non_numeric | {"number"})
+
+        # Keep only non-numeric enum values (numeric values are now continuous
+        # via the NUM token / MoG head and cannot be enumerated)
+        original_enum = schema.get("enum")
+        if original_enum is not None:
+            non_numeric_enum = [
+                v for v in original_enum if not isinstance(v, (int, float)) or isinstance(v, bool)
+            ]
+            if non_numeric_enum:
+                result["enum"] = non_numeric_enum
+            else:
+                result.pop("enum", None)
+        else:
+            result.pop("enum", None)
+
         if "minimum" in schema:
             result["minimum"] = float(scaler.transform([[schema["minimum"]]])[0, 0])
         if "maximum" in schema:
@@ -65,8 +104,21 @@ def _transform_schema_for_pda(
     if isinstance(preprocessor, NumericDiscretizer) and path in preprocessor.discretized_fields:
         edges = preprocessor.discretizers[path].bin_edges_[0]
         centers = [float((edges[i] + edges[i + 1]) / 2) for i in range(len(edges) - 1)]
-        result["type"] = "number"
-        result["enum"] = centers
+
+        # Preserve non-numeric types alongside "number"
+        original_types = _get_schema_types(schema.get("type"))
+        non_numeric = original_types - {"number", "integer"}
+        result["type"] = _schema_type_value(non_numeric | {"number"})
+
+        # Include non-numeric enum values alongside bin centers
+        original_enum = schema.get("enum")
+        non_numeric_enum: list = []
+        if original_enum is not None:
+            non_numeric_enum = [
+                v for v in original_enum if not isinstance(v, (int, float)) or isinstance(v, bool)
+            ]
+        result["enum"] = non_numeric_enum + centers
+
         result["minimum"] = min(centers)
         result["maximum"] = max(centers)
         return result

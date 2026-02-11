@@ -1662,6 +1662,433 @@ class TestTransformSchemaForPda:
         assert score_schema["type"] == "number"
         assert score_schema["minimum"] != 0.0
 
+    # --- Scaler: mixed-type preservation ---
+
+    def test_scaler_preserves_null_type(self):
+        """Scaled field with null + number preserves null type and enum."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": None if i % 5 == 0 else float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["null", "number"],
+                    "enum": [None, 1.0, 2.0, 3.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["null", "number"]
+        assert x_schema["enum"] == [None]
+        assert "minimum" in x_schema
+        assert "maximum" in x_schema
+
+    def test_scaler_preserves_string_type(self):
+        """Scaled field with string + number preserves string type and enum."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": "n/a" if i % 10 == 0 else float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["number", "string"],
+                    "enum": ["n/a", 1.0, 2.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["number", "string"]
+        assert x_schema["enum"] == ["n/a"]
+
+    def test_scaler_preserves_multiple_non_numeric_types(self):
+        """Scaled field with null + string + number preserves all non-numeric types."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["null", "number", "string"],
+                    "enum": [None, "n/a", 1.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["null", "number", "string"]
+        assert x_schema["enum"] == [None, "n/a"]
+
+    def test_scaler_preserves_boolean_type(self):
+        """Scaled field with boolean + number preserves boolean type and enum."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["boolean", "number"],
+                    "enum": [False, True, 1.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["boolean", "number"]
+        assert x_schema["enum"] == [False, True]
+
+    def test_scaler_pure_numeric_no_regression(self):
+        """Pure numeric field: type becomes 'number', no enum. Same as before."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "enum": list(range(100)), "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert "enum" not in x_schema
+
+    def test_scaler_no_enum_in_original(self):
+        """Schema with no enum: type preserved, no enum added."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": ["null", "number"], "minimum": 0.0, "maximum": 99.0},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["null", "number"]
+        assert "enum" not in x_schema
+
+    def test_scaler_all_enum_values_numeric(self):
+        """Enum with only numeric values: enum removed entirely."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+
+        data = [{"x": float(i)} for i in range(100)]
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "enum": [1.0, 2.0, 3.0], "minimum": 1.0, "maximum": 3.0},
+            },
+        }
+        result = _transform_schema_for_pda(schema, scaler)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert "enum" not in x_schema
+
+    # --- Discretizer: mixed-type preservation ---
+
+    def test_discretizer_preserves_null_in_enum(self):
+        """Discretized field with null + number preserves null in enum."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+
+        data = [{"x": None if i % 5 == 0 else float(i)} for i in range(100)]
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["null", "number"],
+                    "enum": [None, 1.0, 2.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, disc)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["null", "number"]
+        assert None in x_schema["enum"]
+        # Bin centers should also be in enum
+        non_null_enum = [v for v in x_schema["enum"] if v is not None]
+        assert len(non_null_enum) == 5
+        assert all(isinstance(v, float) for v in non_null_enum)
+
+    def test_discretizer_preserves_string_in_enum(self):
+        """Discretized field with string + number preserves string in enum."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+
+        data = [{"x": "n/a" if i % 10 == 0 else float(i)} for i in range(100)]
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["number", "string"],
+                    "enum": ["n/a", 1.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, disc)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["number", "string"]
+        assert "n/a" in x_schema["enum"]
+
+    def test_discretizer_preserves_multiple_non_numeric_in_enum(self):
+        """Discretized field with null + string + number preserves both."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+
+        data = [{"x": float(i)} for i in range(100)]
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": ["null", "number", "string"],
+                    "enum": [None, "n/a", 1.0, 99.0],
+                    "minimum": 1.0,
+                    "maximum": 99.0,
+                },
+            },
+        }
+        result = _transform_schema_for_pda(schema, disc)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == ["null", "number", "string"]
+        assert None in x_schema["enum"]
+        assert "n/a" in x_schema["enum"]
+        # 5 bin centers + None + "n/a" = 7
+        assert len(x_schema["enum"]) == 7
+
+    def test_discretizer_pure_numeric_no_regression(self):
+        """Pure numeric field with discretizer: same behavior as before."""
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+
+        data = [{"x": float(i)} for i in range(100)]
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "minimum": 0, "maximum": 99},
+            },
+        }
+        result = _transform_schema_for_pda(schema, disc)
+
+        x_schema = result["properties"]["x"]
+        assert x_schema["type"] == "number"
+        assert "enum" in x_schema
+        assert len(x_schema["enum"]) == 5
+        assert all(isinstance(v, float) for v in x_schema["enum"])
+
+    # --- End-to-end SchemaPDA integration ---
+
+    def test_schema_pda_allows_null_for_scaled_field(self):
+        """End-to-end: SchemaPDA allows null + NUM for a scaled mixed-type field."""
+        import random
+
+        from origami.constraints import SchemaDeriver, SchemaPDA
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+        from origami.tokenizer import JSONTokenizer
+        from origami.tokenizer.vocabulary import ValueToken
+
+        random.seed(42)
+        data = [
+            {"name": f"item_{i}", "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2)}
+            for i in range(200)
+        ]
+
+        # Derive → preprocess → transform schema → build SchemaPDA
+        deriver = SchemaDeriver()
+        output_schema = deriver.derive(data)
+
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+        transformed_data = scaler.transform(data)
+
+        pda_schema = _transform_schema_for_pda(output_schema, scaler)
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(transformed_data)
+        vocab = tokenizer.vocab
+
+        schema_pda = SchemaPDA(pda_schema, vocab, allow_unk_value=False)
+        mask = schema_pda.get_mask_for_schema_path("score")
+
+        # Null token must be allowed
+        null_token = ValueToken(None)
+        assert null_token in vocab._token_to_id, "None ValueToken should be in vocab"
+        null_id = vocab._token_to_id[null_token]
+        assert mask[null_id].item(), "ValueToken(None) should be allowed at 'score'"
+
+        # NUM token must be allowed
+        assert mask[vocab.num_token_id].item(), "NUM token should be allowed at 'score'"
+
+        # Arbitrary string ValueTokens should NOT be allowed
+        for vid in vocab._value_ids:
+            token = vocab.decode(vid)
+            if isinstance(token, ValueToken) and isinstance(token.value, str):
+                assert not mask[vid].item(), f"String ValueToken({token.value!r}) should be blocked"
+
+        # Arbitrary numeric ValueTokens should NOT be allowed
+        for vid in vocab._value_ids:
+            token = vocab.decode(vid)
+            if isinstance(token, ValueToken) and isinstance(token.value, (int, float)) and not isinstance(
+                token.value, bool
+            ):
+                assert not mask[vid].item(), f"Numeric ValueToken({token.value!r}) should be blocked"
+
+    def test_schema_pda_allows_string_for_scaled_field(self):
+        """End-to-end: SchemaPDA allows specific string + NUM for a scaled mixed-type field."""
+        from origami.constraints import SchemaDeriver, SchemaPDA
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericScaler
+        from origami.tokenizer import JSONTokenizer
+        from origami.tokenizer.vocabulary import ValueToken
+
+        data = [{"val": "n/a" if i % 10 == 0 else float(i)} for i in range(200)]
+
+        deriver = SchemaDeriver()
+        output_schema = deriver.derive(data)
+
+        scaler = NumericScaler(cat_threshold=10)
+        scaler.fit(data)
+        transformed_data = scaler.transform(data)
+
+        pda_schema = _transform_schema_for_pda(output_schema, scaler)
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(transformed_data)
+        vocab = tokenizer.vocab
+
+        schema_pda = SchemaPDA(pda_schema, vocab, allow_unk_value=False)
+        mask = schema_pda.get_mask_for_schema_path("val")
+
+        # "n/a" ValueToken must be allowed
+        na_token = ValueToken("n/a")
+        assert na_token in vocab._token_to_id
+        na_id = vocab._token_to_id[na_token]
+        assert mask[na_id].item(), "ValueToken('n/a') should be allowed"
+
+        # NUM token must be allowed
+        assert mask[vocab.num_token_id].item(), "NUM token should be allowed"
+
+        # Other string ValueTokens should NOT be allowed
+        for vid in vocab._value_ids:
+            token = vocab.decode(vid)
+            if isinstance(token, ValueToken) and isinstance(token.value, str) and token.value != "n/a":
+                assert not mask[vid].item(), f"ValueToken({token.value!r}) should be blocked"
+
+    def test_schema_pda_allows_null_for_discretized_field(self):
+        """End-to-end: SchemaPDA allows null + bin center ValueTokens for discretized field."""
+        import random
+
+        from origami.constraints import SchemaDeriver, SchemaPDA
+        from origami.pipeline.pipeline import _transform_schema_for_pda
+        from origami.preprocessing import NumericDiscretizer
+        from origami.tokenizer import JSONTokenizer
+        from origami.tokenizer.vocabulary import ValueToken
+
+        random.seed(42)
+        data = [
+            {"name": f"item_{i}", "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2)}
+            for i in range(200)
+        ]
+
+        deriver = SchemaDeriver()
+        output_schema = deriver.derive(data)
+
+        disc = NumericDiscretizer(cat_threshold=10, n_bins=5)
+        disc.fit(data)
+        transformed_data = disc.transform(data)
+
+        pda_schema = _transform_schema_for_pda(output_schema, disc)
+
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(transformed_data)
+        vocab = tokenizer.vocab
+
+        schema_pda = SchemaPDA(pda_schema, vocab, allow_unk_value=False)
+        mask = schema_pda.get_mask_for_schema_path("score")
+
+        # Null token must be allowed
+        null_token = ValueToken(None)
+        assert null_token in vocab._token_to_id
+        null_id = vocab._token_to_id[null_token]
+        assert mask[null_id].item(), "ValueToken(None) should be allowed at 'score'"
+
+        # Bin center ValueTokens must be allowed
+        score_schema = pda_schema["properties"]["score"]
+        bin_centers = [v for v in score_schema["enum"] if isinstance(v, float)]
+        for center in bin_centers:
+            center_token = ValueToken(center)
+            if center_token in vocab._token_to_id:
+                cid = vocab._token_to_id[center_token]
+                assert mask[cid].item(), f"Bin center ValueToken({center}) should be allowed"
+
 
 class TestPipelineSchemaPostProcessing:
     """Tests for schema-based post-processing of generated/predicted values."""

@@ -1325,3 +1325,106 @@ class TestSummary:
         assert "SchemaPDA" in summary
         assert "name" in summary
         assert "age" in summary
+
+
+class TestNumTokenInEnumPath:
+    """Tests for NUM token enablement in enum path when type includes numeric."""
+
+    def test_num_enabled_when_type_includes_number(self, vocab):
+        """NUM token should be allowed when enum + type includes 'number'."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {"type": ["null", "number"], "enum": [None]},
+            },
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("val")
+
+        assert mask[vocab.num_token_id].item(), "NUM should be allowed"
+        # None should also be allowed (from enum)
+        null_id = vocab._token_to_id[ValueToken(None)]
+        assert mask[null_id].item(), "ValueToken(None) should be allowed"
+
+    def test_num_enabled_when_type_includes_integer(self, vocab):
+        """NUM token should be allowed when enum + type includes 'integer'."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {"type": ["integer", "string"], "enum": ["a"]},
+            },
+        }
+        # Add "a" to vocab so it appears in enum
+        v = Vocabulary()
+        v.add_key("val")
+        v.add_value("a")
+        v.add_value("other")
+        v.add_value(42)
+        v.freeze()
+
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("val")
+
+        assert mask[v.num_token_id].item(), "NUM should be allowed"
+        a_id = v._token_to_id[ValueToken("a")]
+        assert mask[a_id].item(), "ValueToken('a') should be allowed"
+
+    def test_num_not_enabled_when_type_has_no_numeric(self, vocab):
+        """NUM token should NOT be allowed when type has no numeric types."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {"type": ["null", "string"], "enum": [None, "Alice"]},
+            },
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("val")
+
+        assert not mask[vocab.num_token_id].item(), "NUM should NOT be allowed"
+        # But enum values should still be allowed
+        null_id = vocab._token_to_id[ValueToken(None)]
+        assert mask[null_id].item(), "ValueToken(None) should be allowed"
+        alice_id = vocab._token_to_id[ValueToken("Alice")]
+        assert mask[alice_id].item(), "ValueToken('Alice') should be allowed"
+
+    def test_num_not_enabled_without_type(self, vocab):
+        """NUM token should NOT be allowed when enum has no type field."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {"enum": [None, "Alice"]},
+            },
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("val")
+
+        assert not mask[vocab.num_token_id].item(), "NUM should NOT be allowed without type"
+
+    def test_enum_values_allowed_alongside_num(self, vocab):
+        """All enum values + NUM should be allowed; other values should be blocked."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {
+                    "type": ["null", "number", "string"],
+                    "enum": [None, "Alice"],
+                },
+            },
+        }
+        pda = SchemaPDA(schema, vocab, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("val")
+
+        # Allowed: None, "Alice", NUM
+        null_id = vocab._token_to_id[ValueToken(None)]
+        alice_id = vocab._token_to_id[ValueToken("Alice")]
+        assert mask[null_id].item(), "ValueToken(None) should be allowed"
+        assert mask[alice_id].item(), "ValueToken('Alice') should be allowed"
+        assert mask[vocab.num_token_id].item(), "NUM should be allowed"
+
+        # Blocked: other value tokens not in enum
+        bob_id = vocab._token_to_id[ValueToken("Bob")]
+        assert not mask[bob_id].item(), "ValueToken('Bob') should be blocked"
+        int_id = vocab._token_to_id[ValueToken(25)]
+        assert not mask[int_id].item(), "ValueToken(25) should be blocked"
+        float_id = vocab._token_to_id[ValueToken(1.5)]
+        assert not mask[float_id].item(), "ValueToken(1.5) should be blocked"

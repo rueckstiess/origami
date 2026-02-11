@@ -288,12 +288,16 @@ class SchemaPDA:
 
             # If enum includes only primitives, don't allow containers
             # But if we also have type constraints, check for object/array
+            # and enable NUM token for numeric types (needed for scaled fields
+            # where numeric values are continuous via the MoG head)
             if schema_type is not None:
                 types = schema_type if isinstance(schema_type, list) else [schema_type]
                 if "object" in types:
                     mask[vocab.obj_start_id] = True
                 if "array" in types:
                     mask[vocab.array_start_id] = True
+                if "number" in types or "integer" in types:
+                    mask[vocab.num_token_id] = True
 
         elif schema_type is not None:
             # Type constraint: allow tokens matching the specified type(s)
