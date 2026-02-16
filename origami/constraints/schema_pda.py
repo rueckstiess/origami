@@ -297,7 +297,17 @@ class SchemaPDA:
                 if "array" in types:
                     mask[vocab.array_start_id] = True
                 if "number" in types or "integer" in types:
-                    mask[vocab.num_token_id] = True
+                    # Only enable NUM if the enum has no numeric values.
+                    # If the enum contains numerics, the field is categorical
+                    # and values are handled by discrete ValueTokens.
+                    # If the enum has only non-numeric values (e.g. [None]),
+                    # the field was scaled and numerics are continuous via MoG.
+                    has_numeric_enum = any(
+                        isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in schema_enum
+                    )
+                    if not has_numeric_enum:
+                        mask[vocab.num_token_id] = True
 
         elif schema_type is not None:
             # Type constraint: allow tokens matching the specified type(s)

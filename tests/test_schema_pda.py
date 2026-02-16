@@ -1428,3 +1428,157 @@ class TestNumTokenInEnumPath:
         assert not mask[int_id].item(), "ValueToken(25) should be blocked"
         float_id = vocab._token_to_id[ValueToken(1.5)]
         assert not mask[float_id].item(), "ValueToken(1.5) should be blocked"
+
+    def test_num_blocked_for_categorical_numeric_enum(self):
+        """NUM token should NOT be allowed when enum contains numeric values.
+
+        This is the categorical case: a field with low cardinality (below
+        cat_threshold) that was NOT scaled. The enum lists the discrete
+        numeric values, and the model should only output those ValueTokens,
+        never the NUM token (which would invoke the MoG head on an untrained
+        distribution).
+
+        Regression test for the a8→a9 bug where NUM was incorrectly enabled
+        for all fields with numeric type + enum, including categorical ones.
+        """
+        v = Vocabulary()
+        v.add_key("age_group")
+        v.add_value(0)
+        v.add_value(1)
+        v.add_value(2)
+        v.add_value(3)
+        v.add_value(4)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "age_group": {"type": "integer", "enum": [0, 1, 2, 3, 4]},
+            },
+        }
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("age_group")
+
+        # All enum values should be allowed
+        for val in [0, 1, 2, 3, 4]:
+            vid = v._token_to_id[ValueToken(val)]
+            assert mask[vid].item(), f"ValueToken({val}) should be allowed"
+
+        # NUM should NOT be allowed — this field is categorical
+        assert not mask[v.num_token_id].item(), (
+            "NUM should NOT be allowed for categorical numeric fields"
+        )
+
+    def test_num_blocked_for_mixed_null_numeric_enum(self):
+        """NUM blocked when enum has numeric values, even with null type.
+
+        A field like {"type": ["null", "integer"], "enum": [None, 0, 1, 2]}
+        is categorical — the discrete values 0, 1, 2 are in the enum.
+        NUM should not be enabled.
+        """
+        v = Vocabulary()
+        v.add_key("x")
+        v.add_value(None)
+        v.add_value(0)
+        v.add_value(1)
+        v.add_value(2)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": ["null", "integer"], "enum": [None, 0, 1, 2]},
+            },
+        }
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("x")
+
+        # Enum values allowed
+        assert mask[v._token_to_id[ValueToken(None)]].item()
+        assert mask[v._token_to_id[ValueToken(0)]].item()
+
+        # NUM blocked — numerics are discrete
+        assert not mask[v.num_token_id].item(), (
+            "NUM should NOT be allowed when enum contains numeric values"
+        )
+
+    def test_num_blocked_for_discretized_float_enum(self):
+        """NUM blocked when enum contains float bin centers (discretized field).
+
+        Discretized fields produce schemas like {"type": "number", "enum": [10.5, 30.5]}.
+        The bin centers are discrete tokens, not continuous — NUM must stay blocked.
+        """
+        v = Vocabulary()
+        v.add_key("x")
+        v.add_value(10.5)
+        v.add_value(30.5)
+        v.add_value(50.5)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "enum": [10.5, 30.5, 50.5]},
+            },
+        }
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("x")
+
+        assert mask[v._token_to_id[ValueToken(10.5)]].item()
+        assert mask[v._token_to_id[ValueToken(30.5)]].item()
+        assert not mask[v.num_token_id].item(), (
+            "NUM should NOT be allowed for discretized float bin centers"
+        )
+
+    def test_num_blocked_for_discretized_with_null(self):
+        """NUM blocked when enum has float bin centers + null (discretized mixed field)."""
+        v = Vocabulary()
+        v.add_key("x")
+        v.add_value(None)
+        v.add_value(10.5)
+        v.add_value(30.5)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": ["null", "number"], "enum": [None, 10.5, 30.5]},
+            },
+        }
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("x")
+
+        assert mask[v._token_to_id[ValueToken(None)]].item()
+        assert mask[v._token_to_id[ValueToken(10.5)]].item()
+        assert not mask[v.num_token_id].item(), (
+            "NUM should NOT be allowed when enum has float bin centers"
+        )
+
+    def test_num_enabled_for_boolean_only_enum(self):
+        """NUM enabled when enum has only booleans (booleans are not numeric).
+
+        A scaled field with boolean + number type may have enum=[True, False]
+        after stripping numeric values. Booleans are excluded from the
+        numeric check (isinstance(v, bool) guard), so NUM should be enabled.
+        """
+        v = Vocabulary()
+        v.add_key("x")
+        v.add_value(True)
+        v.add_value(False)
+        v.add_value(42)
+        v.freeze()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "x": {"type": ["boolean", "number"], "enum": [True, False]},
+            },
+        }
+        pda = SchemaPDA(schema, v, allow_unk_value=False)
+        mask = pda.get_mask_for_schema_path("x")
+
+        assert mask[v._token_to_id[ValueToken(True)]].item()
+        assert mask[v._token_to_id[ValueToken(False)]].item()
+        assert mask[v.num_token_id].item(), (
+            "NUM should be allowed — booleans are not numeric enum values"
+        )
