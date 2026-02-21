@@ -14,6 +14,7 @@ Post-processing operations (applied in order):
 
 from __future__ import annotations
 
+import bisect
 from typing import Any
 
 
@@ -43,11 +44,22 @@ class SchemaPostProcessor:
     def __init__(self, schema: dict):
         self._schema = schema
         self._field_schemas: dict[str, dict] = {}
+        # Pre-sorted numeric enums per path for O(log n) nearest-neighbor lookup
+        self._sorted_enums: dict[str, list[float | int]] = {}
         self._compile_paths(schema, "")
 
     def _compile_paths(self, node: dict, path: str) -> None:
         """Recursively index field schemas by dot-separated path."""
         self._field_schemas[path] = node
+
+        # Pre-sort numeric enums for O(log n) nearest-neighbor lookup
+        schema_enum = node.get("enum")
+        if schema_enum is not None:
+            numeric_enums = sorted(
+                e for e in schema_enum if isinstance(e, (int, float)) and not isinstance(e, bool)
+            )
+            if numeric_enums:
+                self._sorted_enums[path] = numeric_enums
 
         if "properties" in node:
             for key, sub in node["properties"].items():
@@ -79,7 +91,6 @@ class SchemaPostProcessor:
             return value
 
         schema_type = field_schema.get("type")
-        schema_enum = field_schema.get("enum")
         minimum = field_schema.get("minimum")
         maximum = field_schema.get("maximum")
 
@@ -90,13 +101,17 @@ class SchemaPostProcessor:
             value = min(value, maximum)
 
         # Step 2: Snap to nearest enum value (if present)
-        if schema_enum is not None:
-            numeric_enums = [
-                e for e in schema_enum if isinstance(e, (int, float)) and not isinstance(e, bool)
-            ]
-            if numeric_enums:
-                value = min(numeric_enums, key=lambda e: abs(e - value))
-                return value  # Enum snap determines final type
+        sorted_enums = self._sorted_enums.get(field_path)
+        if sorted_enums is not None:
+            idx = bisect.bisect_left(sorted_enums, value)
+            # Check the closest of the two neighbors
+            if idx == 0:
+                return sorted_enums[0]
+            if idx == len(sorted_enums):
+                return sorted_enums[-1]
+            before = sorted_enums[idx - 1]
+            after = sorted_enums[idx]
+            return before if (value - before) <= (after - value) else after
 
         # Step 3: Round to integer (if type is "integer")
         if _is_integer_type(schema_type):
