@@ -2267,7 +2267,7 @@ wheels = [
 
 [[package]]
 name = "origami-ml"
-version = "2.0.0a10"
+version = "2.0.0a11"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

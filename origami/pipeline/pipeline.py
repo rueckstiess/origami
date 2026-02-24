@@ -285,22 +285,20 @@ class OrigamiPipeline:
             self._predictor = None
             self._embedder = None
 
-    def _ensure_inference_device(self) -> None:
-        """Move model to CPU for inference.
+    def _ensure_inference_device(self, device: str | torch.device | None = None) -> None:
+        """Move model to the target inference device.
 
-        CPU is faster for autoregressive generation due to:
-        - No GPU kernel launch overhead per token
-        - No CPU<->GPU memory transfer per step
-        - Better single-threaded performance for sequential ops
-
-        Once moved to CPU, the model stays there until fit() is called again.
+        Args:
+            device: Target device for inference. Defaults to ``None`` which
+                uses CPU. Pass ``"mps"``, ``"cuda"``, etc. to override.
         """
         if self._model is None:
             return
 
+        target = torch.device(device) if device is not None else torch.device("cpu")
         current_device = next(self._model.parameters()).device
-        if current_device.type != "cpu":
-            self._model.to("cpu")
+        if current_device != target:
+            self._model.to(target)
             # Invalidate inference components (they cache the model's device)
             self._generator = None
             self._predictor = None
@@ -767,6 +765,7 @@ class OrigamiPipeline:
         obj: dict,
         target_key: str,
         allow_complex_values: bool = False,
+        device: str | torch.device | None = None,
     ) -> Any:
         """Predict value for a target key.
 
@@ -779,11 +778,15 @@ class OrigamiPipeline:
             allow_complex_values: If False (default), restrict to primitive values
                 only (strings, numbers, booleans, null). If True, allow objects
                 and arrays which may require multiple tokens to generate.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             The predicted value
         """
-        results = self.predict_batch([obj], target_key, allow_complex_values=allow_complex_values)
+        results = self.predict_batch(
+            [obj], target_key, allow_complex_values=allow_complex_values, device=device
+        )
         return results[0]
 
     def predict_batch(
@@ -793,6 +796,7 @@ class OrigamiPipeline:
         batch_size: int = 32,
         allow_complex_values: bool = False,
         profile: bool = False,
+        device: str | torch.device | None = None,
     ) -> list[Any]:
         """Predict values for a batch of objects.
 
@@ -804,6 +808,8 @@ class OrigamiPipeline:
                 only (strings, numbers, booleans, null). If True, allow objects
                 and arrays which may require multiple tokens to generate.
             profile: If True, run with cProfile and print timing statistics.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             List of predicted values (one per object).
@@ -815,7 +821,7 @@ class OrigamiPipeline:
         processed = self._transform_data(objects)
 
         # Get or create predictor (has inverse_transform_fn configured if needed)
-        predictor = self._get_predictor()
+        predictor = self._get_predictor(device)
 
         if profile:
             profiler = cProfile.Profile()
@@ -842,6 +848,7 @@ class OrigamiPipeline:
         values: list[Any] | None = None,
         top_k: int | None = None,
         allow_complex_values: bool = False,
+        device: str | torch.device | None = None,
     ) -> dict[Any, float] | list[tuple[Any, float]]:
         """Get probability distribution over possible values.
 
@@ -854,6 +861,8 @@ class OrigamiPipeline:
             top_k: If specified, return only top-k values sorted by probability
             allow_complex_values: If False (default), exclude OBJ_START/ARRAY_START
                 from the probability distribution.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             If top_k is None: dict mapping values to probabilities
@@ -865,7 +874,7 @@ class OrigamiPipeline:
         processed = self._transform_data([obj])[0]
 
         # Get or create predictor
-        predictor = self._get_predictor()
+        predictor = self._get_predictor(device)
 
         # Get probability distribution
         return predictor.predict_proba(
@@ -886,6 +895,7 @@ class OrigamiPipeline:
         top_p: float | None = None,
         seed: int | None = None,
         allow_complex_values: bool = True,
+        device: str | torch.device | None = None,
     ) -> list[dict]:
         """Generate complete JSON objects.
 
@@ -902,6 +912,8 @@ class OrigamiPipeline:
             seed: Random seed for reproducibility
             allow_complex_values: If False, restrict field values to primitives only
                 (no nested objects or arrays). Useful for untrained models. Default True.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             List of generated JSON objects
@@ -909,7 +921,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         # Get or create generator
-        generator = self._get_generator()
+        generator = self._get_generator(device)
 
         # Generate samples
         samples = generator.generate(
@@ -943,6 +955,7 @@ class OrigamiPipeline:
         batch_size: int = 32,
         allow_complex_values: bool | None = None,
         verbose: bool = False,
+        device: str | torch.device | None = None,
     ) -> dict[str, float]:
         """Evaluate the model on data.
 
@@ -961,6 +974,8 @@ class OrigamiPipeline:
             allow_complex_values: Whether to allow complex values (objects/arrays)
                 during predictions. If None (default), auto-detected based on metrics.
             verbose: If True, show progress bars during evaluation.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             Dict mapping metric names to their values. Always includes "loss".
@@ -988,8 +1003,8 @@ class OrigamiPipeline:
         # Preprocess data
         processed = self._transform_data(data)
 
-        # Move to CPU for faster evaluation
-        self._ensure_inference_device()
+        # Move to inference device
+        self._ensure_inference_device(device)
 
         # Resolve allow_complex_values with auto-detection
         effective_allow_complex = self._resolve_allow_complex_values(allow_complex_values, metrics)
@@ -1022,6 +1037,7 @@ class OrigamiPipeline:
         target_key: str | None = None,
         normalize: bool = True,
         enable_grad: bool = False,
+        device: str | torch.device | None = None,
     ) -> np.ndarray | torch.Tensor:
         """Get embedding for a JSON object.
 
@@ -1032,6 +1048,8 @@ class OrigamiPipeline:
             normalize: Whether to L2-normalize the embedding
             enable_grad: If True, compute gradients and return tensor.
                 If False (default), return numpy array for inference.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             Embedding as numpy array of shape (d_model,) if enable_grad=False,
@@ -1043,6 +1061,7 @@ class OrigamiPipeline:
             target_key=target_key,
             normalize=normalize,
             enable_grad=enable_grad,
+            device=device,
         )
         return embeddings[0]
 
@@ -1053,6 +1072,7 @@ class OrigamiPipeline:
         target_key: str | None = None,
         normalize: bool = True,
         enable_grad: bool = False,
+        device: str | torch.device | None = None,
     ) -> np.ndarray | torch.Tensor:
         """Get embeddings for multiple JSON objects.
 
@@ -1063,6 +1083,8 @@ class OrigamiPipeline:
             normalize: Whether to L2-normalize embeddings
             enable_grad: If True, compute gradients and return tensor.
                 If False (default), return numpy array for inference.
+            device: Device for inference (e.g. ``"cpu"``, ``"mps"``, ``"cuda"``).
+                Defaults to CPU.
 
         Returns:
             Embeddings as numpy array of shape (batch_size, d_model) if enable_grad=False,
@@ -1074,7 +1096,7 @@ class OrigamiPipeline:
         processed = self._transform_data(objects)
 
         # Get or create embedder with appropriate pooling
-        embedder = self._get_embedder(pooling)
+        embedder = self._get_embedder(pooling, device)
 
         # Get embeddings
         embeddings = embedder.embed_batch(
@@ -1151,12 +1173,13 @@ class OrigamiPipeline:
         else:
             return value
 
-    def _get_generator(self) -> OrigamiGenerator:
+    def _get_generator(self, device: str | torch.device | None = None) -> OrigamiGenerator:
         """Get or create the generator with inference constraint settings.
 
-        Moves model to CPU for faster inference if not already there.
+        Args:
+            device: Target device for inference. Defaults to CPU.
         """
-        self._ensure_inference_device()
+        self._ensure_inference_device(device)
         if self._generator is None:
             inference_cfg = self.config.inference
             self._generator = OrigamiGenerator(
@@ -1168,12 +1191,13 @@ class OrigamiPipeline:
             )
         return self._generator
 
-    def _get_predictor(self) -> OrigamiPredictor:
+    def _get_predictor(self, device: str | torch.device | None = None) -> OrigamiPredictor:
         """Get or create the predictor with inference constraint settings.
 
-        Moves model to CPU for faster inference if not already there.
+        Args:
+            device: Target device for inference. Defaults to CPU.
         """
-        self._ensure_inference_device()
+        self._ensure_inference_device(device)
         if self._predictor is None:
             inference_cfg = self.config.inference
             self._predictor = OrigamiPredictor(
@@ -1264,12 +1288,16 @@ class OrigamiPipeline:
 
         return any_metric_requires_complex_values(metrics)
 
-    def _get_embedder(self, pooling: Literal["mean", "max", "last", "target"]) -> OrigamiEmbedder:
+    def _get_embedder(
+        self, pooling: Literal["mean", "max", "last", "target"], device: str | torch.device | None = None
+    ) -> OrigamiEmbedder:
         """Get or create an embedder with the specified pooling.
 
-        Moves model to CPU for faster inference if not already there.
+        Args:
+            pooling: Pooling strategy for embeddings.
+            device: Target device for inference. Defaults to CPU.
         """
-        self._ensure_inference_device()
+        self._ensure_inference_device(device)
         # Always create a new embedder if pooling strategy differs
         if self._embedder is None or self._embedder.pooling != pooling:
             self._embedder = OrigamiEmbedder(self._model, self._tokenizer, pooling=pooling)
