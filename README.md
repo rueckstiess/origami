@@ -12,18 +12,6 @@ Origami trains models that learn the relationships between fields in JSON object
 - **Generate** new synthetic JSON objects that follow the patterns in your data
 - **Embed** JSON objects as dense vectors for similarity search or downstream tasks
 
-```
-Training data:
-  {"city": "London",  "country": "UK",       "population": 8982000}
-  {"city": "Paris",   "country": "France",   "population": 2161000}
-  {"city": "Berlin",  "country": "Germany",  "population": 3748000}
-  ...
-
-Predict:   {"city": "Tokyo", "country": ?}  →  "Japan"
-Generate:  → {"city": "Sydney", "country": "Australia", "population": 5312000}
-Embed:     {"city": "London", ...}  →  [0.12, -0.34, 0.56, ...]
-```
-
 Unlike tabular ML models that require flat feature vectors, Origami works directly with JSON structure — including nested objects and arrays.
 
 ## Installation
@@ -47,9 +35,9 @@ from origami import OrigamiPipeline
 
 # Your data: a list of JSON objects (Python dicts)
 data = [
-    {"city": "London",  "country": "UK",      "population": 8982000},
-    {"city": "Paris",   "country": "France",   "population": 2161000},
-    {"city": "Berlin",  "country": "Germany",  "population": 3748000},
+    {"product": "Wireless Headphones", "categories": ["audio", "wireless"], "price": 79.99,  "rating": 4.2},
+    {"product": "USB-C Hub",           "categories": ["accessories"],       "price": 34.99,  "rating": 4.5},
+    {"product": "Mechanical Keyboard", "categories": ["peripherals"],       "price": 129.99, "rating": 4.7},
     # ... more records
 ]
 
@@ -57,26 +45,19 @@ data = [
 pipeline = OrigamiPipeline()
 pipeline.fit(data, epochs=20)
 
-# Predict a missing value
+# Predict a missing value (including arrays)
 prediction = pipeline.predict(
-    {"city": "Tokyo", "country": None},
-    target_key="country",
+    {"product": "Bluetooth Speaker", "categories": None},
+    target_key="categories",
+    allow_complex_values=True,
 )
-print(prediction)  # "Japan"
-
-# Get probability distribution over possible values
-probs = pipeline.predict_proba(
-    {"city": "Tokyo", "country": None},
-    target_key="country",
-    top_k=3,
-)
-# [("Japan", 0.85), ("China", 0.04), ("South Korea", 0.03)]
+print(prediction)  # ["audio", "wireless"]
 
 # Generate new synthetic records
 samples = pipeline.generate(num_samples=5, temperature=0.8)
 
 # Get a vector embedding
-embedding = pipeline.embed({"city": "London", "country": "UK"})
+embedding = pipeline.embed({"product": "Wireless Headphones", "categories": ["audio", "wireless"]})
 # numpy array of shape (128,)
 
 # Save and load
