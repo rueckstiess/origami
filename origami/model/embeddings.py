@@ -1,6 +1,6 @@
 """ORIGAMI embedding layer.
 
-Combines token embeddings with Key-Value Position Encoding (KVPE).
+Combines token embeddings with position encoding (KVPE or sequential).
 """
 
 import torch
@@ -12,22 +12,23 @@ from origami.position_encoding import KeyValuePositionEncoding
 
 
 class OrigamiEmbeddings(nn.Module):
-    """Token embeddings + KVPE position encoding.
+    """Token embeddings + position encoding.
 
     This module:
     1. Embeds input tokens using learned embeddings
-    2. Computes position embeddings from JSON paths via KVPE
+    2. Computes position embeddings via KVPE (JSON paths) or sequential positions
     3. Adds token and position embeddings together
     4. For NUM tokens (when continuous head enabled), uses multiplicative
        embedding: scaled_value × learnable_vector
 
-    The token embedding layer is shared with KVPE for key position encoding,
-    enabling transfer learning where the model recognizes "name" in position
-    encoding as the same concept as the "name" token.
+    When using KVPE, the token embedding layer is shared with KVPE for key
+    position encoding, enabling transfer learning where the model recognizes
+    "name" in position encoding as the same concept as the "name" token.
 
     Attributes:
         token_embedding: Learned token embedding layer
-        kvpe: Key-Value Position Encoding module
+        kvpe: Key-Value Position Encoding module (only when position_encoding="kvpe")
+        position_embedding: Learned positional embedding (only when position_encoding="sequential")
         dropout: Dropout layer
         num_embedding: Learnable direction vector for scaled numeric values
             (only present when use_continuous_head=True)
@@ -47,21 +48,26 @@ class OrigamiEmbeddings(nn.Module):
 
         self.config = config
 
-        # Token embeddings (shared with KVPE for key position encoding)
+        # Token embeddings
         self.token_embedding = nn.Embedding(vocab_size, config.d_model)
 
-        # KVPE with shared key embeddings
-        self.kvpe = KeyValuePositionEncoding(
-            d_model=config.d_model,
-            vocab_size=vocab_size,
-            max_depth=config.max_depth,
-            max_array_index=config.max_array_position,
-            pooling=config.kvpe_pooling,
-            share_key_embeddings=True,
-            **config.kvpe_pooling_kwargs,
-        )
-        # Share token embeddings with KVPE for key position encoding
-        self.kvpe.set_key_embeddings(self.token_embedding)
+        # Position encoding
+        if config.position_encoding == "kvpe":
+            # KVPE with shared key embeddings
+            self.kvpe = KeyValuePositionEncoding(
+                d_model=config.d_model,
+                vocab_size=vocab_size,
+                max_depth=config.max_depth,
+                max_array_index=config.max_array_position,
+                pooling=config.kvpe_pooling,
+                share_key_embeddings=True,
+                **config.kvpe_pooling_kwargs,
+            )
+            # Share token embeddings with KVPE for key position encoding
+            self.kvpe.set_key_embeddings(self.token_embedding)
+        else:  # "sequential"
+            self.position_embedding = nn.Embedding(config.max_seq_length, config.d_model)
+            # self.position_embedding.weight.requires_grad = False
 
         self.dropout = nn.Dropout(config.dropout)
 
@@ -77,8 +83,9 @@ class OrigamiEmbeddings(nn.Module):
         path_ids: Tensor,  # (batch, seq_len, max_depth)
         path_lengths: Tensor,  # (batch, seq_len)
         numeric_values: Tensor | None = None,  # (batch, seq_len) - scaled values for NUM tokens
+        position_ids: Tensor | None = None,  # (batch, seq_len) - for sequential PE
     ) -> Tensor:
-        """Compute embeddings from tokens and paths.
+        """Compute embeddings from tokens and positions.
 
         Args:
             input_ids: Token IDs of shape (batch, seq_len)
@@ -90,6 +97,9 @@ class OrigamiEmbeddings(nn.Module):
                 of shape (batch, seq_len)
             numeric_values: Scaled numeric values for NUM token positions.
                 Only used when use_continuous_head=True. Shape (batch, seq_len).
+            position_ids: Sequential position IDs of shape (batch, seq_len).
+                Only used when position_encoding="sequential". Computed by the
+                model from attention_mask if not provided.
 
         Returns:
             Combined embeddings of shape (batch, seq_len, d_model)
@@ -109,7 +119,10 @@ class OrigamiEmbeddings(nn.Module):
                 # Replace embeddings at NUM positions
                 embeds = torch.where(is_num.unsqueeze(-1), num_embeds, embeds)
 
-        # 3. Add position encoding (KVPE)
-        pos_embeds = self.kvpe(path_types, path_ids, path_lengths)
+        # 3. Add position encoding
+        if self.config.position_encoding == "kvpe":
+            pos_embeds = self.kvpe(path_types, path_ids, path_lengths)
+        else:  # "sequential"
+            pos_embeds = self.position_embedding(position_ids)
 
         return self.dropout(embeds + pos_embeds)

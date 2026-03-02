@@ -108,6 +108,7 @@ class OrigamiModel(nn.Module):
         loss_weights: Tensor | None = None,  # (batch, seq_len) - per-token loss weights
         past_key_values: "KVCache | None" = None,
         use_cache: bool = False,
+        position_ids: Tensor | None = None,  # (batch, seq_len) - for sequential PE
     ) -> OrigamiOutput:
         """Forward pass through the model.
 
@@ -131,12 +132,32 @@ class OrigamiModel(nn.Module):
                 pre-normalized so mean weight = 1.0 to maintain stable gradients.
             past_key_values: KV cache from previous forward pass (for generation).
             use_cache: Whether to compute and return KV cache (for generation).
+            position_ids: Sequential position IDs of shape (batch, seq_len).
+                Only used when position_encoding="sequential". If not provided,
+                computed automatically from attention_mask.
 
         Returns:
             OrigamiOutput with logits, optional loss, hidden states, and optionally cache
         """
+        # Compute position_ids for sequential PE (if not provided)
+        if self.config.position_encoding == "sequential" and position_ids is None:
+            if attention_mask is not None:
+                # Derive from attention_mask: handles left-padding correctly
+                # PAD positions get 0, real tokens get sequential 0, 1, 2, ...
+                position_ids = attention_mask.long().cumsum(dim=-1) - 1
+                position_ids = position_ids.clamp(min=0)
+            else:
+                # No attention mask: simple sequential positions
+                seq_len = input_ids.size(1)
+                position_ids = torch.arange(
+                    seq_len, dtype=torch.long, device=input_ids.device
+                ).unsqueeze(0).expand(input_ids.size(0), -1)
+
         # 1. Embeddings (with numeric values for continuous head)
-        hidden = self.embeddings(input_ids, path_types, path_ids, path_lengths, numeric_values)
+        hidden = self.embeddings(
+            input_ids, path_types, path_ids, path_lengths, numeric_values,
+            position_ids=position_ids,
+        )
 
         # 2. Backbone (with optional KV caching)
         new_cache = None

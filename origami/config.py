@@ -98,6 +98,7 @@ class ModelConfig(PrettyReprMixin):
         n_layers: Number of transformer layers.
         d_ff: Feed-forward hidden dimension.
         dropout: Dropout probability.
+        position_encoding: Type of position encoding ("kvpe" or "sequential").
         max_depth: Maximum nesting depth for KVPE position encoding.
         max_array_position: Maximum array index for position embeddings.
         kvpe_pooling: Pooling strategy for KVPE.
@@ -115,6 +116,7 @@ class ModelConfig(PrettyReprMixin):
     dropout: float = 0.0
 
     # Position encoding
+    position_encoding: Literal["kvpe", "sequential"] = "kvpe"
     max_depth: int = 32
     max_array_position: int = 256
     kvpe_pooling: Literal["sum", "weighted", "rotary", "gru", "transformer"] = "sum"
@@ -142,6 +144,12 @@ class ModelConfig(PrettyReprMixin):
             raise ValueError(f"n_layers must be >= 1, got {self.n_layers}")
         if self.dropout < 0 or self.dropout > 1:
             raise ValueError(f"dropout must be in [0, 1], got {self.dropout}")
+        valid_position_encodings = {"kvpe", "sequential"}
+        if self.position_encoding not in valid_position_encodings:
+            raise ValueError(
+                f"position_encoding must be one of {valid_position_encodings}, "
+                f"got '{self.position_encoding}'"
+            )
         valid_poolings = {"sum", "weighted", "rotary", "gru", "transformer"}
         if self.kvpe_pooling not in valid_poolings:
             raise ValueError(

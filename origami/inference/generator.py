@@ -675,6 +675,12 @@ class OrigamiGenerator:
         kv_cache = None
         use_kv_cache = self._supports_kv_cache
 
+        # Track sequential positions for sequential PE with KV cache
+        current_positions: Tensor | None = None
+        if self.model.config.position_encoding == "sequential":
+            # Next position to use = number of real tokens in each sequence
+            current_positions = current_attention_mask.long().sum(dim=-1)  # (batch,)
+
         # Generation loop
         for step in range(max_tokens):
             if len(active_indices) == 0:
@@ -697,6 +703,9 @@ class OrigamiGenerator:
                     else None,
                     past_key_values=kv_cache,
                     use_cache=True,
+                    position_ids=current_positions.unsqueeze(1)
+                    if current_positions is not None
+                    else None,
                 )
                 kv_cache = output.past_key_values
             else:
@@ -840,6 +849,10 @@ class OrigamiGenerator:
             new_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=self.device)
             current_attention_mask = torch.cat([current_attention_mask, new_mask], dim=1)
 
+            # Advance sequential positions
+            if current_positions is not None:
+                current_positions = current_positions + 1
+
             # Store completed sequences and remove them from active batch
             if just_completed.any():
                 completed_mask = just_completed.tolist()
@@ -875,6 +888,10 @@ class OrigamiGenerator:
                     current_path_lengths = current_path_lengths[keep_tensor]
                     current_numeric_values = current_numeric_values[keep_tensor]
                     current_attention_mask = current_attention_mask[keep_tensor]
+
+                    # Compact sequential positions
+                    if current_positions is not None:
+                        current_positions = current_positions[keep_tensor]
 
                     # Compact grammar state and valid mask
                     if grammar_state is not None:
