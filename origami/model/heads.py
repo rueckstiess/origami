@@ -1,14 +1,19 @@
 """ORIGAMI output heads.
 
 Provides output heads for discrete (next-token) and continuous (MoG) prediction.
-MVP implements DiscreteHead only; ContinuousHead is Phase 6.
+Supports truncated MoG with schema-derived bounds and discretized NLL for integers.
 """
+
+import math
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from origami.config import ModelConfig
+
+# Precomputed constant
+_LOG_2PI = math.log(2 * math.pi)
 
 
 class DiscreteHead(nn.Module):
@@ -93,6 +98,11 @@ class ContinuousHead(nn.Module):
 
         return weights, means, log_vars
 
+    @staticmethod
+    def _standard_normal_cdf(x: Tensor) -> Tensor:
+        """Standard normal CDF using the error function."""
+        return 0.5 * (1 + torch.erf(x / math.sqrt(2)))
+
     def nll_loss(
         self,
         weights: Tensor,  # (batch, seq_len, n_components)
@@ -101,49 +111,138 @@ class ContinuousHead(nn.Module):
         targets: Tensor,  # (batch, seq_len)
         mask: Tensor,  # (batch, seq_len)
         loss_weights: Tensor | None = None,  # (batch, seq_len) - per-token weights
+        lower: Tensor | None = None,  # (batch, seq_len) - truncation lower bounds
+        upper: Tensor | None = None,  # (batch, seq_len) - truncation upper bounds
+        is_integer: Tensor | None = None,  # (batch, seq_len) - bool mask for discretized NLL
     ) -> Tensor:
-        """Compute negative log-likelihood under mixture of Gaussians.
+        """Compute negative log-likelihood under (optionally truncated) mixture of Gaussians.
+
+        Supports three modes depending on the arguments:
+        1. Standard MoG NLL (no bounds, no is_integer) — identical to the original.
+        2. Truncated MoG NLL (bounds provided) — normalizes each component by
+           Z_k = Phi((upper - mu_k) / sigma_k) - Phi((lower - mu_k) / sigma_k).
+        3. Discretized NLL (is_integer provided) — for integer-valued targets,
+           computes P(k) = CDF_trunc(k+0.5) - CDF_trunc(k-0.5) instead of density.
 
         Args:
             weights: Mixture weights (softmax normalized)
             means: Component means
             log_vars: Component log-variances
             targets: Target continuous values
-            mask: Boolean mask where True indicates NUM token positions
-            loss_weights: Optional per-token loss weights for weighted averaging.
-                If provided, applies weighted mean instead of simple mean.
+            mask: Boolean mask where True indicates continuous token positions
+            loss_weights: Optional per-token loss weights for weighted averaging
+            lower: Per-position lower bounds for truncation (default: -inf)
+            upper: Per-position upper bounds for truncation (default: +inf)
+            is_integer: Boolean mask where True uses discretized NLL
 
         Returns:
             Scalar NLL loss averaged over valid positions
         """
-        # Expand targets for broadcasting: (batch, seq_len, 1)
-        targets = targets.unsqueeze(-1)
+        if not mask.any():
+            return weights.new_zeros(())
 
-        # Compute log probability for each component
-        # log N(x; mu, sigma^2) = -0.5 * (log(2*pi) + log_var + (x - mu)^2 / exp(log_var))
+        has_bounds = lower is not None or upper is not None
+        has_integers = is_integer is not None and is_integer.any()
+
+        # Fast path: no truncation, no integers — original logic
+        if not has_bounds and not has_integers:
+            return self._nll_loss_standard(weights, means, log_vars, targets, mask, loss_weights)
+
+        # Compute log-mixture probability for each position
+        log_mixture = self._log_mixture_prob(
+            weights, means, log_vars, targets, lower, upper, is_integer
+        )
+
+        # Mask and average
+        masked_nll = -log_mixture[mask]
+        if loss_weights is not None:
+            masked_loss_weights = loss_weights[mask]
+            return (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(
+                min=1e-8
+            )
+        return masked_nll.mean()
+
+    def _nll_loss_standard(
+        self,
+        weights: Tensor,
+        means: Tensor,
+        log_vars: Tensor,
+        targets: Tensor,
+        mask: Tensor,
+        loss_weights: Tensor | None,
+    ) -> Tensor:
+        """Original unbounded continuous MoG NLL (fast path)."""
+        targets_expanded = targets.unsqueeze(-1)
         var = torch.exp(log_vars)
-        log_probs = -0.5 * (self.log_2pi + log_vars + (targets - means) ** 2 / var)
-
-        # Mixture log probability: log sum_k w_k * N(x; mu_k, sigma_k^2)
-        # = log sum_k exp(log w_k + log N(x; mu_k, sigma_k^2))
+        log_probs = -0.5 * (self.log_2pi + log_vars + (targets_expanded - means) ** 2 / var)
         log_weights = torch.log(weights + 1e-10)
         log_mixture = torch.logsumexp(log_weights + log_probs, dim=-1)
 
-        # Mask and average (with optional per-token weighting)
-        if mask.any():
-            masked_nll = -log_mixture[mask]
-            if loss_weights is not None:
-                masked_loss_weights = loss_weights[mask]
-                nll = (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(
-                    min=1e-8
-                )
-            else:
-                nll = masked_nll.mean()
-        else:
-            # Return zero loss on same device as input
-            nll = weights.new_zeros(())
+        masked_nll = -log_mixture[mask]
+        if loss_weights is not None:
+            masked_loss_weights = loss_weights[mask]
+            return (masked_nll * masked_loss_weights).sum() / masked_loss_weights.sum().clamp(
+                min=1e-8
+            )
+        return masked_nll.mean()
 
-        return nll
+    def _log_mixture_prob(
+        self,
+        weights: Tensor,  # (batch, seq_len, K)
+        means: Tensor,  # (batch, seq_len, K)
+        log_vars: Tensor,  # (batch, seq_len, K)
+        targets: Tensor,  # (batch, seq_len)
+        lower: Tensor | None,  # (batch, seq_len) or None
+        upper: Tensor | None,  # (batch, seq_len) or None
+        is_integer: Tensor | None,  # (batch, seq_len) or None
+    ) -> Tensor:
+        """Compute log mixture probability with truncation and optional discretization.
+
+        Returns:
+            (batch, seq_len) log-probabilities
+        """
+        stds = torch.exp(0.5 * log_vars)  # (batch, seq_len, K)
+        log_weights = torch.log(weights + 1e-10)
+
+        # Prepare bounds — expand to (batch, seq_len, 1) for component broadcasting.
+        # Clamp ±inf to finite values to avoid NaN gradients: the CDF computation
+        # Phi((bound - mean) / std) gives correct forward values at ±inf, but the
+        # gradient involves PDF(inf) * (-inf / std²) = 0 * inf = NaN.
+        # ±100 is effectively unbounded (normal PDF is exactly 0 for |x| > ~27).
+        _BOUND_CLAMP = 100.0
+        lo = lower.clamp(min=-_BOUND_CLAMP).unsqueeze(-1) if lower is not None else means.new_full((1,), -_BOUND_CLAMP)
+        hi = upper.clamp(max=_BOUND_CLAMP).unsqueeze(-1) if upper is not None else means.new_full((1,), _BOUND_CLAMP)
+
+        # Normalization constant: Z_k = Phi((hi - mu_k) / sigma_k) - Phi((lo - mu_k) / sigma_k)
+        z_hi = self._standard_normal_cdf((hi - means) / stds)
+        z_lo = self._standard_normal_cdf((lo - means) / stds)
+        log_Z = torch.log((z_hi - z_lo).clamp(min=1e-12))
+
+        # Start with continuous truncated NLL for all positions:
+        # log f_k(x) = -0.5 * ((x-mu)/sigma)^2 - log(sigma) - 0.5*log(2pi) - log(Z_k)
+        targets_expanded = targets.unsqueeze(-1)  # (batch, seq_len, 1)
+        z_scores = (targets_expanded - means) / stds
+        log_component = -0.5 * z_scores**2 - torch.log(stds) - 0.5 * _LOG_2PI - log_Z
+        log_mixture = torch.logsumexp(log_weights + log_component, dim=-1)
+
+        # For integer positions, replace with discretized probability:
+        # P_k(x) = (CDF_trunc(x + 0.5) - CDF_trunc(x - 0.5))
+        # where CDF_trunc(t) = (Phi((t-mu)/sigma) - Phi((lo-mu)/sigma)) / Z_k
+        if is_integer is not None and is_integer.any():
+            x_hi = (targets_expanded + 0.5).clamp(max=hi)
+            x_lo = (targets_expanded - 0.5).clamp(min=lo)
+            cdf_hi = self._standard_normal_cdf((x_hi - means) / stds)
+            cdf_lo = self._standard_normal_cdf((x_lo - means) / stds)
+            # P_k(x) = (cdf_hi - cdf_lo) / Z_k  (already unnormalized CDF differences)
+            Z = (z_hi - z_lo).clamp(min=1e-12)
+            p_component = ((cdf_hi - cdf_lo) / Z).clamp(min=1e-20)
+            # Mixture: P(x) = sum_k w_k * P_k(x)
+            p_discrete = (weights * p_component).sum(dim=-1)
+            log_mixture_discrete = torch.log(p_discrete.clamp(min=1e-20))
+            # Replace only at integer positions
+            log_mixture = torch.where(is_integer, log_mixture_discrete, log_mixture)
+
+        return log_mixture
 
     def sample(
         self,

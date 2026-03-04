@@ -37,6 +37,7 @@ class CompiledFieldConstraints:
     maximum: float | None = None
     required_key_ids: frozenset[int] | None = None
     unique_items: bool = False
+    is_integer: bool = False
 
 
 @dataclass
@@ -223,6 +224,7 @@ class SchemaPDA:
             minimum=schema_node.get("minimum"),
             maximum=schema_node.get("maximum"),
             unique_items=schema_node.get("uniqueItems", False),
+            is_integer=schema_node.get("type") == "integer",
         )
 
         # Pre-compute required key IDs for inference

@@ -88,6 +88,9 @@ class EncodedBatch:
     lengths: Tensor
     labels: Tensor | None = None
     grammar_mask: Tensor | None = None
+    numeric_lower: Tensor | None = None  # (batch, seq_len) truncation lower bounds
+    numeric_upper: Tensor | None = None  # (batch, seq_len) truncation upper bounds
+    is_integer: Tensor | None = None  # (batch, seq_len) bool, True for integer targets
 
     def to(self, device: torch.device) -> "EncodedBatch":
         """Move all tensors to the specified device."""
@@ -102,6 +105,9 @@ class EncodedBatch:
             lengths=self.lengths.to(device),
             labels=self.labels.to(device) if self.labels is not None else None,
             grammar_mask=self.grammar_mask.to(device) if self.grammar_mask is not None else None,
+            numeric_lower=self.numeric_lower.to(device) if self.numeric_lower is not None else None,
+            numeric_upper=self.numeric_upper.to(device) if self.numeric_upper is not None else None,
+            is_integer=self.is_integer.to(device) if self.is_integer is not None else None,
         )
 
 
@@ -264,10 +270,10 @@ class JSONTokenizer:
             numeric_values.append(None)
 
         elif isinstance(value, list):
-            # ARRAY_START
+            # ARRAY_START — store array length as numeric value for continuous head
             tokens.append(ARRAY_START)
             paths.append(path)
-            numeric_values.append(None)
+            numeric_values.append(float(len(value)))
 
             # Array elements
             for i, item in enumerate(value):

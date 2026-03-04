@@ -342,6 +342,7 @@ class InferenceConfig(PrettyReprMixin):
 
     constrain_grammar: bool = True
     constrain_schema: bool = False
+    enforce_array_lengths: bool = True
 
 
 @dataclass(repr=False)

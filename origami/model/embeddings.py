@@ -34,8 +34,9 @@ class OrigamiEmbeddings(nn.Module):
             (only present when use_continuous_head=True)
     """
 
-    # NUM token ID is fixed at 9 in the vocabulary
+    # Fixed grammar token IDs from the vocabulary
     NUM_TOKEN_ID = 9
+    ARRAY_START_ID = 4
 
     def __init__(self, config: ModelConfig, vocab_size: int):
         """Initialize embedding layer.
@@ -107,17 +108,16 @@ class OrigamiEmbeddings(nn.Module):
         # 1. Token embeddings
         embeds = self.token_embedding(input_ids)  # (batch, seq_len, d_model)
 
-        # 2. Replace NUM token embeddings with multiplicative numeric embeddings
-        # Embedding = scaled_value × learnable_direction_vector
+        # 2. Replace continuous token embeddings with multiplicative numeric embeddings
+        # Applies to NUM tokens (scaled numeric values) and ARRAY_START tokens
+        # (normalized array lengths). Embedding = value × learnable_direction_vector
         if hasattr(self, "num_embedding") and numeric_values is not None:
-            is_num = input_ids == self.NUM_TOKEN_ID  # (batch, seq_len)
-            if is_num.any():
-                # Compute numeric embedding: scaled_value × num_embedding
-                # numeric_values: (batch, seq_len) → (batch, seq_len, 1)
-                # num_embedding: (d_model,) → broadcasts
+            is_continuous = (input_ids == self.NUM_TOKEN_ID) | (
+                input_ids == self.ARRAY_START_ID
+            )
+            if is_continuous.any():
                 num_embeds = numeric_values.unsqueeze(-1) * self.num_embedding
-                # Replace embeddings at NUM positions
-                embeds = torch.where(is_num.unsqueeze(-1), num_embeds, embeds)
+                embeds = torch.where(is_continuous.unsqueeze(-1), num_embeds, embeds)
 
         # 3. Add position encoding
         if self.config.position_encoding == "kvpe":

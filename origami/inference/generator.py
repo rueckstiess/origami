@@ -164,6 +164,7 @@ class OrigamiGenerator:
         schema: dict | None = None,
         constrain_grammar: bool = True,
         constrain_schema: bool = False,
+        enforce_array_lengths: bool = True,
     ):
         """Initialize generator.
 
@@ -179,6 +180,11 @@ class OrigamiGenerator:
             constrain_schema: If True, apply schema constraints during generation.
                 Requires schema to be provided. Raises ValueError if True without
                 a schema.
+            enforce_array_lengths: If True (default), sample array lengths from the
+                continuous head at ARRAY_START tokens and enforce the sampled length
+                via grammar masking. Requires use_continuous_head=True in model config
+                and constrain_schema=True for hard enforcement. Without schema, the
+                sampled length still conditions the model via numeric embeddings.
 
         Note:
             The Generator uses the model's current device dynamically.
@@ -190,6 +196,7 @@ class OrigamiGenerator:
         self.model = model
         self.tokenizer = tokenizer
         self.prevent_duplicate_keys = prevent_duplicate_keys
+        self._enforce_array_lengths = enforce_array_lengths
         self.model.eval()
 
         # Collator for batch creation (include_labels=False for inference)
@@ -350,15 +357,23 @@ class OrigamiGenerator:
         self,
         path_states: list[PathState],
         schema_states: list["SchemaState"],
+        target_length_stacks: list[list[int]] | None = None,
     ) -> Tensor:
         """Compute schema constraint mask for the next token position.
 
         Combines path-dependent constraints (type/enum/key) from the mask table
         with count-dependent adjustments (required, minItems, maxItems).
 
+        When target_length_stacks is provided, sampled array lengths override
+        the schema's minItems/maxItems bounds for hard enforcement of the
+        continuous head's predicted array lengths.
+
         Args:
             path_states: Path state for each active sequence
             schema_states: Schema state for each active sequence
+            target_length_stacks: Optional per-sequence stacks of sampled array
+                lengths. When available, the innermost stack entry overrides
+                schema min/max items for that array nesting level.
 
         Returns:
             ``(batch, vocab_size)`` boolean mask
@@ -399,8 +414,25 @@ class OrigamiGenerator:
                     else ""
                 )
                 constraints = schema_pda.get_constraints(arr_path)
-                if constraints:
-                    arr_count = ss.array_counts[-1] if ss.array_counts else 0
+                arr_count = ss.array_counts[-1] if ss.array_counts else 0
+
+                # Check for sampled target length from continuous head
+                target_len = None
+                if target_length_stacks is not None and target_length_stacks[i]:
+                    target_len = target_length_stacks[i][-1]
+
+                if target_len is not None:
+                    # Enforce exact sampled array length
+                    if arr_count < target_len:
+                        mask[i, vocab.array_end_id] = False
+                    if arr_count >= target_len:
+                        for vid in vocab._value_ids:
+                            mask[i, vid] = False
+                        mask[i, vocab.obj_start_id] = False
+                        mask[i, vocab.array_start_id] = False
+                        mask[i, vocab.num_token_id] = False
+                        mask[i, vocab.unk_value_id] = False
+                elif constraints:
                     if constraints.min_items is not None and arr_count < constraints.min_items:
                         # Suppress ARRAY_END until min items reached
                         mask[i, vocab.array_end_id] = False
@@ -413,10 +445,10 @@ class OrigamiGenerator:
                         mask[i, vocab.num_token_id] = False
                         mask[i, vocab.unk_value_id] = False
 
-                    # uniqueItems: suppress already-seen value token IDs
-                    if constraints.unique_items and ss.seen_array_values:
-                        for seen_id in ss.seen_array_values[-1]:
-                            mask[i, seen_id] = False
+                # uniqueItems: always applies regardless of target length
+                if constraints and constraints.unique_items and ss.seen_array_values:
+                    for seen_id in ss.seen_array_values[-1]:
+                        mask[i, seen_id] = False
 
         return mask
 
@@ -616,6 +648,14 @@ class OrigamiGenerator:
         # Track sampled numeric values for later decoding (list of lists)
         sampled_numeric_values: list[list[float]] = [[] for _ in range(original_batch_size)]
 
+        # Track target array lengths for enforcement (stack per active sequence)
+        should_enforce_lengths = (
+            self._enforce_array_lengths and self.model.continuous_head is not None
+        )
+        target_length_stacks: list[list[int]] | None = None
+        if should_enforce_lengths:
+            target_length_stacks = [[] for _ in range(original_batch_size)]
+
         # Initialize path states for each sequence from their token prefixes
         path_states = []
         for i in range(original_batch_size):
@@ -734,7 +774,9 @@ class OrigamiGenerator:
 
             # Apply schema constraints (type/enum/key + count-dependent)
             if self._schema_pda is not None and schema_states is not None:
-                schema_mask = self._compute_schema_mask(path_states, schema_states)
+                schema_mask = self._compute_schema_mask(
+                    path_states, schema_states, target_length_stacks
+                )
                 next_logits = next_logits.masked_fill(~schema_mask, float("-inf"))
 
             # Apply duplicate key prevention
@@ -803,6 +845,62 @@ class OrigamiGenerator:
                 # Only use sampled value where NUM was generated
                 new_numeric_values[:, 0] = torch.where(is_num, sampled, new_numeric_values[:, 0])
 
+            # Sample array lengths for ARRAY_START tokens from continuous head
+            is_array_start = next_tokens == vocab.array_start_id
+            if (
+                should_enforce_lengths
+                and is_array_start.any()
+                and output.continuous_params is not None
+            ):
+                from origami.training.collator import DEFAULT_MAX_ARRAY
+
+                weights, means, log_vars = output.continuous_params
+                w = weights[:, -1, :]
+                m = means[:, -1, :]
+                lv = log_vars[:, -1, :]
+
+                # Resolve normalized bounds for truncated sampling
+                lo_vals = torch.zeros(batch_size, device=self.device)
+                hi_vals = torch.ones(batch_size, device=self.device)
+                normalization = torch.full(
+                    (batch_size,), float(DEFAULT_MAX_ARRAY), device=self.device
+                )
+
+                if self._schema_pda is not None:
+                    for i, ps in enumerate(path_states):
+                        if not is_array_start[i]:
+                            continue
+                        schema_path = self._resolve_schema_path(ps)
+                        if schema_path is not None:
+                            constraints = self._schema_pda.get_constraints(schema_path)
+                            if constraints:
+                                if constraints.max_items is not None:
+                                    normalization[i] = float(constraints.max_items)
+                                if constraints.min_items is not None:
+                                    lo_vals[i] = constraints.min_items / normalization[i]
+
+                # Sample from MoG (truncated to normalized bounds)
+                sampled_norm = self.model.continuous_head.sample(
+                    w.unsqueeze(1),
+                    m.unsqueeze(1),
+                    lv.unsqueeze(1),
+                    lower=lo_vals.unsqueeze(1),
+                    upper=hi_vals.unsqueeze(1),
+                ).squeeze(1)  # (batch,)
+
+                # Denormalize and round to integer
+                sampled_lengths = (sampled_norm * normalization).round().long().clamp(min=0)
+
+                # Store normalized value for conditioning
+                new_numeric_values[:, 0] = torch.where(
+                    is_array_start, sampled_norm, new_numeric_values[:, 0]
+                )
+
+                # Push sampled lengths onto per-sequence stacks
+                for i in range(batch_size):
+                    if is_array_start[i]:
+                        target_length_stacks[i].append(sampled_lengths[i].item())
+
             # Track sampled values for decoding
             for i in range(batch_size):
                 orig_idx = active_indices[i]
@@ -840,6 +938,15 @@ class OrigamiGenerator:
                     if not is_done:
                         self._schema_pda.update_state(token_id, schema_states[idx_s])
 
+            # Pop from target length stacks on ARRAY_END
+            if target_length_stacks is not None:
+                for i, (token_id, is_done) in enumerate(
+                    zip(next_tokens.tolist(), just_completed.tolist(), strict=True)
+                ):
+                    if not is_done and token_id == vocab.array_end_id:
+                        if target_length_stacks[i]:
+                            target_length_stacks[i].pop()
+
             # Extend tensors with new tokens
             current_ids = torch.cat([current_ids, next_tokens.unsqueeze(1)], dim=1)
             current_path_types = torch.cat([current_path_types, new_path_types], dim=1)
@@ -860,6 +967,7 @@ class OrigamiGenerator:
                 new_active_indices = []
                 new_path_states = []
                 new_schema_states = [] if schema_states is not None else None
+                new_target_stacks = [] if target_length_stacks is not None else None
 
                 for i, (is_complete, orig_idx) in enumerate(
                     zip(completed_mask, active_indices, strict=True)
@@ -878,6 +986,8 @@ class OrigamiGenerator:
                         new_path_states.append(path_states[i])
                         if new_schema_states is not None:
                             new_schema_states.append(schema_states[i])
+                        if new_target_stacks is not None:
+                            new_target_stacks.append(target_length_stacks[i])
 
                 # Compact tensors to only keep active sequences
                 if keep_indices:
@@ -919,6 +1029,8 @@ class OrigamiGenerator:
                 path_states = new_path_states
                 if new_schema_states is not None:
                     schema_states = new_schema_states
+                if new_target_stacks is not None:
+                    target_length_stacks = new_target_stacks
 
         # Store any remaining sequences that didn't complete (hit max_tokens)
         incomplete_indices = set()

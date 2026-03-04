@@ -65,6 +65,7 @@ class OrigamiPredictor:
         schema: dict | None = None,
         constrain_grammar: bool = True,
         constrain_schema: bool = False,
+        enforce_array_lengths: bool = True,
     ):
         """Initialize predictor.
 
@@ -80,6 +81,8 @@ class OrigamiPredictor:
             constrain_grammar: If True (default), apply grammar constraints.
                 See OrigamiGenerator for details.
             constrain_schema: If True, apply schema constraints. Requires schema.
+                See OrigamiGenerator for details.
+            enforce_array_lengths: If True (default), enforce sampled array lengths.
                 See OrigamiGenerator for details.
 
         Note:
@@ -101,6 +104,7 @@ class OrigamiPredictor:
             schema=schema,
             constrain_grammar=constrain_grammar,
             constrain_schema=constrain_schema,
+            enforce_array_lengths=enforce_array_lengths,
         )
 
         # Create collator for batch creation (include_labels=False for inference)

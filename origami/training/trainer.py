@@ -901,6 +901,9 @@ class OrigamiTrainer:
             numeric_mask=batch.numeric_mask,
             grammar_mask=grammar_mask,
             loss_weights=loss_weights,
+            numeric_lower=batch.numeric_lower,
+            numeric_upper=batch.numeric_upper,
+            is_integer=batch.is_integer,
         )
         loss = output.loss
 

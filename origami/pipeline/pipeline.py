@@ -1188,6 +1188,7 @@ class OrigamiPipeline:
                 schema=self._schema,
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
+                enforce_array_lengths=inference_cfg.enforce_array_lengths,
             )
         return self._generator
 
@@ -1207,6 +1208,7 @@ class OrigamiPipeline:
                 schema=self._schema,
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
+                enforce_array_lengths=inference_cfg.enforce_array_lengths,
             )
         return self._predictor
 

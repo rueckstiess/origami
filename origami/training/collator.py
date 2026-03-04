@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 
 import torch
 
+# Default max array length for normalization when no schema is available
+DEFAULT_MAX_ARRAY = 20
+
 if TYPE_CHECKING:
     from origami.constraints.json_grammar import JSONGrammarPDA
     from origami.constraints.schema_pda import SchemaPDA
@@ -139,10 +142,17 @@ class OrigamiDataCollator:
             attention_mask[b, start_pos:] = True
 
             # Fill numeric values at the correct left-padded positions
+            # For ARRAY_START tokens, normalize array length to ~[0, 1] range
+            array_start_id = vocab.array_start_id
             for t, num_val in enumerate(inst.numeric_values[:seq_len]):
                 if num_val is not None:
                     pos = start_pos + t
-                    numeric_values[b, pos] = num_val
+                    if token_ids[t] == array_start_id:
+                        # Normalize array length by max_items from schema (or default)
+                        norm = self._get_array_normalization(paths[t])
+                        numeric_values[b, pos] = num_val / norm
+                    else:
+                        numeric_values[b, pos] = num_val
                     numeric_mask[b, pos] = True
 
             # Encode paths at the correct (left-padded) positions
@@ -170,8 +180,8 @@ class OrigamiDataCollator:
 
         # Compute schema mask if SchemaPDA is provided
         schema_mask = None
+        start_positions = [max_seq_len - len(ids) for ids in batch_token_ids]
         if self.schema_pda is not None:
-            start_positions = [max_seq_len - len(ids) for ids in batch_token_ids]
             schema_indices = self.schema_pda.resolve_mask_indices(
                 batch_paths, batch_size, max_seq_len, start_positions
             )
@@ -182,6 +192,16 @@ class OrigamiDataCollator:
             grammar_mask = grammar_mask & schema_mask
         elif schema_mask is not None:
             grammar_mask = schema_mask
+
+        # Resolve numeric bounds and is_integer from schema
+        numeric_lower = None
+        numeric_upper = None
+        is_integer = None
+        if self.schema_pda is not None and numeric_mask.any():
+            numeric_lower, numeric_upper, is_integer = self._resolve_numeric_bounds(
+                batch_paths, batch_token_ids, numeric_mask,
+                batch_size, max_seq_len, start_positions,
+            )
 
         # Move to device if specified
         if self.device is not None:
@@ -195,6 +215,12 @@ class OrigamiDataCollator:
             lengths = lengths.to(self.device)
             if grammar_mask is not None:
                 grammar_mask = grammar_mask.to(self.device)
+            if numeric_lower is not None:
+                numeric_lower = numeric_lower.to(self.device)
+            if numeric_upper is not None:
+                numeric_upper = numeric_upper.to(self.device)
+            if is_integer is not None:
+                is_integer = is_integer.to(self.device)
 
         from origami.tokenizer.json_tokenizer import EncodedBatch
 
@@ -209,7 +235,81 @@ class OrigamiDataCollator:
             lengths=lengths,
             labels=input_ids.clone() if self.include_labels else None,
             grammar_mask=grammar_mask,
+            numeric_lower=numeric_lower,
+            numeric_upper=numeric_upper,
+            is_integer=is_integer,
         )
+
+    def _resolve_numeric_bounds(
+        self,
+        batch_paths: list[list],
+        batch_token_ids: list[list[int]],
+        numeric_mask: torch.Tensor,
+        batch_size: int,
+        max_seq_len: int,
+        start_positions: list[int],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Resolve truncation bounds and is_integer from schema for numeric positions.
+
+        For each position where numeric_mask is True, looks up the schema path
+        and extracts minimum/maximum bounds and whether the field is integer-typed.
+
+        Returns:
+            Tuple of (numeric_lower, numeric_upper, is_integer) tensors,
+            each of shape (batch_size, max_seq_len).
+        """
+        numeric_lower = torch.full((batch_size, max_seq_len), float("-inf"))
+        numeric_upper = torch.full((batch_size, max_seq_len), float("inf"))
+        is_integer = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+
+        schema_pda = self.schema_pda
+        vocab = self.tokenizer.vocab
+        array_start_id = vocab.array_start_id
+
+        for b, (paths, token_ids, start_pos) in enumerate(
+            zip(batch_paths, batch_token_ids, start_positions, strict=True)
+        ):
+            for t, path in enumerate(paths):
+                pos = start_pos + t
+                if not numeric_mask[b, pos]:
+                    continue
+
+                is_array_start = token_ids[t] == array_start_id
+
+                # Normalize path and look up constraints
+                norm_path = schema_pda.normalize_path(path)
+                constraints = schema_pda.get_constraints(norm_path)
+
+                if is_array_start:
+                    # Array lengths are always non-negative integers.
+                    # Bounds are normalized to match the normalized numeric_values.
+                    norm = self._get_array_normalization(path)
+                    min_items = 0 if constraints is None or constraints.min_items is None else constraints.min_items
+                    max_items = norm if constraints is None or constraints.max_items is None else constraints.max_items
+                    numeric_lower[b, pos] = min_items / norm
+                    numeric_upper[b, pos] = max_items / norm
+                    is_integer[b, pos] = True
+                elif constraints is not None:
+                    if constraints.minimum is not None:
+                        numeric_lower[b, pos] = constraints.minimum
+                    if constraints.maximum is not None:
+                        numeric_upper[b, pos] = constraints.maximum
+                    if constraints.is_integer:
+                        is_integer[b, pos] = True
+
+        return numeric_lower, numeric_upper, is_integer
+
+    def _get_array_normalization(self, path) -> float:
+        """Get normalization constant for an array length at the given path.
+
+        Uses max_items from schema if available, otherwise DEFAULT_MAX_ARRAY.
+        """
+        if self.schema_pda is not None:
+            norm_path = self.schema_pda.normalize_path(path)
+            constraints = self.schema_pda.get_constraints(norm_path)
+            if constraints is not None and constraints.max_items is not None:
+                return float(constraints.max_items)
+        return float(DEFAULT_MAX_ARRAY)
 
     def collate_objects(
         self,
