@@ -79,6 +79,7 @@ _PARAM_SECTION_MAP = {
     "bin_strategy": "data",
     "max_vocab_size": "data",
     "infer_schema": "data",
+    "model_array_lengths": "data",
 }
 
 
@@ -377,9 +378,10 @@ def train(
         **extra_params.get("data", {}),
     }
 
-    # Enable continuous head when using scale mode
+    # Enable continuous head when using scale mode or array length modeling
     actual_numeric_mode = data_kwargs.get("numeric_mode", "disabled")
-    if actual_numeric_mode == "scale":
+    actual_model_array_lengths = data_kwargs.get("model_array_lengths", False)
+    if actual_numeric_mode == "scale" or actual_model_array_lengths:
         model_kwargs.setdefault("use_continuous_head", True)
 
     # Add evaluation config if target_key is provided

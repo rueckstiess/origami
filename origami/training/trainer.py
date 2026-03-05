@@ -160,6 +160,7 @@ class OrigamiTrainer:
         training_state: dict | None = None,
         schema: dict | None = None,
         inverse_transform_fn: Callable[[Any, str], Any] | None = None,
+        model_array_lengths: bool = False,
     ):
         """Initialize trainer.
 
@@ -181,12 +182,14 @@ class OrigamiTrainer:
             inverse_transform_fn: Optional function to inverse-transform predicted values.
                      Signature: (value, target_key) -> transformed_value.
                      Used for scaled numeric values to compute metrics on original scale.
+            model_array_lengths: If True, model array lengths using continuous head.
         """
         from origami.config import TrainingConfig
 
         self.model = model
         self.tokenizer = tokenizer
         self.config = config or TrainingConfig()
+        self._model_array_lengths = model_array_lengths
 
         # Determine if we should use accelerate
         # Only use accelerate when:
@@ -272,6 +275,7 @@ class OrigamiTrainer:
             # Single-threaded mode is configured at module import (NUMBA_NUM_THREADS=1)
             # to prevent thread contention and make forking safe.
             use_numba=True,
+            model_array_lengths=self._model_array_lengths,
         )
 
         # Store schema for inference use (evaluator predictions)
@@ -375,6 +379,7 @@ class OrigamiTrainer:
             schema=self._schema,
             constrain_grammar=self.config.constrain_grammar,
             constrain_schema=self.config.constrain_schema,
+            model_array_lengths=self._model_array_lengths,
         )
 
         # Track last evaluation step to avoid duplicate evals
@@ -860,6 +865,16 @@ class OrigamiTrainer:
                 if batch.grammar_mask is not None
                 else None
             ),
+            is_integer=(
+                batch.is_integer.to(self.device, non_blocking=nb)
+                if batch.is_integer is not None
+                else None
+            ),
+            discretization_step=(
+                batch.discretization_step.to(self.device, non_blocking=nb)
+                if batch.discretization_step is not None
+                else None
+            ),
         )
 
     def _train_step(self, batch: "EncodedBatch") -> tuple[float, int]:
@@ -901,9 +916,8 @@ class OrigamiTrainer:
             numeric_mask=batch.numeric_mask,
             grammar_mask=grammar_mask,
             loss_weights=loss_weights,
-            numeric_lower=batch.numeric_lower,
-            numeric_upper=batch.numeric_upper,
             is_integer=batch.is_integer,
+            discretization_step=batch.discretization_step,
         )
         loss = output.loss
 

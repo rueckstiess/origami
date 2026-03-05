@@ -50,6 +50,7 @@ class OrigamiDataCollator:
         grammar_pda: "JSONGrammarPDA | None" = None,
         schema_pda: "SchemaPDA | None" = None,
         use_numba: bool = True,
+        model_array_lengths: bool = False,
     ):
         """Initialize collator.
 
@@ -67,6 +68,9 @@ class OrigamiDataCollator:
                 and intersected with grammar masks.
             use_numba: If True, use numba for grammar mask computation.
                 Set to False when using DataLoader workers (fork + OpenMP conflict).
+            model_array_lengths: If True, include array length numeric values
+                for ARRAY_START tokens. If False, ARRAY_START tokens are treated
+                as pure grammar tokens with no numeric modeling.
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -75,6 +79,7 @@ class OrigamiDataCollator:
         self.grammar_pda = grammar_pda
         self.schema_pda = schema_pda
         self.use_numba = use_numba
+        self.model_array_lengths = model_array_lengths
 
     def __call__(
         self,
@@ -130,6 +135,10 @@ class OrigamiDataCollator:
         numeric_values = torch.zeros(batch_size, max_seq_len, dtype=torch.float)
         numeric_mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
 
+        # Integer position tracking for discretized logistic NLL
+        is_integer = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+        discretization_step = torch.zeros(batch_size, max_seq_len, dtype=torch.float)
+
         # Fill tensors with LEFT-PADDING
         # Content is placed at the END of the sequence, PADs at the START
         for b, (token_ids, paths, inst) in enumerate(
@@ -147,13 +156,17 @@ class OrigamiDataCollator:
             for t, num_val in enumerate(inst.numeric_values[:seq_len]):
                 if num_val is not None:
                     pos = start_pos + t
-                    if token_ids[t] == array_start_id:
+                    if token_ids[t] == array_start_id and self.model_array_lengths:
                         # Normalize array length by max_items from schema (or default)
                         norm = self._get_array_normalization(paths[t])
                         numeric_values[b, pos] = num_val / norm
-                    else:
+                        is_integer[b, pos] = True
+                        discretization_step[b, pos] = 1.0 / norm
+                        numeric_mask[b, pos] = True
+                    elif token_ids[t] != array_start_id:
                         numeric_values[b, pos] = num_val
-                    numeric_mask[b, pos] = True
+                        numeric_mask[b, pos] = True
+                    # else: array_start with model_array_lengths=False → skip
 
             # Encode paths at the correct (left-padded) positions
             for t, path in enumerate(paths):
@@ -193,16 +206,6 @@ class OrigamiDataCollator:
         elif schema_mask is not None:
             grammar_mask = schema_mask
 
-        # Resolve numeric bounds and is_integer from schema
-        numeric_lower = None
-        numeric_upper = None
-        is_integer = None
-        if self.schema_pda is not None and numeric_mask.any():
-            numeric_lower, numeric_upper, is_integer = self._resolve_numeric_bounds(
-                batch_paths, batch_token_ids, numeric_mask,
-                batch_size, max_seq_len, start_positions,
-            )
-
         # Move to device if specified
         if self.device is not None:
             input_ids = input_ids.to(self.device)
@@ -215,12 +218,8 @@ class OrigamiDataCollator:
             lengths = lengths.to(self.device)
             if grammar_mask is not None:
                 grammar_mask = grammar_mask.to(self.device)
-            if numeric_lower is not None:
-                numeric_lower = numeric_lower.to(self.device)
-            if numeric_upper is not None:
-                numeric_upper = numeric_upper.to(self.device)
-            if is_integer is not None:
-                is_integer = is_integer.to(self.device)
+            is_integer = is_integer.to(self.device)
+            discretization_step = discretization_step.to(self.device)
 
         from origami.tokenizer.json_tokenizer import EncodedBatch
 
@@ -235,69 +234,9 @@ class OrigamiDataCollator:
             lengths=lengths,
             labels=input_ids.clone() if self.include_labels else None,
             grammar_mask=grammar_mask,
-            numeric_lower=numeric_lower,
-            numeric_upper=numeric_upper,
             is_integer=is_integer,
+            discretization_step=discretization_step,
         )
-
-    def _resolve_numeric_bounds(
-        self,
-        batch_paths: list[list],
-        batch_token_ids: list[list[int]],
-        numeric_mask: torch.Tensor,
-        batch_size: int,
-        max_seq_len: int,
-        start_positions: list[int],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Resolve truncation bounds and is_integer from schema for numeric positions.
-
-        For each position where numeric_mask is True, looks up the schema path
-        and extracts minimum/maximum bounds and whether the field is integer-typed.
-
-        Returns:
-            Tuple of (numeric_lower, numeric_upper, is_integer) tensors,
-            each of shape (batch_size, max_seq_len).
-        """
-        numeric_lower = torch.full((batch_size, max_seq_len), float("-inf"))
-        numeric_upper = torch.full((batch_size, max_seq_len), float("inf"))
-        is_integer = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
-
-        schema_pda = self.schema_pda
-        vocab = self.tokenizer.vocab
-        array_start_id = vocab.array_start_id
-
-        for b, (paths, token_ids, start_pos) in enumerate(
-            zip(batch_paths, batch_token_ids, start_positions, strict=True)
-        ):
-            for t, path in enumerate(paths):
-                pos = start_pos + t
-                if not numeric_mask[b, pos]:
-                    continue
-
-                is_array_start = token_ids[t] == array_start_id
-
-                # Normalize path and look up constraints
-                norm_path = schema_pda.normalize_path(path)
-                constraints = schema_pda.get_constraints(norm_path)
-
-                if is_array_start:
-                    # Array lengths are always non-negative integers.
-                    # Bounds are normalized to match the normalized numeric_values.
-                    norm = self._get_array_normalization(path)
-                    min_items = 0 if constraints is None or constraints.min_items is None else constraints.min_items
-                    max_items = norm if constraints is None or constraints.max_items is None else constraints.max_items
-                    numeric_lower[b, pos] = min_items / norm
-                    numeric_upper[b, pos] = max_items / norm
-                    is_integer[b, pos] = True
-                elif constraints is not None:
-                    if constraints.minimum is not None:
-                        numeric_lower[b, pos] = constraints.minimum
-                    if constraints.maximum is not None:
-                        numeric_upper[b, pos] = constraints.maximum
-                    if constraints.is_integer:
-                        is_integer[b, pos] = True
-
-        return numeric_lower, numeric_upper, is_integer
 
     def _get_array_normalization(self, path) -> float:
         """Get normalization constant for an array length at the given path.

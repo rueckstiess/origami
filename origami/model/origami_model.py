@@ -106,12 +106,11 @@ class OrigamiModel(nn.Module):
         numeric_mask: Tensor | None = None,  # (batch, seq_len)
         grammar_mask: Tensor | None = None,  # (batch, seq_len, vocab_size) - explicit!
         loss_weights: Tensor | None = None,  # (batch, seq_len) - per-token loss weights
+        is_integer: Tensor | None = None,  # (batch, seq_len) - integer positions
+        discretization_step: Tensor | None = None,  # (batch, seq_len) - bin width
         past_key_values: "KVCache | None" = None,
         use_cache: bool = False,
         position_ids: Tensor | None = None,  # (batch, seq_len) - for sequential PE
-        numeric_lower: Tensor | None = None,  # (batch, seq_len) - truncation lower bounds
-        numeric_upper: Tensor | None = None,  # (batch, seq_len) - truncation upper bounds
-        is_integer: Tensor | None = None,  # (batch, seq_len) - bool for discretized NLL
     ) -> OrigamiOutput:
         """Forward pass through the model.
 
@@ -202,9 +201,8 @@ class OrigamiModel(nn.Module):
                 continuous_params=continuous_params,
                 numeric_values=numeric_values,
                 numeric_mask=numeric_mask,
-                numeric_lower=numeric_lower,
-                numeric_upper=numeric_upper,
                 is_integer=is_integer,
+                discretization_step=discretization_step,
             )
 
         return OrigamiOutput(
@@ -257,9 +255,8 @@ class OrigamiModel(nn.Module):
         continuous_params: tuple[Tensor, Tensor, Tensor] | None,
         numeric_values: Tensor | None,
         numeric_mask: Tensor | None,
-        numeric_lower: Tensor | None = None,
-        numeric_upper: Tensor | None = None,
         is_integer: Tensor | None = None,
+        discretization_step: Tensor | None = None,
     ) -> Tensor:
         """Compute combined discrete and continuous loss.
 
@@ -274,9 +271,6 @@ class OrigamiModel(nn.Module):
             continuous_params: MoG parameters if continuous head enabled
             numeric_values: Target numeric values for continuous loss
             numeric_mask: Mask for continuous token positions
-            numeric_lower: Truncation lower bounds for continuous loss
-            numeric_upper: Truncation upper bounds for continuous loss
-            is_integer: Boolean mask for discretized NLL at integer positions
 
         Returns:
             Scalar loss value
@@ -355,10 +349,11 @@ class OrigamiModel(nn.Module):
                 shift_loss_weights = (
                     loss_weights[:, 1:].contiguous() if loss_weights is not None else None
                 )
-                # Shift truncation bounds and is_integer too
-                shift_lower = numeric_lower[:, 1:] if numeric_lower is not None else None
-                shift_upper = numeric_upper[:, 1:] if numeric_upper is not None else None
+                # Shift integer position info for discretized logistic NLL
                 shift_is_integer = is_integer[:, 1:] if is_integer is not None else None
+                shift_disc_step = (
+                    discretization_step[:, 1:] if discretization_step is not None else None
+                )
                 continuous_loss = self.continuous_head.nll_loss(
                     shift_weights,
                     shift_means,
@@ -366,9 +361,8 @@ class OrigamiModel(nn.Module):
                     shift_numeric_values,
                     shift_numeric_mask,
                     loss_weights=shift_loss_weights,
-                    lower=shift_lower,
-                    upper=shift_upper,
                     is_integer=shift_is_integer,
+                    discretization_step=shift_disc_step,
                 )
 
                 # Calculate loss weight

@@ -440,218 +440,303 @@ class TestMixedDiscreteAndContinuous:
 
 
 class TestTruncatedMoG:
-    """Tests for truncated MoG NLL and discretized NLL."""
+    """Tests for MoG NLL and truncated sampling."""
 
     @pytest.fixture
     def head(self):
         config = ModelConfig(use_continuous_head=True, num_mixture_components=5, d_model=32)
         return ContinuousHead(config)
 
-    def test_nll_no_bounds_matches_standard(self, head):
-        """Without bounds, truncated path should match standard path."""
+    def test_truncated_sampling_respects_bounds(self, head):
+        """Truncated sampling produces values within [lower, upper]."""
         torch.manual_seed(42)
-        batch, seq, K = 2, 4, head.n_components
+        batch, seq, K = 8, 1, head.n_components
         weights = torch.softmax(torch.randn(batch, seq, K), dim=-1)
         means = torch.randn(batch, seq, K)
+        log_vars = torch.zeros(batch, seq, K)
+        lower = torch.zeros(batch, seq)
+        upper = torch.ones(batch, seq)
+
+        samples = head.sample(weights, means, log_vars, lower=lower, upper=upper)
+        assert (samples >= 0).all(), f"Samples below lower bound: {samples.min()}"
+        assert (samples <= 1).all(), f"Samples above upper bound: {samples.max()}"
+
+class TestDiscretizedLogisticNLL:
+    """Tests for the discretized logistic mixture NLL used for integer positions."""
+
+    @pytest.fixture
+    def head(self):
+        config = ModelConfig(use_continuous_head=True, num_mixture_components=5, d_model=32)
+        return ContinuousHead(config)
+
+    def test_interior_bin(self, head):
+        """Single component at target: verify NLL matches manual sigmoid computation."""
+        import math
+
+        # 1 component, target=0.5, mean=0.5, scale=0.1, step=0.2
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[0.5]]])
+        log_vars = torch.tensor([[[2 * math.log(0.1)]]])  # scale = exp(0.5*lv) = 0.1
+        targets = torch.tensor([[0.5]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.2]])
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+
+        # Manual: sigmoid((0.6 - 0.5)/0.1) - sigmoid((0.4 - 0.5)/0.1)
+        #       = sigmoid(1.0) - sigmoid(-1.0)
+        p = torch.sigmoid(torch.tensor(1.0)) - torch.sigmoid(torch.tensor(-1.0))
+        expected_nll = -math.log(p.item())
+        assert abs(loss.item() - expected_nll) < 0.01
+
+    def test_lower_boundary_absorbs_mass(self, head):
+        """Target at lower boundary (0.0): all mass below is absorbed."""
+        import math
+
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[0.0]]])
+        log_vars = torch.zeros(1, 1, 1)  # scale = 1.0
+        targets = torch.tensor([[0.0]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.2]])  # half_step = 0.1
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+
+        # Lower boundary: sigmoid((0.1 - 0)/1.0) - sigmoid(-20) ≈ sigmoid(0.1)
+        expected = -math.log(torch.sigmoid(torch.tensor(0.1)).item())
+        assert abs(loss.item() - expected) < 0.01
+        assert loss.isfinite()
+
+    def test_upper_boundary_absorbs_mass(self, head):
+        """Target at upper boundary (1.0): all mass above is absorbed."""
+        import math
+
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[1.0]]])
+        log_vars = torch.zeros(1, 1, 1)  # scale = 1.0
+        targets = torch.tensor([[1.0]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.2]])
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+        # Upper boundary: sigmoid(20) - sigmoid((0.9 - 1.0)/1.0) = 1 - sigmoid(-0.1) = sigmoid(0.1)
+        expected = -math.log(torch.sigmoid(torch.tensor(0.1)).item())
+        assert abs(loss.item() - expected) < 0.01
+        assert loss.isfinite()
+
+    def test_no_nan_extreme_means(self, head):
+        """No NaN even when component means are far from target."""
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[100.0]]])
+        log_vars = torch.zeros(1, 1, 1)
+        targets = torch.tensor([[0.5]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.1]])
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+        assert loss.isfinite()
+
+    def test_numerical_stability_tiny_scale(self, head):
+        """Very small scale (sharp distribution) doesn't produce NaN."""
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[0.5]]])
+        log_vars = torch.tensor([[[-20.0]]])  # scale ≈ 4.5e-5
+        targets = torch.tensor([[0.5]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.1]])
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+        assert loss.isfinite()
+
+    def test_numerical_stability_large_scale(self, head):
+        """Very large scale (flat distribution) doesn't produce NaN."""
+        weights = torch.ones(1, 1, 1)
+        means = torch.tensor([[[0.5]]])
+        log_vars = torch.tensor([[[20.0]]])  # scale ≈ 22026
+        targets = torch.tensor([[0.5]])
+        mask = torch.ones(1, 1, dtype=torch.bool)
+        is_integer = torch.ones(1, 1, dtype=torch.bool)
+        step = torch.tensor([[0.1]])
+
+        loss = head.nll_loss(
+            weights, means, log_vars, targets, mask,
+            is_integer=is_integer, discretization_step=step,
+        )
+        assert loss.isfinite()
+
+    def test_backward_compat_no_is_integer(self, head):
+        """When is_integer is None, behavior identical to standard Gaussian NLL."""
+        torch.manual_seed(42)
+        weights = torch.softmax(torch.randn(2, 4, 5), dim=-1)
+        means = torch.randn(2, 4, 5)
+        log_vars = torch.randn(2, 4, 5)
+        targets = torch.randn(2, 4)
+        mask = torch.ones(2, 4, dtype=torch.bool)
+
+        loss_old = head._nll_loss_standard(weights, means, log_vars, targets, mask, None)
+        loss_new = head.nll_loss(weights, means, log_vars, targets, mask)
+        assert torch.allclose(loss_old, loss_new)
+
+    def test_mixed_integer_float_positions(self, head):
+        """Mixed batch: integer positions use logistic, float positions use Gaussian."""
+        torch.manual_seed(42)
+        batch, seq, K = 1, 4, head.n_components
+        weights = torch.softmax(torch.randn(batch, seq, K), dim=-1)
+        means = torch.randn(batch, seq, K) * 0.5
         log_vars = torch.randn(batch, seq, K) * 0.5
-        targets = torch.randn(batch, seq)
-        mask = torch.ones(batch, seq, dtype=torch.bool)
-
-        # Standard path (no bounds at all)
-        loss_std = head.nll_loss(weights, means, log_vars, targets, mask)
-        # Truncated path with ±inf bounds (should be equivalent)
-        lower = torch.full((batch, seq), float("-inf"))
-        upper = torch.full((batch, seq), float("inf"))
-        loss_trunc = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper,
-        )
-        torch.testing.assert_close(loss_std, loss_trunc, atol=1e-4, rtol=1e-4)
-
-    def test_nll_with_bounds_lower_than_unbounded(self, head):
-        """Truncated NLL should be <= unbounded NLL on data within bounds."""
-        torch.manual_seed(42)
-        batch, seq, K = 4, 6, head.n_components
-        weights = torch.softmax(torch.randn(batch, seq, K), dim=-1)
-        means = torch.randn(batch, seq, K) + 2.0  # bias means positive
-        log_vars = torch.zeros(batch, seq, K)
-        # Non-negative targets
-        targets = torch.rand(batch, seq) * 5
-        mask = torch.ones(batch, seq, dtype=torch.bool)
-
-        loss_unbounded = head.nll_loss(weights, means, log_vars, targets, mask)
-        lower = torch.zeros(batch, seq)
-        upper = torch.full((batch, seq), 10.0)
-        loss_bounded = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper,
-        )
-        # Bounded NLL should be lower (more probability mass on valid range)
-        assert loss_bounded.item() <= loss_unbounded.item() + 1e-5
-
-    def test_nll_integer_discretized(self, head):
-        """Discretized NLL should give proper probabilities for integers."""
-        torch.manual_seed(42)
-        batch, seq, K = 1, 3, head.n_components
-        weights = torch.softmax(torch.randn(batch, seq, K), dim=-1)
-        means = torch.randn(batch, seq, K)
-        log_vars = torch.zeros(batch, seq, K)
-        targets = torch.tensor([[0.0, 1.0, 2.0]])
-        mask = torch.ones(batch, seq, dtype=torch.bool)
-        lower = torch.zeros(batch, seq)
-        upper = torch.full((batch, seq), 10.0)
-        is_integer = torch.ones(batch, seq, dtype=torch.bool)
-
-        loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper, is_integer=is_integer,
-        )
-        assert loss.isfinite()
-        assert loss.item() > 0
-
-    def test_nll_mixed_integer_and_continuous(self, head):
-        """Mix of integer and continuous positions in same batch."""
-        torch.manual_seed(42)
-        batch, seq, K = 2, 4, head.n_components
-        weights = torch.softmax(torch.randn(batch, seq, K), dim=-1)
-        means = torch.randn(batch, seq, K)
-        log_vars = torch.zeros(batch, seq, K)
-        targets = torch.randn(batch, seq).abs()
-        mask = torch.ones(batch, seq, dtype=torch.bool)
-        lower = torch.zeros(batch, seq)
-        upper = torch.full((batch, seq), 10.0)
-        # Only first two positions per batch are integer
-        is_integer = torch.zeros(batch, seq, dtype=torch.bool)
-        is_integer[:, :2] = True
-
-        loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper, is_integer=is_integer,
-        )
-        assert loss.isfinite()
-
-    def test_gradient_flow_through_truncated_nll(self, head):
-        """Gradients flow through truncation normalization."""
-        batch, seq, K = 2, 3, head.n_components
-        hidden = torch.randn(batch, seq, head.d_model, requires_grad=True)
-        weights, means, log_vars = head(hidden)
-        targets = torch.rand(batch, seq) * 5
-        mask = torch.ones(batch, seq, dtype=torch.bool)
-        lower = torch.zeros(batch, seq)
-        upper = torch.full((batch, seq), 10.0)
-        is_integer = torch.ones(batch, seq, dtype=torch.bool)
-
-        loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper, is_integer=is_integer,
-        )
-        loss.backward()
-        assert hidden.grad is not None
-        assert hidden.grad.abs().sum() > 0
-
-    def test_gradient_no_nan_with_inf_bounds(self, head):
-        """Gradients must be finite when bounds contain ±inf (non-numeric positions).
-
-        Regression test: ±inf bounds caused 0 * inf = NaN in autograd because
-        the CDF gradient PDF(inf) * (-inf/std²) is 0 * inf = NaN. Fixed by
-        clamping bounds to finite values in _log_mixture_prob.
-        """
-        batch, seq, K = 2, 6, head.n_components
-        hidden = torch.randn(batch, seq, head.d_model, requires_grad=True)
-        weights, means, log_vars = head(hidden)
         targets = torch.rand(batch, seq)
-        # Only some positions are numeric
-        mask = torch.zeros(batch, seq, dtype=torch.bool)
-        mask[:, 2] = True  # Only position 2 is numeric
-
-        # Bounds: finite at numeric positions, ±inf elsewhere (like collator produces)
-        lower = torch.full((batch, seq), float("-inf"))
-        upper = torch.full((batch, seq), float("inf"))
-        lower[:, 2] = 0.0
-        upper[:, 2] = 1.0
-        is_integer = torch.zeros(batch, seq, dtype=torch.bool)
-        is_integer[:, 2] = True
-
-        loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper, is_integer=is_integer,
-        )
-        assert loss.isfinite(), f"Loss is not finite: {loss.item()}"
-        loss.backward()
-        assert hidden.grad is not None
-        assert not torch.isnan(hidden.grad).any(), "NaN in gradients with ±inf bounds"
-        assert torch.isfinite(hidden.grad).all(), "Inf in gradients with ±inf bounds"
-
-    def test_gradient_no_nan_with_all_inf_bounds(self, head):
-        """Gradients must be finite even when ALL bounds are ±inf."""
-        batch, seq, K = 2, 4, head.n_components
-        hidden = torch.randn(batch, seq, head.d_model, requires_grad=True)
-        weights, means, log_vars = head(hidden)
-        targets = torch.randn(batch, seq)
         mask = torch.ones(batch, seq, dtype=torch.bool)
-
-        lower = torch.full((batch, seq), float("-inf"))
-        upper = torch.full((batch, seq), float("inf"))
+        is_integer = torch.tensor([[True, False, True, False]])
+        step = torch.full((batch, seq), 0.1)
 
         loss = head.nll_loss(
             weights, means, log_vars, targets, mask,
-            lower=lower, upper=upper,
+            is_integer=is_integer, discretization_step=step,
         )
         assert loss.isfinite()
-        loss.backward()
-        assert not torch.isnan(hidden.grad).any(), "NaN in gradients with all-inf bounds"
 
-    def test_collator_bounds_default_to_none_without_schema(self):
-        """Without schema_pda, bounds tensors should be None."""
-        data = [{"x": ScaledNumeric(0.5), "y": "a"}]
+        # Verify it's a weighted combination
+        gauss_loss = head._nll_loss_standard(
+            weights, means, log_vars, targets, mask & ~is_integer, None,
+        )
+        logistic_loss = head._nll_loss_discretized_logistic(
+            weights, means, log_vars, targets, mask & is_integer, step, None,
+        )
+        expected = (2 * gauss_loss + 2 * logistic_loss) / 4
+        assert torch.allclose(loss, expected, atol=1e-5)
+
+    def test_gradient_flow(self):
+        """Gradients flow correctly through the discretized logistic loss."""
+        config = ModelConfig(
+            use_continuous_head=True, num_mixture_components=3,
+            d_model=32, n_heads=2, n_layers=2,
+        )
+        data = [
+            {"items": [1, 2], "val": ScaledNumeric(0.5)},
+            {"items": [3], "val": ScaledNumeric(-0.1)},
+        ]
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
-        collator = OrigamiDataCollator(tokenizer)  # No schema_pda
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        model.train()
+
         instances = [tokenizer.tokenize(obj) for obj in data]
+        collator = OrigamiDataCollator(tokenizer, model_array_lengths=True)
         batch = collator(instances)
 
-        assert batch.numeric_lower is None
-        assert batch.numeric_upper is None
-        assert batch.is_integer is None
+        output = model(
+            batch.input_ids, batch.path_types, batch.path_ids,
+            batch.path_lengths, batch.attention_mask,
+            labels=batch.labels,
+            numeric_values=batch.numeric_values,
+            numeric_mask=batch.numeric_mask,
+            is_integer=batch.is_integer,
+            discretization_step=batch.discretization_step,
+        )
+        assert output.loss.isfinite()
+        output.loss.backward()
 
-    def test_collator_produces_bounds_with_schema(self):
-        """With schema_pda, bounds are populated at NUM positions."""
+        for param in model.continuous_head.parameters():
+            assert param.grad is not None
+            assert param.grad.isfinite().all()
+
+    def test_collator_sets_is_integer_for_array_start(self):
+        """Collator populates is_integer=True and correct step at ARRAY_START."""
         from origami.constraints.schema_pda import SchemaPDA
 
-        data = [{"count": ScaledNumeric(0.5), "name": "test"}]
+        data = [{"items": [1, 2, 3]}]
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
         schema = {
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "minimum": 0, "maximum": 100},
-                "name": {"type": "string"},
+                "items": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "maxItems": 10,
+                },
             },
         }
         schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
-        collator = OrigamiDataCollator(tokenizer, schema_pda=schema_pda)
-
+        collator = OrigamiDataCollator(
+            tokenizer, schema_pda=schema_pda, model_array_lengths=True,
+        )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
 
-        assert batch.numeric_lower is not None
-        assert batch.numeric_upper is not None
+        array_start_pos = batch.input_ids == 4
         assert batch.is_integer is not None
+        assert batch.is_integer[array_start_pos].all()
+        # Step should be 1/10 = 0.1
+        assert batch.discretization_step[array_start_pos].allclose(torch.tensor(0.1))
+        # Non-ARRAY_START positions should be False/0
+        assert not batch.is_integer[~array_start_pos].any()
 
-        # At NUM positions, bounds should be 0 and 100
-        num_positions = batch.numeric_mask
-        if num_positions.any():
-            assert (batch.numeric_lower[num_positions] == 0.0).all()
-            assert (batch.numeric_upper[num_positions] == 100.0).all()
-            assert batch.is_integer[num_positions].all()
+    def test_collator_no_is_integer_without_arrays(self):
+        """Without arrays, is_integer has no True values."""
+        data = [{"x": ScaledNumeric(0.5), "y": "a"}]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+        collator = OrigamiDataCollator(tokenizer)
+        instances = [tokenizer.tokenize(obj) for obj in data]
+        batch = collator(instances)
+        assert not batch.is_integer.any()
 
-        # At non-continuous positions, bounds should be -inf/+inf
-        non_num = ~num_positions & batch.attention_mask
-        if non_num.any():
-            assert (batch.numeric_lower[non_num] == float("-inf")).all()
-            assert (batch.numeric_upper[non_num] == float("inf")).all()
-            assert not batch.is_integer[non_num].any()
+    def test_collator_skips_array_start_when_model_array_lengths_false(self):
+        """Collator does NOT set numeric values for ARRAY_START when model_array_lengths=False."""
+        data = [{"items": [1, 2, 3]}]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        # Default: model_array_lengths=False
+        collator = OrigamiDataCollator(tokenizer)
+        instances = [tokenizer.tokenize(obj) for obj in data]
+        batch = collator(instances)
+
+        array_start_pos = batch.input_ids == 4
+        # No numeric mask at ARRAY_START
+        assert not (batch.numeric_mask & array_start_pos).any()
+        # No is_integer at ARRAY_START
+        assert not batch.is_integer[array_start_pos].any()
+        # No discretization_step at ARRAY_START
+        assert batch.discretization_step[array_start_pos].sum() == 0
+
+    def test_collator_preserves_numeric_values_when_model_array_lengths_false(self):
+        """Non-ARRAY_START numeric values are preserved when model_array_lengths=False."""
+        data = [{"items": [1, 2], "val": ScaledNumeric(0.5)}]
+        tokenizer = JSONTokenizer()
+        tokenizer.fit(data)
+
+        collator = OrigamiDataCollator(tokenizer, model_array_lengths=False)
+        instances = [tokenizer.tokenize(obj) for obj in data]
+        batch = collator(instances)
+
+        # ScaledNumeric should still have numeric values
+        assert batch.numeric_mask.any()
+        # But not at ARRAY_START positions
+        array_start_pos = batch.input_ids == 4
+        assert not (batch.numeric_mask & array_start_pos).any()
 
 
 class TestArrayLengthModeling:
@@ -720,7 +805,9 @@ class TestArrayLengthModeling:
             },
         }
         schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
-        collator = OrigamiDataCollator(tokenizer, schema_pda=schema_pda)
+        collator = OrigamiDataCollator(
+            tokenizer, schema_pda=schema_pda, model_array_lengths=True,
+        )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
 
@@ -733,40 +820,13 @@ class TestArrayLengthModeling:
         assert abs(batch.numeric_values[b, pos].item() - 0.3) < 1e-5
         assert batch.numeric_mask[b, pos]
 
-    def test_collator_array_bounds_normalized(self):
-        """Collator sets normalized bounds for array lengths."""
-        from origami.constraints.schema_pda import SchemaPDA
+    def test_embeddings_array_start_uses_learned_token(self):
+        """ARRAY_START uses its learned token embedding, not multiplicative numeric embedding.
 
-        data = [{"items": [1, 2]}]
-        tokenizer = JSONTokenizer()
-        tokenizer.fit(data)
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "minItems": 1,
-                    "maxItems": 10,
-                },
-            },
-        }
-        schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
-        collator = OrigamiDataCollator(tokenizer, schema_pda=schema_pda)
-        instances = [tokenizer.tokenize(obj) for obj in data]
-        batch = collator(instances)
-
-        array_start_pos = (batch.input_ids == 4).nonzero(as_tuple=False)
-        b, pos = array_start_pos[0].tolist()
-
-        # Bounds normalized: lower = 1/10 = 0.1, upper = 10/10 = 1.0
-        assert abs(batch.numeric_lower[b, pos].item() - 0.1) < 1e-5
-        assert abs(batch.numeric_upper[b, pos].item() - 1.0) < 1e-5
-        assert batch.is_integer[b, pos]
-
-    def test_embeddings_handle_array_start(self):
-        """Embedding output changes when array length changes."""
+        Array length is predicted by the continuous head from context but the
+        embedding doesn't encode it — length is enforced via mask overrides
+        during generation. This avoids the zero-embedding problem for empty arrays.
+        """
         data = [{"items": [1, 2, 3]}]
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
@@ -794,7 +854,8 @@ class TestArrayLengthModeling:
             )
 
         diff = (out1 - out2).abs()
-        assert diff[is_arr].sum() > 0
+        # ARRAY_START embedding should NOT change — it uses the learned token embedding
+        assert diff[is_arr].sum() == 0
 
     def test_loss_includes_array_length_positions(self):
         """Model loss is computed at ARRAY_START positions."""
@@ -813,7 +874,7 @@ class TestArrayLengthModeling:
         model.train()
 
         instances = [tokenizer.tokenize(obj) for obj in data]
-        collator = OrigamiDataCollator(tokenizer)
+        collator = OrigamiDataCollator(tokenizer, model_array_lengths=True)
         batch = collator(instances)
 
         # Verify ARRAY_START is in numeric_mask
@@ -829,3 +890,157 @@ class TestArrayLengthModeling:
         )
         assert output.loss is not None
         assert output.loss.isfinite()
+
+
+class TestSampleInteger:
+    """Tests for discretized logistic integer sampling."""
+
+    def test_basic_sampling_returns_integers(self):
+        """sample_integer returns integer values in valid range."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=3))
+        weights = torch.tensor([[[0.5, 0.3, 0.2]]])
+        means = torch.tensor([[[0.3, 0.5, 0.7]]])
+        log_vars = torch.tensor([[[-2.0, -2.0, -2.0]]])
+        max_values = torch.tensor([[5.0]])
+
+        torch.manual_seed(42)
+        sampled = head.sample_integer(weights, means, log_vars, max_values)
+        assert sampled.shape == (1, 1)
+        assert sampled.dtype == torch.int64
+        assert 0 <= sampled.item() <= 5
+
+    def test_min_values_respected(self):
+        """Samples are never below min_values."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        # Component centered at 0 — without min_values, would often sample 0
+        weights = torch.tensor([[[1.0]]])
+        means = torch.tensor([[[0.0]]])
+        log_vars = torch.tensor([[[-2.0]]])
+        max_values = torch.tensor([[5.0]])
+        min_values = torch.tensor([[2]])
+
+        samples = []
+        for seed in range(50):
+            torch.manual_seed(seed)
+            s = head.sample_integer(weights, means, log_vars, max_values, min_values)
+            samples.append(s.item())
+        assert all(s >= 2 for s in samples)
+
+    def test_max_values_respected(self):
+        """Samples are never above max_values."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        # Component centered at 1.0 — would want to sample high
+        weights = torch.tensor([[[1.0]]])
+        means = torch.tensor([[[1.0]]])
+        log_vars = torch.tensor([[[-2.0]]])
+        max_values = torch.tensor([[3.0]])
+
+        samples = []
+        for seed in range(50):
+            torch.manual_seed(seed)
+            s = head.sample_integer(weights, means, log_vars, max_values)
+            samples.append(s.item())
+        assert all(s <= 3 for s in samples)
+
+    def test_sharp_component_at_zero_samples_zero(self):
+        """Sharp component at 0 should mostly sample 0."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        weights = torch.tensor([[[1.0]]])
+        means = torch.tensor([[[0.0]]])
+        log_vars = torch.tensor([[[-6.0]]])  # very sharp
+        max_values = torch.tensor([[5.0]])
+
+        samples = []
+        for seed in range(100):
+            torch.manual_seed(seed)
+            s = head.sample_integer(weights, means, log_vars, max_values)
+            samples.append(s.item())
+        # Should be overwhelmingly 0 due to boundary absorption
+        assert sum(1 for s in samples if s == 0) > 80
+
+    def test_sharp_component_at_one_samples_max(self):
+        """Sharp component at 1.0 should mostly sample max_value."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        weights = torch.tensor([[[1.0]]])
+        means = torch.tensor([[[1.0]]])
+        log_vars = torch.tensor([[[-6.0]]])  # very sharp
+        max_values = torch.tensor([[5.0]])
+
+        samples = []
+        for seed in range(100):
+            torch.manual_seed(seed)
+            s = head.sample_integer(weights, means, log_vars, max_values)
+            samples.append(s.item())
+        assert sum(1 for s in samples if s == 5) > 80
+
+    def test_batch_with_different_max_values(self):
+        """Different max_values per position are handled correctly."""
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        weights = torch.tensor([[[1.0]], [[1.0]]])  # batch=2
+        means = torch.tensor([[[0.5]], [[0.5]]])
+        log_vars = torch.tensor([[[-2.0]], [[-2.0]]])
+        max_values = torch.tensor([[3.0], [10.0]])
+
+        samples_0, samples_1 = [], []
+        for seed in range(50):
+            torch.manual_seed(seed)
+            s = head.sample_integer(weights, means, log_vars, max_values)
+            samples_0.append(s[0, 0].item())
+            samples_1.append(s[1, 0].item())
+        assert all(s <= 3 for s in samples_0)
+        assert all(s <= 10 for s in samples_1)
+
+    def test_boundary_absorption_matches_training(self):
+        """Verify that sample_integer bin probabilities match the training loss.
+
+        For a single component, the probability of sampling bin k should match
+        the bin probability computed by _nll_loss_discretized_logistic.
+        """
+        head = ContinuousHead(ModelConfig(use_continuous_head=True, num_mixture_components=1))
+        weights = torch.tensor([[[1.0]]])
+        means = torch.tensor([[[0.3]]])
+        log_vars = torch.tensor([[[-1.0]]])
+        max_items = 5
+
+        # Collect empirical sampling distribution
+        from collections import Counter
+        counts = Counter()
+        n_samples = 5000
+        for seed in range(n_samples):
+            torch.manual_seed(seed)
+            s = head.sample_integer(
+                weights, means, log_vars, torch.tensor([[float(max_items)]])
+            )
+            counts[s.item()] += 1
+
+        # Compute theoretical bin probabilities from logistic CDF
+        mu = 0.3
+        scale = torch.exp(0.5 * torch.tensor(-1.0)).item()
+        step = 1.0 / max_items
+
+        theoretical_probs = {}
+        for k in range(max_items + 1):
+            t = k / max_items
+            half_step = step / 2
+            if k == 0:
+                p = torch.sigmoid(torch.tensor((t + half_step - mu) / scale)).item()
+            elif k == max_items:
+                p = 1.0 - torch.sigmoid(torch.tensor((t - half_step - mu) / scale)).item()
+            else:
+                cdf_plus = torch.sigmoid(torch.tensor((t + half_step - mu) / scale)).item()
+                cdf_minus = torch.sigmoid(torch.tensor((t - half_step - mu) / scale)).item()
+                p = cdf_plus - cdf_minus
+            theoretical_probs[k] = p
+
+        # Normalize
+        total = sum(theoretical_probs.values())
+        for k in theoretical_probs:
+            theoretical_probs[k] /= total
+
+        # Compare empirical vs theoretical (allow 3% tolerance)
+        for k in range(max_items + 1):
+            empirical = counts.get(k, 0) / n_samples
+            theoretical = theoretical_probs[k]
+            assert abs(empirical - theoretical) < 0.03, (
+                f"Bin {k}: empirical={empirical:.3f}, theoretical={theoretical:.3f}"
+            )

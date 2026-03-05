@@ -622,6 +622,64 @@ class TestPipelineRepr:
         pipeline = OrigamiPipeline(config)
         assert "scale" in repr(pipeline)
 
+    def test_repr_with_model_array_lengths(self):
+        """Test repr shows model_array_lengths when enabled."""
+        config = OrigamiConfig(data=DataConfig(model_array_lengths=True))
+        pipeline = OrigamiPipeline(config)
+        assert "model_array_lengths=True" in repr(pipeline)
+
+    def test_repr_without_model_array_lengths(self):
+        """Test repr omits model_array_lengths when disabled (default)."""
+        pipeline = OrigamiPipeline()
+        assert "model_array_lengths" not in repr(pipeline)
+
+
+class TestModelArrayLengthsDecoupling:
+    """Tests for decoupling model_array_lengths from numeric_mode."""
+
+    def test_model_array_lengths_enables_continuous_head(self):
+        """model_array_lengths=True enables continuous head even without scale mode."""
+        config = OrigamiConfig(
+            data=DataConfig(numeric_mode="disabled", model_array_lengths=True),
+        )
+        pipeline = OrigamiPipeline(config)
+        data = [{"items": [1, 2], "x": "a"}, {"items": [3], "x": "b"}]
+        pipeline.fit(data, epochs=1, verbose=False)
+        assert pipeline._model.continuous_head is not None
+
+    def test_numeric_scale_without_array_lengths(self):
+        """numeric_mode='scale' without model_array_lengths has continuous head but no enforcement."""
+        config = OrigamiConfig(
+            data=DataConfig(numeric_mode="scale", model_array_lengths=False),
+        )
+        pipeline = OrigamiPipeline(config)
+        data = [{"val": i, "label": "a"} for i in range(50)]
+        pipeline.fit(data, epochs=1, verbose=False)
+        assert pipeline._model.continuous_head is not None
+
+        # Generator should not enforce array lengths
+        generator = pipeline._get_generator()
+        assert not generator._enforce_array_lengths
+
+    def test_both_enabled(self):
+        """Both numeric_mode='scale' and model_array_lengths=True work together."""
+        config = OrigamiConfig(
+            data=DataConfig(numeric_mode="scale", model_array_lengths=True),
+        )
+        pipeline = OrigamiPipeline(config)
+        data = [{"val": i, "items": [1, 2]} for i in range(50)]
+        pipeline.fit(data, epochs=1, verbose=False)
+        assert pipeline._model.continuous_head is not None
+
+        # Generator should enforce array lengths
+        generator = pipeline._get_generator()
+        assert generator._enforce_array_lengths
+
+    def test_disabled_by_default(self):
+        """model_array_lengths defaults to False."""
+        config = OrigamiConfig()
+        assert config.data.model_array_lengths is False
+
 
 class TestPipelineDeviceManagement:
     """Tests for automatic device management."""

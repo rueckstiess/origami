@@ -66,6 +66,7 @@ class OrigamiEvaluator:
         constrain_grammar: bool = True,
         constrain_schema: bool = False,
         enforce_array_lengths: bool = True,
+        model_array_lengths: bool = False,
     ):
         """Initialize evaluator.
 
@@ -88,6 +89,8 @@ class OrigamiEvaluator:
                 if True without a schema.
             enforce_array_lengths: If True (default), enforce sampled array lengths
                 during predictions. See OrigamiGenerator for details.
+            model_array_lengths: If True, model array lengths using continuous head.
+                Passed to collator for loss computation.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -98,6 +101,7 @@ class OrigamiEvaluator:
         self._constrain_grammar = constrain_grammar
         self._constrain_schema = constrain_schema
         self._enforce_array_lengths = enforce_array_lengths
+        self._model_array_lengths = model_array_lengths
         self._predictor: OrigamiPredictor | None = None
 
         # Grammar PDA for loss computation
@@ -230,6 +234,7 @@ class OrigamiEvaluator:
             device=self.device,
             grammar_pda=self._grammar_pda,
             schema_pda=self._schema_pda,
+            model_array_lengths=self._model_array_lengths,
         )
         loader = DataLoader(
             dataset,
@@ -253,9 +258,8 @@ class OrigamiEvaluator:
                 numeric_values=batch.numeric_values,
                 numeric_mask=batch.numeric_mask,
                 grammar_mask=batch.grammar_mask,
-                numeric_lower=batch.numeric_lower,
-                numeric_upper=batch.numeric_upper,
                 is_integer=batch.is_integer,
+                discretization_step=batch.discretization_step,
             )
 
             total_loss += output.loss.item()

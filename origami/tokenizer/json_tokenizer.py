@@ -76,6 +76,10 @@ class EncodedBatch:
             Only present when include_labels=True during collation.
         grammar_mask: Pre-computed grammar validity mask, shape (batch, seq_len, vocab_size).
             Only present when grammar is computed during collation for parallel processing.
+        is_integer: Boolean mask for integer-valued positions (e.g., ARRAY_START),
+            shape (batch, seq_len). Used to select discretized logistic NLL.
+        discretization_step: Bin width for discretized logistic NLL at integer positions,
+            shape (batch, seq_len). Typically 1/max_items for array lengths.
     """
 
     input_ids: Tensor
@@ -88,9 +92,8 @@ class EncodedBatch:
     lengths: Tensor
     labels: Tensor | None = None
     grammar_mask: Tensor | None = None
-    numeric_lower: Tensor | None = None  # (batch, seq_len) truncation lower bounds
-    numeric_upper: Tensor | None = None  # (batch, seq_len) truncation upper bounds
-    is_integer: Tensor | None = None  # (batch, seq_len) bool, True for integer targets
+    is_integer: Tensor | None = None
+    discretization_step: Tensor | None = None
 
     def to(self, device: torch.device) -> "EncodedBatch":
         """Move all tensors to the specified device."""
@@ -105,9 +108,10 @@ class EncodedBatch:
             lengths=self.lengths.to(device),
             labels=self.labels.to(device) if self.labels is not None else None,
             grammar_mask=self.grammar_mask.to(device) if self.grammar_mask is not None else None,
-            numeric_lower=self.numeric_lower.to(device) if self.numeric_lower is not None else None,
-            numeric_upper=self.numeric_upper.to(device) if self.numeric_upper is not None else None,
             is_integer=self.is_integer.to(device) if self.is_integer is not None else None,
+            discretization_step=self.discretization_step.to(device)
+            if self.discretization_step is not None
+            else None,
         )
 
 

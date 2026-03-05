@@ -500,6 +500,7 @@ class OrigamiPipeline:
             training_state=self._training_state,  # Resume from checkpoint if available
             schema=self._schema,
             inverse_transform_fn=self._create_value_transform_fn(),
+            model_array_lengths=self.config.data.model_array_lengths,
         )
 
         # Mark as fitted before training starts (all components are initialized)
@@ -603,7 +604,11 @@ class OrigamiPipeline:
         assert self._tokenizer is not None, "Tokenizer must be fitted first"
 
         # Determine if continuous head is needed based on data config
-        use_continuous_head = self.config.data.numeric_mode == "scale"
+        # Enable when either numeric scaling or array length modeling is active
+        use_continuous_head = (
+            self.config.data.numeric_mode == "scale"
+            or self.config.data.model_array_lengths
+        )
 
         # Create model config with continuous head setting based on data config
         model_config = replace(self.config.model, use_continuous_head=use_continuous_head)
@@ -1020,6 +1025,7 @@ class OrigamiPipeline:
             schema=self._schema,
             constrain_grammar=inference_cfg.constrain_grammar,
             constrain_schema=inference_cfg.constrain_schema,
+            model_array_lengths=self.config.data.model_array_lengths,
         )
 
         return evaluator.evaluate(
@@ -1188,7 +1194,10 @@ class OrigamiPipeline:
                 schema=self._schema,
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
-                enforce_array_lengths=inference_cfg.enforce_array_lengths,
+                enforce_array_lengths=(
+                    inference_cfg.enforce_array_lengths
+                    and self.config.data.model_array_lengths
+                ),
             )
         return self._generator
 
@@ -1208,7 +1217,10 @@ class OrigamiPipeline:
                 schema=self._schema,
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
-                enforce_array_lengths=inference_cfg.enforce_array_lengths,
+                enforce_array_lengths=(
+                    inference_cfg.enforce_array_lengths
+                    and self.config.data.model_array_lengths
+                ),
             )
         return self._predictor
 
@@ -1362,5 +1374,8 @@ class OrigamiPipeline:
             raise ValueError(f"Unknown preprocessor type: {preprocessor_type}")
 
     def __repr__(self) -> str:
-        status = "fitted" if self._fitted else "not fitted"
-        return f"OrigamiPipeline(numeric_mode={self.config.data.numeric_mode!r}, {status})"
+        parts = [f"numeric_mode={self.config.data.numeric_mode!r}"]
+        if self.config.data.model_array_lengths:
+            parts.append("model_array_lengths=True")
+        parts.append("fitted" if self._fitted else "not fitted")
+        return f"OrigamiPipeline({', '.join(parts)})"

@@ -859,9 +859,11 @@ class OrigamiGenerator:
                 m = means[:, -1, :]
                 lv = log_vars[:, -1, :]
 
-                # Resolve normalized bounds for truncated sampling
-                lo_vals = torch.zeros(batch_size, device=self.device)
-                hi_vals = torch.ones(batch_size, device=self.device)
+                # Resolve per-sequence max_items and min_items
+                min_items = torch.zeros(batch_size, device=self.device, dtype=torch.long)
+                max_items = torch.full(
+                    (batch_size,), DEFAULT_MAX_ARRAY, device=self.device, dtype=torch.long
+                )
                 normalization = torch.full(
                     (batch_size,), float(DEFAULT_MAX_ARRAY), device=self.device
                 )
@@ -875,21 +877,23 @@ class OrigamiGenerator:
                             constraints = self._schema_pda.get_constraints(schema_path)
                             if constraints:
                                 if constraints.max_items is not None:
+                                    max_items[i] = constraints.max_items
                                     normalization[i] = float(constraints.max_items)
                                 if constraints.min_items is not None:
-                                    lo_vals[i] = constraints.min_items / normalization[i]
+                                    min_items[i] = constraints.min_items
 
-                # Sample from MoG (truncated to normalized bounds)
-                sampled_norm = self.model.continuous_head.sample(
+                # Sample using discretized logistic bin probabilities
+                # (matches training loss — no boundary mass loss)
+                sampled_lengths = self.model.continuous_head.sample_integer(
                     w.unsqueeze(1),
                     m.unsqueeze(1),
                     lv.unsqueeze(1),
-                    lower=lo_vals.unsqueeze(1),
-                    upper=hi_vals.unsqueeze(1),
+                    max_values=max_items.float().unsqueeze(1),
+                    min_values=min_items.unsqueeze(1) if min_items.any() else None,
                 ).squeeze(1)  # (batch,)
 
-                # Denormalize and round to integer
-                sampled_lengths = (sampled_norm * normalization).round().long().clamp(min=0)
+                # Normalize for conditioning
+                sampled_norm = sampled_lengths.float() / normalization
 
                 # Store normalized value for conditioning
                 new_numeric_values[:, 0] = torch.where(

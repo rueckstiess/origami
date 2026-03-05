@@ -290,6 +290,10 @@ class DataConfig(PrettyReprMixin):
         infer_schema: If True, auto-infer a JSON Schema from training data.
             When both schema and infer_schema are set, the user-provided
             schema takes precedence.
+        model_array_lengths: If True, model array lengths using the continuous
+            head with discretized logistic NLL. When enabled, the continuous
+            head is activated (even if numeric_mode is not "scale") and array
+            lengths are predicted and enforced during generation.
     """
 
     numeric_mode: Literal["disabled", "discretize", "scale"] = "disabled"
@@ -299,6 +303,7 @@ class DataConfig(PrettyReprMixin):
     max_vocab_size: int = 0  # 0 = unlimited
     schema: dict | None = None
     infer_schema: bool = False
+    model_array_lengths: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration."""
