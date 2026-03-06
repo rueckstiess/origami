@@ -9,6 +9,7 @@ This documentation covers the Python API, command-line interface, and all config
 | Page | Description |
 |------|-------------|
 | [Concepts](concepts.md) | How Origami works — tokenization, position encoding, grammar constraints, numeric handling |
+| [Architecture](architecture.md) | Detailed model architecture — equations, components, and implementation references |
 | [Python SDK](python-sdk.md) | Complete API reference for `OrigamiPipeline` — training, prediction, generation, embedding, evaluation |
 | [CLI Reference](cli.md) | Command-line tools for training, prediction, generation, embedding, and evaluation |
 | [Configuration](configuration.md) | All configuration options — model architecture, training, data preprocessing, inference |
@@ -24,4 +25,4 @@ This documentation covers the Python API, command-line interface, and all config
 | Evaluate a model | [Evaluation](python-sdk.md#evaluation) | [`origami evaluate`](cli.md#origami-evaluate) |
 | Handle numeric fields | [Concepts: Numeric Fields](concepts.md#handling-numeric-fields) | [Configuration: DataConfig](configuration.md#dataconfig) |
 | Tune model size | [Configuration: ModelConfig](configuration.md#modelconfig) | [`origami train -D ... -L ...`](cli.md#origami-train) |
-| Understand the architecture | [Concepts](concepts.md) | — |
+| Understand the architecture | [Architecture](architecture.md) | — |
