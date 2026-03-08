@@ -29,6 +29,9 @@ dependencies = [
     "pyyaml>=6.0.3",
     "pandas>=2.3.3",
     "skypilot>=0.11.1",
+    "ipympl>=0.10.0",
+    "plotly>=5.0",
+    "anywidget>=0.9.21",
 ]
 
 [project.scripts]

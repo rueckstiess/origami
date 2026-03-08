@@ -26,6 +26,11 @@ from .metrics import (
     object_key_accuracy,
     resolve_metrics,
 )
+from .notebook_callback import (
+    MatplotlibNotebookCallback,
+    NotebookCallback,
+    PlotlyNotebookCallback,
+)
 from .trainer import EpochStats, OrigamiTrainer, TrainResult
 
 __all__ = [
@@ -40,6 +45,9 @@ __all__ = [
     # Callbacks
     "TrainerCallback",
     "CallbackHandler",
+    "MatplotlibNotebookCallback",
+    "NotebookCallback",
+    "PlotlyNotebookCallback",
     "ProgressCallback",
     "TableLogCallback",
     # Metrics
