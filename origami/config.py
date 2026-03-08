@@ -215,6 +215,8 @@ class TrainingConfig(PrettyReprMixin):
     num_epochs: int = 10
     warmup_steps: int = 1000
     weight_decay: float = 0.01
+    lr_scheduler: Literal["linear", "cosine"] = "linear"
+    lr_cosine_exponent: float = 1.0  # >1 spends more time at low LR
 
     # Multi-GPU training
     use_accelerate: bool = True  # Use accelerate for distributed training if installed
@@ -255,6 +257,12 @@ class TrainingConfig(PrettyReprMixin):
             raise ValueError(f"learning_rate must be > 0, got {self.learning_rate}")
         if self.num_epochs < 1:
             raise ValueError(f"num_epochs must be >= 1, got {self.num_epochs}")
+
+        valid_lr_schedulers = {"linear", "cosine"}
+        if self.lr_scheduler not in valid_lr_schedulers:
+            raise ValueError(
+                f"lr_scheduler must be one of {valid_lr_schedulers}, got '{self.lr_scheduler}'"
+            )
 
         valid_eval_strategies = {"no", "steps", "epoch"}
         if self.eval_strategy not in valid_eval_strategies:

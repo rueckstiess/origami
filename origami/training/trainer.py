@@ -393,13 +393,26 @@ class OrigamiTrainer:
                 self._target_key_id = self.tokenizer.vocab.encode(target_key_token)
 
     def _create_scheduler(self) -> LambdaLR:
-        """Create learning rate scheduler with linear warmup."""
+        """Create learning rate scheduler with linear warmup.
+
+        Supports two decay schedules after warmup:
+        - "linear": Linear decay from peak LR to 0
+        - "cosine": Cosine annealing from peak LR to 0
+        """
         warmup_steps = self.config.warmup_steps
+        total_steps = self.total_steps
+        schedule = self.config.lr_scheduler
+        exponent = self.config.lr_cosine_exponent
 
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
                 return step / max(1, warmup_steps)
-            return max(0.0, 1.0 - step / max(1, self.total_steps))
+            if schedule == "cosine":
+                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                cosine_value = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return max(0.0, cosine_value**exponent)
+            # linear decay
+            return max(0.0, 1.0 - step / max(1, total_steps))
 
         return LambdaLR(self.optimizer, lr_lambda)
 
