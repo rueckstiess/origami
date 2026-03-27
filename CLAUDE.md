@@ -532,8 +532,11 @@ TrainingConfig(
     num_epochs=10,
     warmup_steps=1000,
     weight_decay=0.01,
-    shuffle_keys=True,     # Key-order shuffling augmentation
-    target_key=None,       # Target field for prediction tasks
+    lr_scheduler="linear",   # "linear" or "cosine"
+    lr_cosine_exponent=1.0,  # >1 spends more time at low LR
+    lr_min=0.0,              # Minimum LR floor (e.g. 1e-6 to prevent stalling)
+    shuffle_keys=True,       # Key-order shuffling augmentation
+    target_key=None,         # Target field for prediction tasks
     constrain_grammar=True,  # Apply grammar constraints during training
     constrain_schema=False,  # Apply schema constraints during training
 )

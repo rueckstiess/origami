@@ -101,6 +101,9 @@ Training hyperparameters.
 | `num_epochs` | `int` | `10` | Number of training passes over the data. |
 | `warmup_steps` | `int` | `1000` | Linear warmup steps for learning rate schedule. |
 | `weight_decay` | `float` | `0.01` | L2 regularization weight. |
+| `lr_scheduler` | `str` | `"linear"` | Decay schedule after warmup: `"linear"` or `"cosine"`. |
+| `lr_cosine_exponent` | `float` | `1.0` | Exponent for cosine decay. Values >1 spend more time at lower learning rates. Only applies when `lr_scheduler="cosine"`. |
+| `lr_min` | `float` | `0.0` | Minimum learning rate floor. Prevents the schedule from decaying all the way to zero (e.g., set to `1e-6`). Applies to both linear and cosine schedules. |
 
 ### Data Augmentation
 

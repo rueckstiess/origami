@@ -399,23 +399,26 @@ class OrigamiTrainer:
         """Create learning rate scheduler with linear warmup.
 
         Supports two decay schedules after warmup:
-        - "linear": Linear decay from peak LR to 0
-        - "cosine": Cosine annealing from peak LR to 0
+        - "linear": Linear decay from peak LR to lr_min
+        - "cosine": Cosine annealing from peak LR to lr_min
         """
         warmup_steps = self.config.warmup_steps
         total_steps = self.total_steps
         schedule = self.config.lr_scheduler
         exponent = self.config.lr_cosine_exponent
+        min_frac = self.config.lr_min / self.config.learning_rate if self.config.lr_min > 0 else 0.0
 
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
                 return step / max(1, warmup_steps)
+            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
             if schedule == "cosine":
-                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
                 cosine_value = 0.5 * (1.0 + math.cos(math.pi * progress))
-                return max(0.0, cosine_value**exponent)
-            # linear decay
-            return max(0.0, 1.0 - step / max(1, total_steps))
+                decay = max(0.0, cosine_value**exponent)
+            else:
+                # linear decay
+                decay = max(0.0, 1.0 - progress)
+            return min_frac + (1.0 - min_frac) * decay
 
         return LambdaLR(self.optimizer, lr_lambda)
 
