@@ -87,6 +87,9 @@ class TrainResult:
     epoch_completed: bool = False  # True after epoch finishes, False at start
     epoch_resume_step: int = 0  # Steps skipped at start of epoch when resuming mid-epoch
     current_batch_loss: float = 0.0
+    current_discrete_loss: float = 0.0
+    current_continuous_loss: float | None = None
+    current_continuous_loss_weight: float | None = None
     current_lr: float = 0.0
     current_batch_dt: float = 0.0  # Batch time in seconds
     # Generalized best metric tracking (for configurable best_metric)
@@ -933,6 +936,9 @@ class OrigamiTrainer:
             discretization_step=batch.discretization_step,
         )
         loss = output.loss
+        self.state.current_discrete_loss = output.discrete_loss.item() if output.discrete_loss is not None else 0.0
+        self.state.current_continuous_loss = output.continuous_loss.item() if output.continuous_loss is not None else None
+        self.state.current_continuous_loss_weight = output.continuous_loss_weight
 
         # Backward pass (accelerate-aware)
         if self._accelerator is not None:

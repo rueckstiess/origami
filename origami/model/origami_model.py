@@ -42,6 +42,9 @@ class OrigamiOutput:
     continuous_params: tuple[Tensor, Tensor, Tensor] | None
     hidden_states: Tensor
     past_key_values: "KVCache | None" = None
+    discrete_loss: Tensor | None = None
+    continuous_loss: Tensor | None = None
+    continuous_loss_weight: float | None = None
 
 
 class OrigamiModel(nn.Module):
@@ -192,8 +195,11 @@ class OrigamiModel(nn.Module):
 
         # 6. Compute loss if labels provided
         loss = None
+        discrete_loss = None
+        continuous_loss = None
+        cont_weight = None
         if labels is not None:
-            loss = self._compute_loss(
+            loss, discrete_loss, continuous_loss, cont_weight = self._compute_loss(
                 logits=logits,
                 labels=labels,
                 attention_mask=attention_mask,
@@ -211,6 +217,9 @@ class OrigamiModel(nn.Module):
             continuous_params=continuous_params,
             hidden_states=hidden,
             past_key_values=new_cache,
+            discrete_loss=discrete_loss,
+            continuous_loss=continuous_loss,
+            continuous_loss_weight=cont_weight,
         )
 
     def compute_grammar_mask(
@@ -257,7 +266,7 @@ class OrigamiModel(nn.Module):
         numeric_mask: Tensor | None,
         is_integer: Tensor | None = None,
         discretization_step: Tensor | None = None,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor, Tensor | None, float | None]:
         """Compute combined discrete and continuous loss.
 
         For autoregressive training, we shift labels so position i predicts
@@ -273,7 +282,8 @@ class OrigamiModel(nn.Module):
             numeric_mask: Mask for continuous token positions
 
         Returns:
-            Scalar loss value
+            Tuple of (combined_loss, discrete_loss, continuous_loss, continuous_loss_weight).
+            continuous_loss and continuous_loss_weight are None if continuous head is not active.
         """
         # Shift for autoregressive: predict next token
         # logits[:, :-1] predicts labels[:, 1:]
@@ -335,6 +345,9 @@ class OrigamiModel(nn.Module):
             )
 
         # Add continuous loss if enabled
+        discrete_loss = loss
+        continuous_loss = None
+        cont_weight = None
         if continuous_params is not None and numeric_values is not None:
             weights, means, log_vars = continuous_params
             # Shift continuous params and values too
@@ -370,13 +383,13 @@ class OrigamiModel(nn.Module):
                     # Auto-calculate: proportion of NUM tokens in the batch
                     num_tokens = shift_numeric_mask.sum().float()
                     total_tokens = shift_numeric_mask.numel()
-                    weight = max(num_tokens / total_tokens, 0.001)
+                    cont_weight = max(num_tokens / total_tokens, 0.001)
                 else:
-                    weight = self.config.continuous_loss_weight
+                    cont_weight = self.config.continuous_loss_weight
 
-                loss = loss + weight * continuous_loss
+                loss = discrete_loss + cont_weight * continuous_loss
 
-        return loss
+        return loss, discrete_loss, continuous_loss, cont_weight
 
     def get_num_parameters(self, trainable_only: bool = True) -> int:
         """Count model parameters.
