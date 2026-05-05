@@ -1,0 +1,25 @@
+name: origami-dev
+
+resources:
+  accelerators: A100:8
+  # cloud: vast
+  # region: us-east-1  # Uncomment to pin region
+
+workdir: .
+
+setup: |
+  # Install uv
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+
+  # Install origami and dependencies (including dev/test deps and accelerate)
+  cd ~/sky_workdir
+  uv sync --all-extras
+
+run: |
+  export PATH="$HOME/.local/bin:$PATH"
+  cd ~/sky_workdir
+
+  # Quick sanity check - verify GPUs are visible
+  uv run python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}'); [print(f'  {i}: {torch.cuda.get_device_name(i)}') for i in range(torch.cuda.device_count())]"
+

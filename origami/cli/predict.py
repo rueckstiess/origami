@@ -1,118 +1,195 @@
+"""Predict subcommand for Origami CLI."""
+
+from __future__ import annotations
+
 import json
-import pathlib
+import sys
+from typing import TextIO
 
 import click
-from click_option_group import optgroup
-from omegaconf import OmegaConf
 
-from origami.cli.utils import create_projection, load_data
-from origami.inference import Predictor
-from origami.model import ORIGAMI
-from origami.model.vpda import ObjectVPDA
-from origami.preprocessing import DFDataset, TargetFieldPipe
-from origami.utils import Symbol, count_parameters, load_origami_model
-from origami.utils.config import GuardrailsMethod
+from origami.cli.data_loaders import load_data
 
 
 @click.command()
-@click.argument("source", type=str)
 @click.option(
-    "--model-path",
     "-m",
-    type=click.Path(dir_okay=False, exists=True, path_type=pathlib.Path, resolve_path=True),
-    default="./model.origami",
-    show_default=True,
-    help="path to trained model",
+    "--model",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to trained pipeline (.pt file).",
 )
-@click.option("--target-field", "-t", type=str, required=True, help="target field name to predict")
-@optgroup.group("Source Options")
-@optgroup.option("--source-db", "-d", type=str, help="database name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--include-fields", "-i", type=str, help="comma-separated list of field names to include")
-@optgroup.option("--exclude-fields", "-e", type=str, help="comma-separated list of field names to exclude")
-@optgroup.option("--skip", "-s", type=int, default=0, help="number of documents to skip")
-@optgroup.option("--limit", "-l", type=int, default=0, help="limit the number of documents to load")
-@optgroup.group("Output Options")
-@optgroup.option("--json", "-j", is_flag=True, default=False, help="output full JSON objects including target field")
-@click.option("--verbose", "-v", is_flag=True, default=False)
-def predict(source, **kwargs):
-    """Predict target fields with a trained ORIGAMI model."""
+@click.option(
+    "-d",
+    "--data",
+    required=True,
+    help="Input data. Format auto-detected: .csv, .json, .jsonl, or mongodb:// URI.",
+)
+@click.option(
+    "--db",
+    default=None,
+    help="MongoDB database name (required with mongodb:// URI).",
+)
+@click.option(
+    "-c",
+    "--collection",
+    default=None,
+    help="MongoDB collection name (required with mongodb:// URI).",
+)
+@click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
+)
+@click.option(
+    "-t",
+    "--target-key",
+    required=True,
+    help="Target field to predict.",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="Output file. Default: stdout.",
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["values", "json", "jsonl"]),
+    default="values",
+    show_default=True,
+    help="Output format: values (one per line), json (array), jsonl (with original data).",
+)
+@click.option(
+    "-b",
+    "--batch-size",
+    type=int,
+    default=32,
+    show_default=True,
+    help="Batch size for inference.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
+def predict(
+    model: str,
+    data: str,
+    db: str | None,
+    collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
+    target_key: str,
+    output: str | None,
+    output_format: str,
+    batch_size: int,
+    verbose: bool,
+) -> None:
+    """Predict target values for input data.
 
-    # load model, config and pipelines
-    model_dict = load_origami_model(kwargs.get("model_path"))
-    state_dict = model_dict["state_dict"]
-    config = model_dict["config"]
-    pipelines = model_dict["pipelines"]
-    encoder = pipelines["train"]["encoder"].encoder
-    schema = pipelines["train"]["schema"].schema
+    \b
+    Examples:
+      # Predict to stdout (one value per line)
+      origami predict -m model.pt -d input.jsonl -t label
 
-    # create model and load weights
-    match config.model.guardrails:
-        case GuardrailsMethod.STRUCTURE_AND_VALUES:
-            if not config.pipeline.path_in_field_tokens:
-                raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
-            vpda = ObjectVPDA(encoder, schema)
-        case GuardrailsMethod.STRUCTURE_ONLY:
-            vpda = ObjectVPDA(encoder)
-        case GuardrailsMethod.NONE:
-            vpda = None
+      # Predict to file as JSON array
+      origami predict -m model.pt -d input.jsonl -t label -o predictions.json -f json
 
-    model = ORIGAMI(config.model, config.train, vpda=vpda)
-    model.load_state_dict(state_dict)
+      # Predict with original data (JSONL format)
+      origami predict -m model.pt -d input.jsonl -t label -f jsonl | head
 
-    # data configs
-    config.data.source = source
-    config.data.db = kwargs["source_db"]
-    config.data.coll = kwargs["source_coll"]
-    config.data.projection = create_projection(kwargs["include_fields"], kwargs["exclude_fields"])
-    config.data.limit = kwargs["limit"]
-    config.data.target_field = kwargs["target_field"]
+    \b
+    Output formats:
+      values - One prediction value per line (default)
+      json   - JSON array of all predictions
+      jsonl  - JSONL with original data + predicted value
+    """
+    from origami import OrigamiPipeline
 
-    # load data
-    df = load_data(source, config.data)
+    # Load model
+    click.echo(f"Loading model from {model}...", err=True)
+    pipeline = OrigamiPipeline.load(model)
 
-    # update or create new target pipe with new target_field
-    test_pipeline = pipelines["test"]
+    if verbose:
+        click.echo("\nConfiguration:", err=True)
+        click.echo(pipeline.config.to_yaml(), err=True)
 
-    # update pipeline parameters and transform data
-    if "target" in test_pipeline.named_steps:
-        test_pipeline["target"].target_field = config.data.target_field
+    # Load input data
+    click.echo(f"Loading data from {data}...", err=True)
+    input_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
+    click.echo(f"  Loaded {len(input_data)} samples", err=True)
+
+    # Prepare inputs (set target to None)
+    inputs = []
+    for obj in input_data:
+        obj_copy = obj.copy()
+        obj_copy[target_key] = None
+        inputs.append(obj_copy)
+
+    # Run predictions
+    click.echo("Predicting...", err=True)
+    predictions = pipeline.predict_batch(inputs, target_key=target_key, batch_size=batch_size)
+
+    # Determine output destination
+    out_file: TextIO
+    if output:
+        out_file = open(output, "w", encoding="utf-8")
     else:
-        test_pipeline.steps.insert(0, ["target", TargetFieldPipe(config.data.target_field)])
-    test_df = test_pipeline.transform(df)
+        out_file = sys.stdout
 
-    # datasets
-    test_dataset = DFDataset(test_df)
+    try:
+        _write_predictions(out_file, predictions, input_data, target_key, output_format)
+    finally:
+        if output:
+            out_file.close()
 
-    if kwargs["verbose"]:
-        # report number of parameters (note we don't count the decoder parameters in lm_head)
-        n_params = count_parameters(model)
-        click.echo(f"running on device: {model.device}", err=True)
-        click.echo(f"number of parameters: {n_params / 1e6:.2f}M", err=True)
-        click.echo(f"config:\n {OmegaConf.to_yaml(config)}", err=True)
+    if output:
+        click.echo(f"Wrote {len(predictions)} predictions to {output}", err=True)
 
-    # predict target field
-    predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.train.batch_size)
 
-    predictions = predictor.predict(test_dataset)
-
-    for i, (pred, doc, target) in enumerate(zip(predictions, test_dataset.df["docs"], test_dataset.df["target"])):
-        if kwargs["json"]:
-            doc[config.data.target_field] = pred
-            line_str = json.dumps(doc)
-        else:
-            line_str = pred
-        if target == Symbol.UNKNOWN:
-            click.echo(line_str)
-        else:
-            if pred == target:
-                # replace with green version
-                click.echo(f"\033[32m{line_str}\033[0m")
+def _write_predictions(
+    out_file: TextIO,
+    predictions: list,
+    input_data: list[dict],
+    target_key: str,
+    output_format: str,
+) -> None:
+    """Write predictions in the specified format."""
+    if output_format == "values":
+        for pred in predictions:
+            # Convert to string representation
+            if isinstance(pred, str):
+                out_file.write(f"{pred}\n")
             else:
-                # replace with red version
-                click.echo(f"\033[31m{line_str}\033[0m")
+                out_file.write(f"{json.dumps(pred)}\n")
 
-    # if any target field is not None, print accuracy
-    if any(test_dataset.df["target"] != Symbol.UNKNOWN):
-        acc = predictor.accuracy(test_dataset, show_progress=False)
-        click.echo(f"\nTest accuracy: {acc:.4f}", err=True)
+    elif output_format == "json":
+        json.dump(predictions, out_file, indent=2)
+        out_file.write("\n")
+
+    elif output_format == "jsonl":
+        for obj, pred in zip(input_data, predictions, strict=True):
+            # Add prediction to original object
+            output_obj = obj.copy()
+            output_obj[target_key] = pred
+            out_file.write(json.dumps(output_obj) + "\n")

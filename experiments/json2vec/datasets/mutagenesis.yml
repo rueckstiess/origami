@@ -1,7 +1,0 @@
-data:
-  db: mutagenesis
-  coll: mutagenesis
-  projection:
-    _id: 0
-  limit: 0
-  target_field: mutagenic
