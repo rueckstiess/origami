@@ -1,296 +1,434 @@
-import pathlib
+"""Train subcommand for Origami CLI."""
+
+from __future__ import annotations
+
+import random
+import sys
+from typing import TYPE_CHECKING
 
 import click
-from click_option_group import optgroup
-from omegaconf import OmegaConf
-from sklearn.model_selection import train_test_split
 
-from origami.inference import Metrics, Predictor
-from origami.model import ORIGAMI
-from origami.model.vpda import ObjectVPDA
-from origami.preprocessing import (
-    DFDataset,
-    build_prediction_pipelines,
-)
-from origami.utils import TopLevelConfig, count_parameters, make_progress_callback, save_origami_model, set_seed
-from origami.utils.config import GuardrailsMethod, SequenceOrderMethod
+from origami.cli.data_loaders import DataFormat, detect_format, load_data
 
-from .utils import create_projection, load_data
+if TYPE_CHECKING:
+    pass
+
+
+def _parse_value(value: str):
+    """Parse a string value to its appropriate type.
+
+    Handles: None, True, False, int, float, string.
+    """
+    if value.lower() == "none":
+        return None
+    elif value.lower() == "true":
+        return True
+    elif value.lower() == "false":
+        return False
+    else:
+        # Try int
+        try:
+            return int(value)
+        except ValueError:
+            pass
+
+        # Try float
+        try:
+            return float(value)
+        except ValueError:
+            pass
+
+        # Keep as string
+        return value
+
+
+# Mapping from flat parameter names to nested config paths
+_PARAM_SECTION_MAP = {
+    # Model params
+    "d_model": "model",
+    "n_heads": "model",
+    "n_layers": "model",
+    "d_ff": "model",
+    "dropout": "model",
+    "max_depth": "model",
+    "max_array_position": "model",
+    "kvpe_pooling": "model",
+    "backbone": "model",
+    "num_mixture_components": "model",
+    "max_seq_length": "model",
+    # Training params
+    "batch_size": "training",
+    "learning_rate": "training",
+    "num_epochs": "training",
+    "warmup_steps": "training",
+    "weight_decay": "training",
+    "dataloader_num_workers": "training",
+    "shuffle_keys": "training",
+    "eval_strategy": "training",
+    "eval_steps": "training",
+    "eval_epochs": "training",
+    "eval_sample_size": "training",
+    "eval_on_train": "training",
+    "target_key": "training",
+    "constrain_grammar": "training",
+    "constrain_schema": "training",
+    # Data params
+    "numeric_mode": "data",
+    "cat_threshold": "data",
+    "n_bins": "data",
+    "bin_strategy": "data",
+    "max_vocab_size": "data",
+    "infer_schema": "data",
+    "model_array_lengths": "data",
+}
+
+
+def parse_set_params(set_params: tuple[str, ...]) -> dict:
+    """Parse --set KEY=VALUE parameters into nested config dictionaries.
+
+    Supports both flat keys (auto-mapped to sections) and dot notation:
+    - --set d_model=256         -> {"model": {"d_model": 256}}
+    - --set model.d_model=256   -> {"model": {"d_model": 256}}
+    - --set training.batch_size=64 -> {"training": {"batch_size": 64}}
+
+    Args:
+        set_params: Tuple of "KEY=VALUE" strings
+
+    Returns:
+        Nested dict with "model", "training", "data" keys
+    """
+    result: dict = {"model": {}, "training": {}, "data": {}}
+
+    for param in set_params:
+        if "=" not in param:
+            raise click.BadParameter(f"Invalid --set format: '{param}'. Use KEY=VALUE.")
+
+        key, value = param.split("=", 1)
+        key = key.strip()
+        value_parsed = _parse_value(value.strip())
+
+        if "." in key:
+            # Dot notation: section.field
+            section, field = key.split(".", 1)
+            if section not in result:
+                raise click.BadParameter(
+                    f"Unknown config section: '{section}'. Valid: model, training, data."
+                )
+            result[section][field] = value_parsed
+        else:
+            # Flat key - look up which section it belongs to
+            section = _PARAM_SECTION_MAP.get(key)
+            if section is None:
+                raise click.BadParameter(
+                    f"Unknown config parameter: '{key}'. Use --set section.field=value "
+                    f"or see documentation for valid parameters."
+                )
+            result[section][key] = value_parsed
+
+    return result
 
 
 @click.command()
-@click.argument("source", type=str)
 @click.option(
-    "--model-path",
-    "-m",
-    type=click.Path(dir_okay=False, path_type=pathlib.Path, resolve_path=True),
-    default="./model.origami",
-    show_default=True,
-    help="path to write trained model",
+    "-d",
+    "--data",
+    required=True,
+    help="Training data. Format auto-detected: .csv, .json, .jsonl, or mongodb:// URI.",
 )
-@click.option("--seed", type=int, default=1234, show_default=True, help="random seed")
 @click.option(
-    "--set-parameter",
-    "-p",
-    type=str,
-    multiple=True,
-    help="set additional config parameters, format: key.subkey=value. Multiple parameters can be set.",
+    "--db",
+    default=None,
+    help="MongoDB database name (required with mongodb:// URI).",
 )
-@click.option("--verbose", "-v", is_flag=True, default=False)
-@optgroup.group("Source Options")
-@optgroup.option("--source-db", "-d", type=str, help="database name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--include-fields", "-i", type=str, help="comma-separated list of field names to include")
-@optgroup.option("--exclude-fields", "-e", type=str, help="comma-separated list of field names to exclude")
-@optgroup.option("--skip", "-s", type=int, default=0, help="number of documents to skip")
-@optgroup.option("--limit", "-l", type=int, default=0, help="limit the number of documents to load")
-@optgroup.group("Config Options")
-# @optgroup.option("--config-file", "-C", type=click.File("r"), help="path to config file")
-@optgroup.option(
-    "--max-vocab-size",
-    "-V",
+@click.option(
+    "-c",
+    "--collection",
+    default=None,
+    help="MongoDB collection name (required with mongodb:// URI).",
+)
+@click.option(
+    "--skip",
     type=int,
     default=0,
-    show_default=True,
-    help="maximum number of tokens in the vocabulary",
+    help="Skip N samples at the beginning of training data.",
 )
-@optgroup.option(
-    "--num-layers",
-    "-T",
+@click.option(
+    "--limit",
     type=int,
-    default=4,
-    show_default=True,
-    help="number of transformer layers",
+    default=0,
+    help="Limit training data to N samples (0 = unlimited).",
 )
-@optgroup.option(
-    "--num-attn-heads",
-    "-A",
+@click.option(
+    "--project",
+    default=None,
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
+)
+@click.option(
+    "--val",
+    default=None,
+    help="Validation data file. Format auto-detected from extension.",
+)
+@click.option(
+    "--val-collection",
+    default=None,
+    help="Validation collection name (MongoDB mode). Uses same --db.",
+)
+@click.option(
+    "--train-ratio",
+    type=float,
+    default=None,
+    help="Split training data into train/val with this ratio (e.g., 0.8).",
+)
+@click.option(
+    "-t",
+    "--target-key",
+    default=None,
+    help="Target field to predict. Required for accuracy metrics during training.",
+)
+@click.option(
+    "-e",
+    "--epochs",
     type=int,
-    default=4,
+    default=10,
     show_default=True,
-    help="number of attention heads",
+    help="Number of training epochs.",
 )
-@optgroup.option(
-    "--hidden-dim",
-    "-H",
+@click.option(
+    "-b",
+    "--batch-size",
     type=int,
-    default=128,
+    default=32,
     show_default=True,
-    help="hidden dimensionality of transformer layers",
+    help="Training batch size.",
 )
-@optgroup.option(
-    "--learning-rate",
-    "-L",
+@click.option(
+    "-l",
+    "--lr",
     type=float,
     default=1e-3,
     show_default=True,
-    help="max. learning rate of the model",
+    help="Learning rate.",
 )
-@optgroup.option(
-    "--num-batches", "-N", type=int, default=10000, show_default=True, help="number of batches to train on"
-)
-@optgroup.option("--batch-size", "-B", type=int, default=100, show_default=True, help="batch size")
-@optgroup.option(
-    "--upscaling",
-    "-U",
+@click.option(
+    "-D",
+    "--d-model",
     type=int,
-    help="upscaling factor, when `--shuffled` mode is used",
-    default=5,
+    default=128,
     show_default=True,
+    help="Model hidden dimension.",
 )
-@optgroup.option(
-    "--shuffled/--ordered",
-    "shuffled",
+@click.option(
+    "-H",
+    "--n-heads",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of attention heads.",
+)
+@click.option(
+    "-L",
+    "--n-layers",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Number of transformer layers.",
+)
+@click.option(
+    "-n",
+    "--numeric-mode",
+    type=click.Choice(["disabled", "discretize", "scale"]),
+    default="disabled",
+    show_default=True,
+    help="Numeric field handling: disabled, discretize (binning), or scale (continuous).",
+)
+@click.option(
+    "-o",
+    "--output",
+    required=True,
+    help="Output path for trained model (e.g., model.pt).",
+)
+@click.option(
+    "--eval-sample-size",
+    type=int,
+    default=None,
+    help="Sample N examples for progress evaluations (faster). Default: full eval.",
+)
+@click.option(
+    "--set",
+    "set_params",
+    multiple=True,
+    help="Set any PipelineConfig parameter. Example: --set d_ff=1024",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=42,
+    show_default=True,
+    help="Random seed for reproducibility.",
+)
+@click.option(
+    "-v",
+    "--verbose",
     is_flag=True,
-    default=True,
-    help="shuffle key/value pairs in each object",
-    show_default=True,
+    help="Enable verbose progress output.",
 )
-@optgroup.option(
-    "--guardrails",
-    "-G",
-    type=click.Choice(["NONE", "STRUCTURE_ONLY", "STRUCTURE_AND_VALUES"]),
-    default="STRUCTURE_AND_VALUES",
-    help="guardrails settings",
-)
-@optgroup.option(
-    "--ignore-field-path",
-    is_flag=True,
-    default=False,
-    help="By default, the full field path (i.e. `foo.bar.baz`) is used for field tokens. This option will ignore the full path and only use the last field name (`bar`). Use this for deeply nested object.",
-)
-@optgroup.group("Evaluation Options")
-@optgroup.option(
-    "--val-split-ratio",
-    "-r",
-    type=float,
-    default=0.0,
-    show_default=True,
-    help="ratio for validation dataset, a value of 0.0 disables validation",
-)
-@optgroup.option("--target-field", "-t", type=str, help="target field to predict")
-def train(source: str, **kwargs):
+def train(
+    data: str,
+    db: str | None,
+    collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
+    val: str | None,
+    val_collection: str | None,
+    train_ratio: float | None,
+    target_key: str | None,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    d_model: int,
+    n_heads: int,
+    n_layers: int,
+    numeric_mode: str,
+    output: str,
+    eval_sample_size: int | None,
+    set_params: tuple[str, ...],
+    seed: int,
+    verbose: bool,
+) -> None:
+    """Train an Origami model on data.
+
+    \b
+    Examples:
+      # Train on JSONL file
+      origami train -d data.jsonl -t label -e 20 -o model.pt
+
+      # Train with validation split
+      origami train -d data.jsonl -t label --train-ratio 0.8 -o model.pt
+
+      # Train with separate validation file
+      origami train -d train.jsonl --val val.jsonl -t label -o model.pt
+
+      # Train with custom architecture
+      origami train -d data.jsonl -t label -D 256 -L 6 -H 8 -o model.pt
+
+      # Train with continuous numeric handling
+      origami train -d data.jsonl -t label -n scale -o model.pt
+
+      # Train from MongoDB
+      origami train -d mongodb://localhost:27017 --db mydb -c train -t label -o model.pt
     """
-    Train an ORIGAMI model.
-    """
-    set_seed(kwargs["seed"])
+    import torch
 
-    config = TopLevelConfig()
+    from origami import OrigamiPipeline
+    from origami.config import DataConfig, ModelConfig, OrigamiConfig, TrainingConfig
+    from origami.training import TableLogCallback, accuracy
 
-    # data configs
-    config.data.source = source
+    # Set seeds
+    random.seed(seed)
+    torch.manual_seed(seed)
 
-    if source.startswith("mongodb://"):
-        if kwargs["source_db"] is None or kwargs["source_coll"] is None:
-            raise click.BadParameter("--source-db and --source-coll are required for MongoDB URI")
+    # Parse escape hatch parameters (returns nested dict)
+    extra_params = parse_set_params(set_params)
 
-    config.data.db = kwargs["source_db"]
-    config.data.coll = kwargs["source_coll"]
-    config.data.projection = create_projection(kwargs["include_fields"], kwargs["exclude_fields"])
-    config.data.skip = kwargs["skip"]
-    config.data.limit = kwargs["limit"]
-    config.data.target_field = kwargs["target_field"]
-
-    # model configs
-    config.model.n_layer = kwargs["num_layers"]
-    config.model.n_head = kwargs["num_attn_heads"]
-    config.model.n_embd = kwargs["hidden_dim"]
-    config.model.guardrails = kwargs["guardrails"]
-
-    # train configs
-    config.train.n_batches = kwargs["num_batches"]
-    config.train.batch_size = kwargs["batch_size"]
-    config.train.learning_rate = kwargs["learning_rate"]
-    config.train.print_every = 10
-    config.train.eval_every = 100
-    config.train.test_split = kwargs["val_split_ratio"]
-
-    # as guideline, use 5 x batch size for evaluation of train/test metrics
-    config.train.sample_train = 5 * kwargs["batch_size"]
-    config.train.sample_test = 5 * kwargs["batch_size"]
-
-    # pipeline configs
-    config.pipeline.max_vocab_size = kwargs["max_vocab_size"]
-    config.pipeline.sequence_order = "SHUFFLED" if kwargs["shuffled"] else "ORDERED"
-    config.pipeline.upscale = kwargs["upscaling"]
-    config.pipeline.path_in_field_tokens = not kwargs["ignore_field_path"]
-    if not config.pipeline.path_in_field_tokens:
-        if config.model.guardrails == GuardrailsMethod.STRUCTURE_AND_VALUES:
-            click.echo(
-                click.style(
-                    f"info: `Can't use guardrails={config.model.guardrails}` when `pipeline.path_in_field_tokens` is `False`. Setting to `STRUCTURE_ONLY`.",
-                    fg="green",
-                )
-            )
-            config.model.guardrails = "STRUCTURE_ONLY"
-
-    if config.pipeline.sequence_order == SequenceOrderMethod.ORDERED and config.pipeline.upscale > 1:
-        click.echo(
-            click.style(
-                f"info: `pipeline.upscale={config.pipeline.upscale}` is ignored when `pipeline.sequence_order` is `ORDERED`.",
-                fg="green",
-            )
-        )
-
-    # set custom parameters (overrides other settings)
-    for p in kwargs["set_parameter"]:
-        key, value = p.split("=")
-        key, subkey = key.split(".")
-        config[key][subkey] = value
-
-    # load data
-    df = load_data(source, config.data)
-
-    if config.train.test_split > 0:
-        train_df, test_df = train_test_split(df, test_size=config.train.test_split, shuffle=config.train.shuffle_split)
-    else:
-        train_df = df
-        test_df = None
-
-    # build pipelines
-    pipelines = build_prediction_pipelines(config.pipeline, config.data.target_field, verbose=kwargs["verbose"])
-
-    # process train and test data
-    train_proc_df = pipelines["train"].fit_transform(train_df)
-    train_dataset = DFDataset(train_proc_df)
-
-    # limit the number of training examples if dataset is too small
-    config.train.sample_train = min(len(train_dataset), config.train.sample_train)
-
-    if config.train.test_split > 0:
-        test_proc_df = pipelines["test"].transform(test_df)
-        test_dataset = DFDataset(test_proc_df)
-        # limit the number of test examples if dataset is too small
-        config.train.sample_test = min(len(test_dataset), config.train.sample_test)
-
-        # for guardrails mode STRUCTURE_AND_VALUES, this is needed to allow transitions
-        # in vpda to work for test data
-        pipelines["train"]["schema"].fit(test_df)
-
-    else:
-        test_dataset = None
-
-    # get stateful objects and set model parameters
-    schema = pipelines["train"]["schema"].schema
-    encoder = pipelines["train"]["encoder"].encoder
-    config.model.block_size = pipelines["train"]["padding"].length
-    config.model.vocab_size = encoder.vocab_size
-
-    # warn about unique and high-cardinality keys in schema
-    total_count = schema.count
-    for path, field in schema.leaf_fields.items():
-        prim_values = schema.get_prim_values(path)
-        ratio = len(prim_values) / total_count
-        if ratio == 1:
-            click.echo(
-                click.style(
-                    f"warning: field `{path}` has only unique values and should be excluded with --exclude-fields",
-                    fg="red",
-                )
-            )
-        elif ratio > 0.5:
-            click.echo(
-                click.style(
-                    f"warning: field `{path}` is high cardinality with {int(ratio * 100)}% unique values. Consider excluding it with --exclude-fields",
-                    fg="yellow",
-                )
-            )
-
-    # create model with PDA
-    if kwargs["verbose"]:
-        click.echo(">>> creating PDA rules\n")
-
-    match config.model.guardrails:
-        case GuardrailsMethod.STRUCTURE_AND_VALUES:
-            if not config.pipeline.path_in_field_tokens:
-                raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
-            vpda = ObjectVPDA(encoder, schema)
-        case GuardrailsMethod.STRUCTURE_ONLY | GuardrailsMethod.NONE:
-            vpda = ObjectVPDA(encoder)
-
-    if kwargs["verbose"]:
-        click.echo(">>> creating ORiGAMi model\n")
-    model = ORIGAMI(config.model, config.train, vpda=vpda)
-
-    if kwargs["verbose"]:
-        # report number of parameters (note we don't count the decoder parameters in lm_head)
-        n_params = count_parameters(model)
-        click.echo(f"running on device: {model.device}")
-        click.echo(f"number of parameters: {n_params / 1e6:.2f}M")
-        click.echo(f"config:\n {OmegaConf.to_yaml(config)}")
-
-    # model callback during training, prints training and test metrics
-    if config.data.target_field:
-        predictor = Predictor(model, encoder, config.data.target_field, max_batch_size=config.train.batch_size)
-    else:
-        predictor = Metrics(model, batch_size=config.train.batch_size)
-    progress_callback = make_progress_callback(
-        config.train, train_dataset=train_dataset, test_dataset=test_dataset, predictor=predictor
+    # Load training data
+    click.echo(f"Loading training data from {data}...")
+    train_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
     )
+    click.echo(f"  Loaded {len(train_data)} samples")
 
-    # train model
-    model.set_callback("on_batch_end", progress_callback)
-    model.train_model(train_dataset, batches=config.train.n_batches)
+    # Load or split validation data
+    eval_data = None
+    if val:
+        click.echo(f"Loading validation data from {val}...")
+        eval_data = load_data(val, db=db, collection=None)
+        click.echo(f"  Loaded {len(eval_data)} samples")
+    elif val_collection:
+        if detect_format(data) != DataFormat.MONGODB:
+            raise click.BadParameter("--val-collection requires MongoDB data source")
+        click.echo(f"Loading validation data from collection {val_collection}...")
+        eval_data = load_data(data, db=db, collection=val_collection)
+        click.echo(f"  Loaded {len(eval_data)} samples")
+    elif train_ratio:
+        # Split training data
+        random.shuffle(train_data)
+        split_idx = int(len(train_data) * train_ratio)
+        eval_data = train_data[split_idx:]
+        train_data = train_data[:split_idx]
+        click.echo(f"  Split: {len(train_data)} train, {len(eval_data)} validation")
 
-    # save model with config
-    save_origami_model(model, pipelines=pipelines, config=config, path=kwargs.get("model_path"))
+    # Build nested config from CLI args
+    model_kwargs = {
+        "d_model": d_model,
+        "n_heads": n_heads,
+        "n_layers": n_layers,
+        **extra_params.get("model", {}),
+    }
+
+    training_kwargs = {
+        "batch_size": batch_size,
+        "learning_rate": lr,
+        "num_epochs": epochs,
+        **extra_params.get("training", {}),
+    }
+
+    data_kwargs = {
+        "numeric_mode": numeric_mode,
+        **extra_params.get("data", {}),
+    }
+
+    # Enable continuous head when using scale mode or array length modeling
+    actual_numeric_mode = data_kwargs.get("numeric_mode", "disabled")
+    actual_model_array_lengths = data_kwargs.get("model_array_lengths", False)
+    if actual_numeric_mode == "scale" or actual_model_array_lengths:
+        model_kwargs.setdefault("use_continuous_head", True)
+
+    # Add evaluation config if target_key is provided
+    if target_key:
+        training_kwargs["target_key"] = target_key
+        training_kwargs.setdefault("eval_strategy", "epoch")  # Default, but respect --set
+        training_kwargs.setdefault("eval_metrics", {"accuracy": accuracy})
+        if eval_sample_size:
+            training_kwargs["eval_sample_size"] = eval_sample_size
+
+    try:
+        config = OrigamiConfig(
+            model=ModelConfig(**model_kwargs),
+            training=TrainingConfig(**training_kwargs),
+            data=DataConfig(**data_kwargs),
+        )
+    except (ValueError, TypeError) as e:
+        raise click.BadParameter(f"Invalid configuration: {e}") from e
+
+    if verbose:
+        click.echo("\nConfiguration:")
+        click.echo(config.to_yaml())
+
+    # Create and train pipeline
+    click.echo("\nTraining...")
+    pipeline = OrigamiPipeline(config)
+
+    try:
+        # Training handles KeyboardInterrupt gracefully - model is always saved
+        pipeline.fit(
+            train_data,
+            eval_data=eval_data,
+            epochs=epochs,
+            callbacks=[TableLogCallback()],
+            verbose=verbose,
+        )
+    except Exception as e:
+        click.echo(f"\nTraining failed: {e}", err=True)
+        sys.exit(1)
+
+    # Save model (works whether training completed or was interrupted)
+    click.echo(f"\nSaving model to {output}...")
+    pipeline.save(output)
+
+    # Report final stats
+    if verbose:
+        params = pipeline._model.get_num_parameters()
+        click.echo(f"Model parameters: {params:,}")
+
+    click.echo("Done!")

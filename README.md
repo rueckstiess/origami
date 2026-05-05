@@ -1,78 +1,141 @@
-<p align="center">
-  <img src="assets/origami_logo.jpg" style="width: 100%; height: auto;">
-</p>
+# Origami
 
-# ORiGAMi - Object Representation through Generative Autoregressive Modelling
+**A machine learning model for JSON data.**
 
-<p align="center">
-| <a href="https://arxiv.org/abs/2412.17348"><b>ORiGAMi Paper on Arxiv</b></a> |
-</p>
+[![PyPI](https://img.shields.io/pypi/v/origami-ml)](https://pypi.org/project/origami-ml/)
+[![Python](https://img.shields.io/pypi/pyversions/origami-ml)](https://pypi.org/project/origami-ml/)
+[![License](https://img.shields.io/pypi/l/origami-ml)](https://github.com/rueckstiess/origami/blob/v2/LICENSE)
 
-## Disclaimer
+Origami trains models that learn the relationships between fields in JSON objects. Given a dataset of JSON records, an Origami model can:
 
-This is a personal fork of the original [mongodb-labs/origami](https://github.com/mongodb-labs/origami) project. While I was the original author, I have since left MongoDB and am continuing development and maintenance of this fork independently.
+- **Predict** missing field values based on the other fields
+- **Generate** new synthetic JSON objects that follow the patterns in your data
+- **Embed** JSON objects as dense vectors for similarity search or downstream tasks
 
-This tool is not officially supported or endorsed by MongoDB, Inc. The code is released for use "AS IS" without any warranties of any kind, including, but not limited to its installation, use, or performance. Do not run this tool against critical production systems.
-
-## Overview
-
-ORiGAMi is a transformer-based Machine Learning model for supervised classification from semi-structured data such as MongoDB documents or JSON files.
-
-Typically, when working with semi-structured data in a Machine Learning context, the data needs to be flattened into a tabular format first. This flattening can be lossy, especially in the presence of arrays and nested objects, and often requires domain expertise to extract meaningful higher-order features from the raw data. This feature extraction step is manual, slow and expensive and doesn't scale well.
-
-ORiGAMi circumvents this by directly operating on JSON data. Once a model is trained, it can be used to make predictions on any field in the dataset.
+Unlike tabular ML models that require flat feature vectors, Origami works directly with JSON structure — including nested objects and arrays.
 
 ## Installation
 
-ORiGAMi requires Python 3.11. We recommend using [`uv`](https://docs.astral.sh/uv/) for dependency management and virtual environments.
-
-### Install from PyPI
-
-```shell
+```bash
 pip install origami-ml
 ```
 
-### Install from source with uv (recommended for development)
+Or with [uv](https://docs.astral.sh/uv/):
 
-First, install `uv` if you haven't already:
-
-```shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
+```bash
+uv add origami-ml
 ```
 
-Then clone and install the project:
+Requires Python 3.11+. PyTorch is installed automatically. GPU acceleration (CUDA, Apple Silicon MPS) is auto-detected — no configuration needed.
 
-```shell
-git clone https://github.com/rueckstiess/origami.git
-cd origami
-uv sync --extra dev
+## Quick Start
+
+```python
+from origami import OrigamiPipeline
+
+# Your data: a list of JSON objects (Python dicts)
+data = [
+    {"product": "Wireless Headphones", "categories": ["audio", "wireless"], "price": 79.99,  "rating": 4.2},
+    {"product": "USB-C Hub",           "categories": ["accessories"],       "price": 34.99,  "rating": 4.5},
+    {"product": "Mechanical Keyboard", "categories": ["peripherals"],       "price": 129.99, "rating": 4.7},
+    # ... more records
+]
+
+# Train with default settings
+pipeline = OrigamiPipeline()
+pipeline.fit(data, epochs=20)
+
+# Predict a missing value (including arrays)
+prediction = pipeline.predict(
+    {"product": "Bluetooth Speaker", "categories": None},
+    target_key="categories",
+    allow_complex_values=True,
+)
+print(prediction)  # ["audio", "wireless"]
+
+# Generate new synthetic records
+samples = pipeline.generate(num_samples=5, temperature=0.8)
+
+# Get a vector embedding
+embedding = pipeline.embed({"product": "Wireless Headphones", "categories": ["audio", "wireless"]})
+# numpy array of shape (128,)
+
+# Save and load
+pipeline.save("model.pt")
+loaded = OrigamiPipeline.load("model.pt")
 ```
 
-This will automatically create a virtual environment, install Python 3.11 if needed, and install all dependencies.
+## Configuration
 
-To run commands in the uv environment:
+For more control, pass an `OrigamiConfig` with nested configuration objects:
 
-```shell
-uv run origami --help
-uv run pytest
+```python
+from origami import OrigamiPipeline, OrigamiConfig, ModelConfig, TrainingConfig, DataConfig
+
+config = OrigamiConfig(
+    model=ModelConfig(
+        d_model=256,       # Larger hidden dimension (default: 128)
+        n_layers=6,        # More transformer layers (default: 4)
+    ),
+    training=TrainingConfig(
+        batch_size=64,
+        num_epochs=50,
+        target_key="price",                  # Track prediction metrics during training
+        eval_metrics={"acc": "accuracy"},     # Compute accuracy each epoch
+    ),
+    data=DataConfig(
+        numeric_mode="scale",  # Handle numeric fields as continuous values
+    ),
+)
+
+pipeline = OrigamiPipeline(config)
+pipeline.fit(train_data, eval_data=val_data)
 ```
 
-## Usage
+- **ModelConfig** controls the model architecture (size, depth, position encoding strategy)
+- **TrainingConfig** controls training hyperparameters (learning rate, batch size, evaluation)
+- **DataConfig** controls data preprocessing (how numeric fields are handled, vocabulary size)
+- **InferenceConfig** controls inference-time constraints (grammar and schema enforcement)
 
-ORiGAMi comes with a command line interface (CLI) and a Python SDK.
+See [Configuration Reference](documentation/configuration.md) for all options.
 
-### Usage from the Command Line
+## Command-Line Interface
 
-The CLI allows to train a model and make predictions from a trained model. After installation, run `origami` from your shell to see an overview of available commands.
+Origami includes a CLI for training, prediction, generation, evaluation, and embedding:
 
-Help for specific commands is available with `origami <command> --help`, where `<command>` is currently one of `train` or `predict`. Note that the first time you run the `origami` CLI tool can take longer.
+```bash
+# Train a model
+origami train -d data.jsonl -t label -e 20 -o model.pt
 
-Detailed documentation for the CLI and available options can be found in [`CLI.md`](CLI.md).
+# Predict missing values
+origami predict -m model.pt -d test.jsonl -t label
 
-### Usage with Python
+# Generate synthetic data
+origami generate -m model.pt -n 100 --temp 0.8
 
-To see an example on how to use ORiGAMi from Python, take a look at the provided [./notebooks](./notebooks/) folder, e.g. the [`example_origami_dungeons.ipynb`](./notebooks/example_origami_dungeons.ipynb) notebook.
+# Evaluate model performance
+origami evaluate -m model.pt -d test.jsonl -t label --metrics accuracy
+```
 
-## Experiment Reproduction
+See [CLI Reference](documentation/cli.md) for all commands and options.
 
-This code is released alongside our paper, which can be found on Arxiv: [ORIGAMI: A generative transformer architecture for predictions from semi-structured data](https://arxiv.org/abs/2412.17348). To reproduce the experiments in the paper, see the instructions in the [`./experiments/`](./experiments/) directory.
+## Documentation
+
+- **[Concepts](documentation/concepts.md)** — How Origami works: tokenization, position encoding, grammar constraints
+- **[Python SDK](documentation/python-sdk.md)** — Complete API reference for `OrigamiPipeline`
+- **[CLI Reference](documentation/cli.md)** — All commands, options, and supported data formats
+- **[Configuration](documentation/configuration.md)** — Every configuration parameter explained
+
+## How It Works
+
+Origami converts each JSON object into a sequence of tokens that preserve the hierarchical structure — keys, values, nesting, and arrays are all explicitly represented. Instead of encoding token position as a simple index (1st, 2nd, 3rd...), Origami uses **Key-Value Position Encoding (KVPE)**, which encodes the _path_ through the JSON tree. This lets the model understand which key each value belongs to, regardless of key order.
+
+A **grammar constraint** system (a pushdown automaton) ensures that every model output is valid JSON — no syntax errors, ever. This is applied automatically with no configuration needed.
+
+For numeric fields with many distinct values (like prices or measurements), Origami can model them as continuous distributions rather than discrete tokens, using a **mixture density output head**.
+
+For a deeper explanation of these concepts, see the [Concepts](documentation/concepts.md) page.
+
+## License
+
+Apache-2.0

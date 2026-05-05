@@ -1,7 +1,0 @@
-data:
-  db: openml
-  coll: 23-cmc
-  projection:
-    _id: 0
-  limit: 0
-  target_field: target

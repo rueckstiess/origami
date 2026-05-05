@@ -1,7 +1,0 @@
-data:
-  db: json2vec
-  coll: contraceptive
-  projection:
-    _id: 0
-  limit: 0
-  target_field: target

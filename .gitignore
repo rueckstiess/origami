@@ -1,26 +1,25 @@
-.venv
-__pycache__
-results
-checkpoints
-*.json
-*.egg-info
-*.hf
-.DS_Store
-.pytest_cache
-.ruff_cache
-dump/
-env/
-.venv/
-.env
-.env.remote
-*.origami
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
 dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test coverage
+.coverage
+
+# Local data and checkpoints
+datasets/
+checkpoints/
+experiments/
 *.pt
-dump/
 *.npy
-*.csv
-*.json[l]
-*.png
-*.pdf
-experiments/index-advisor/ab-results/*
-experiments/index-advisor/cache/*
+*.npx
+
+# IDE
+.vscode/
+.codex/

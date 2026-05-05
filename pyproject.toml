@@ -1,81 +1,93 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "origami-ml"
-version = "0.3.0"
-description = "An ML classifier model to make predictions from semi-structured data."
+version = "2.0.0a14"
+description = "ORIGAMI: Object RepresentatIon via Generative Autoregressive ModellIng"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-    { name = "Thomas Rueckstiess", email = "me@tomr.au" }
+    { name = "Thomas Rueckstiess" }
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "click>=8.1.7",
-    "click-option-group>=0.5.6",
-    "lightgbm>=4.5.0",
-    "matplotlib>=3.9.2",
-    "mdbrtools>=0.1.1",
-    "numpy>=1.26.4",
-    "omegaconf>=2.3.0",
-    "openml>=0.15.1",
-    "pandas>=2.2.3",
-    "pymongo>=4.8.0",
-    "python-dotenv>=1.0.1",
-    "scikit-learn>=1.5.2",
-    "torch>=2.4.1",
-    "tqdm>=4.66.4",
-    "xgboost>=2.1.3",
-    "yanex",
-]
-
-[project.optional-dependencies]
-dev = [
-    "jupyter>=1.1.1",
-    "jupyter-contrib-nbextensions>=0.7.0",
-    "pytest>=8.3.3",
-    "ruff>=0.9.3",
-    "yanex>=0.4.0",
-]
-viz = [
-    "plotly>=5.24.0",
-    "umap-learn>=0.5.0",
+    "torch>=2.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "tqdm",
+    "click>=8.0",
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.8",
+    "ipywidgets>=8.1.8",
+    "pyyaml>=6.0.3",
+    "pandas>=2.3.3",
+    "skypilot>=0.11.1",
+    "ipympl>=0.10.0",
+    "plotly>=5.0",
+    "anywidget>=0.9.21",
 ]
 
 [project.scripts]
 origami = "origami.cli:main"
 
-[project.urls]
-Homepage = "https://github.com/rueckstiess/origami"
-Repository = "https://github.com/rueckstiess/origami"
-Issues = "https://github.com/rueckstiess/origami/issues"
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+mongodb = [
+    "pymongo>=4.0",
+]
+accelerate = [
+    "accelerate>=0.25.0",
+]
+numba = [
+    "numba>=0.59.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["origami"]
 
 [tool.ruff]
-indent-width = 4
-line-length = 120
-extend-exclude = [
-    "__init__.py",
-]
+line-length = 100
+target-version = "py311"
 
 [tool.ruff.lint]
-extend-select = ["I"]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "UP",     # pyupgrade
+]
 ignore = [
-    "E402",  # allow module level import not at top of file
-    "F841",  # allow unused variables
-    "E712",  # allow "== True" and "== False"
-    "E741",  # allow usage 'l', 'O', or 'I' as variable names, though they can be indistinguishable from numbers
-    "F402",  # allow variable name shadowing; does not seem to work too well
+    "E501",   # line too long (handled by formatter)
+    "F541",   # f-string without placeholders
 ]
 
-[tool.pytest.ini_options]
-filterwarnings = []
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true

@@ -1,20 +1,24 @@
-from .predictor import Predictor
-from .embedder import Embedder
-from .metrics import Metrics
-from .autocomplete import AutoCompleter
-from .sampler import Sampler
-from .mc_estimator import MCEstimator
-from .rejection_estimator import RejectionEstimator
-from mdbrtools.estimator import SampleEstimator
+"""ORIGAMI inference utilities.
 
+Provides inference modes for trained ORIGAMI models:
+- Embedder: Extract document embeddings
+- Predictor: Predict values for target keys
+- Generator: Generate complete JSON objects
+- Evaluator: Unified evaluation for loss and accuracy metrics
+"""
+
+from .embedder import OrigamiEmbedder
+from .evaluator import OrigamiEvaluator, evaluate
+from .generator import OrigamiGenerator
+from .predictor import OrigamiPredictor
+from .utils import GenerationError, find_target_positions
 
 __all__ = [
-    'Predictor',
-    'Embedder',
-    'Metrics',
-    'AutoCompleter',
-    'Sampler',
-    'MCEstimator',
-    'RejectionEstimator',
-    'SampleEstimator',  # Re-exported from mdbrtools
+    "GenerationError",
+    "OrigamiEmbedder",
+    "OrigamiEvaluator",
+    "OrigamiGenerator",
+    "OrigamiPredictor",
+    "evaluate",
+    "find_target_positions",
 ]

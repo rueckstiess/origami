@@ -1,190 +1,197 @@
-import pathlib
+"""Embed subcommand for Origami CLI."""
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import click
-import torch
-from click_option_group import optgroup
-from omegaconf import OmegaConf
-from tqdm import tqdm
+import numpy as np
 
-from origami.cli.utils import create_projection, infer_output_format, load_data, save_embeddings
-from origami.inference import Embedder
-from origami.model import ORIGAMI
-from origami.model.vpda import ObjectVPDA
-from origami.preprocessing import DFDataset
-from origami.utils import count_parameters, load_origami_model
-from origami.utils.config import GuardrailsMethod
+from origami.cli.data_loaders import load_data
+
+
+def detect_output_format(path: str) -> str:
+    """Detect embedding output format from file extension.
+
+    Args:
+        path: Output file path
+
+    Returns:
+        Format string: "npy", "csv", or "pt"
+    """
+    path_lower = path.lower()
+    if path_lower.endswith(".npy"):
+        return "npy"
+    elif path_lower.endswith(".csv"):
+        return "csv"
+    elif path_lower.endswith(".pt") or path_lower.endswith(".pth"):
+        return "pt"
+    else:
+        raise click.BadParameter(
+            f"Cannot detect format from '{path}'. Use .npy, .csv, or .pt extension."
+        )
 
 
 @click.command()
-@click.argument("source", type=str)
 @click.option(
-    "--model-path",
     "-m",
-    type=click.Path(dir_okay=False, exists=True, path_type=pathlib.Path, resolve_path=True),
+    "--model",
     required=True,
-    help="path to trained model",
+    type=click.Path(exists=True),
+    help="Path to trained pipeline (.pt file).",
 )
-@optgroup.group("Source Options")
-@optgroup.option("--source-db", "-d", type=str, help="database name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--source-coll", "-c", type=str, help="collection name, only used when SOURCE is a MongoDB URI.")
-@optgroup.option("--include-fields", "-i", type=str, help="comma-separated list of field names to include")
-@optgroup.option("--exclude-fields", "-e", type=str, help="comma-separated list of field names to exclude")
-@optgroup.option("--skip", "-s", type=int, default=0, help="number of documents to skip")
-@optgroup.option("--limit", "-l", type=int, default=0, help="limit the number of documents to load")
-@optgroup.group("Embedding Options")
-@optgroup.option(
-    "--position",
-    "-p",
-    type=click.Choice(["target", "last", "end"]),
-    default="last",
-    show_default=True,
-    help="position to extract embedding from",
+@click.option(
+    "-d",
+    "--data",
+    required=True,
+    help="Input data. Format auto-detected: .csv, .json, .jsonl, or mongodb:// URI.",
 )
-@optgroup.option(
-    "--reduction",
-    "-r",
-    type=click.Choice(["index", "sum", "mean"]),
-    default="index",
-    show_default=True,
-    help="reduction/pooling strategy",
+@click.option(
+    "--db",
+    default=None,
+    help="MongoDB database name (required with mongodb:// URI).",
 )
-@optgroup.option(
-    "--normalize",
-    is_flag=True,
-    default=False,
-    help="L2-normalize embeddings to unit length",
+@click.option(
+    "-c",
+    "--collection",
+    default=None,
+    help="MongoDB collection name (required with mongodb:// URI).",
 )
-@optgroup.group("Output Options")
-@optgroup.option(
-    "--output-file",
+@click.option(
+    "--skip",
+    type=int,
+    default=0,
+    help="Skip N samples at the beginning.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=0,
+    help="Limit to N samples (0 = unlimited).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help="MongoDB-style projection. Include: '{\"a\": 1}'. Exclude: '{\"x\": 0}'.",
+)
+@click.option(
     "-o",
-    type=click.Path(path_type=pathlib.Path, resolve_path=True),
+    "--output",
     required=True,
-    help="file to store embeddings (format inferred from extension)",
+    type=click.Path(),
+    help="Output file. Format from extension: .npy (numpy), .csv, or .pt (torch).",
 )
-@click.option("--verbose", "-v", is_flag=True, default=False)
-def embed(source, **kwargs):
-    """Generate embeddings with a trained ORIGAMI model."""
+@click.option(
+    "-p",
+    "--pooling",
+    type=click.Choice(["mean", "max", "last", "target"]),
+    default="mean",
+    show_default=True,
+    help="Pooling strategy for embeddings.",
+)
+@click.option(
+    "-t",
+    "--target-key",
+    default=None,
+    help="Target key (required for pooling=target).",
+)
+@click.option(
+    "--no-normalize",
+    is_flag=True,
+    help="Disable L2 normalization of embeddings.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Display model configuration.",
+)
+def embed(
+    model: str,
+    data: str,
+    db: str | None,
+    collection: str | None,
+    skip: int,
+    limit: int,
+    project: str | None,
+    output: str,
+    pooling: str,
+    target_key: str | None,
+    no_normalize: bool,
+    verbose: bool,
+) -> None:
+    """Create embeddings for input data.
 
-    # load model, config and pipelines
-    model_dict = load_origami_model(kwargs.get("model_path"))
-    state_dict = model_dict["state_dict"]
-    config = model_dict["config"]
-    pipelines = model_dict["pipelines"]
-    encoder = pipelines["train"]["encoder"].encoder
-    schema = pipelines["train"]["schema"].schema
+    \b
+    Examples:
+      # Create embeddings as numpy array
+      origami embed -m model.pt -d data.jsonl -o embeddings.npy
 
-    # validate position="target" requires target_field
-    if kwargs["position"] == "target" and config.data.target_field is None:
-        raise click.BadParameter("--position=target requires a target field. Model was trained without --target-field.")
+      # Create embeddings as CSV
+      origami embed -m model.pt -d data.jsonl -o embeddings.csv
 
-    # create model and load weights
-    match config.model.guardrails:
-        case GuardrailsMethod.STRUCTURE_AND_VALUES:
-            if not config.pipeline.path_in_field_tokens:
-                raise Exception("GuardrailsMethod.STRUCTURE_AND_VALUES requires path_in_field_tokens=True")
-            vpda = ObjectVPDA(encoder, schema)
-        case GuardrailsMethod.STRUCTURE_ONLY:
-            vpda = ObjectVPDA(encoder)
-        case GuardrailsMethod.NONE:
-            vpda = None
+      # Create embeddings as torch tensor
+      origami embed -m model.pt -d data.jsonl -o embeddings.pt
 
-    model = ORIGAMI(config.model, config.train, vpda=vpda)
-    model.load_state_dict(state_dict)
+      # Use target-specific pooling
+      origami embed -m model.pt -d data.jsonl -o emb.npy -p target -t label
 
-    # data configs
-    config.data.source = source
-    config.data.db = kwargs["source_db"]
-    config.data.coll = kwargs["source_coll"]
-    config.data.projection = create_projection(kwargs["include_fields"], kwargs["exclude_fields"])
-    config.data.skip = kwargs["skip"]
-    config.data.limit = kwargs["limit"]
+      # Disable normalization
+      origami embed -m model.pt -d data.jsonl -o emb.npy --no-normalize
+    """
 
-    # validate MongoDB connection
-    if source.startswith("mongodb://") or source.startswith("mongodb+srv://"):
-        if kwargs["source_db"] is None or kwargs["source_coll"] is None:
-            raise click.BadParameter("--source-db and --source-coll are required for MongoDB URI")
+    from origami import OrigamiPipeline
 
-    # load data
-    df = load_data(source, config.data)
+    # Validate pooling options
+    if pooling == "target" and not target_key:
+        raise click.BadParameter("-t/--target-key is required when pooling=target")
 
-    # validate non-empty dataset
-    if len(df) == 0:
-        raise click.ClickException("No documents loaded from source")
+    # Detect output format
+    output_format = detect_output_format(output)
 
-    # transform data using test pipeline
-    test_pipeline = pipelines["test"]
-    test_df = test_pipeline.transform(df)
+    # Load model
+    click.echo(f"Loading model from {model}...")
+    pipeline = OrigamiPipeline.load(model)
 
-    # create dataset
-    test_dataset = DFDataset(test_df)
+    if verbose:
+        click.echo("\nConfiguration:")
+        click.echo(pipeline.config.to_yaml())
 
-    if kwargs["verbose"]:
-        # report number of parameters
-        n_params = count_parameters(model)
-        click.echo(f"running on device: {model.device}", err=True)
-        click.echo(f"number of parameters: {n_params / 1e6:.2f}M", err=True)
-        click.echo(f"loaded {len(test_dataset)} documents", err=True)
-        click.echo(f"config:\n {OmegaConf.to_yaml(config)}", err=True)
+    # Load input data
+    click.echo(f"Loading data from {data}...")
+    input_data = load_data(
+        data, db=db, collection=collection, skip=skip, limit=limit, project=project
+    )
+    click.echo(f"  Loaded {len(input_data)} samples")
 
-    # initialize embedder
-    embedder = Embedder(
-        model,
-        encoder,
-        config.data.target_field,
-        batch_size=config.train.batch_size,
+    # Create embeddings
+    click.echo("Creating embeddings...")
+    normalize = not no_normalize
+    embeddings = pipeline.embed_batch(
+        input_data,
+        pooling=pooling,
+        target_key=target_key,
+        normalize=normalize,
     )
 
-    # generate embeddings with progress bar
-    if kwargs["verbose"]:
-        click.echo("generating embeddings...", err=True)
+    click.echo(f"  Shape: {embeddings.shape}")
 
-    with tqdm(total=len(test_dataset), disable=not kwargs["verbose"], desc="Embedding", unit="docs") as pbar:
-        # custom wrapper to update progress bar
-        original_hidden_call = model.hidden
+    # Save embeddings
+    click.echo(f"Saving to {output}...")
+    _save_embeddings(embeddings, output, output_format)
+    click.echo(f"  Saved ({Path(output).stat().st_size / 1024:.1f} KB)")
 
-        def hidden_with_progress(*args, **fwd_kwargs):
-            result = original_hidden_call(*args, **fwd_kwargs)
-            pbar.update(args[0].size(0))  # update by batch size
-            return result
 
-        model.hidden = hidden_with_progress
+def _save_embeddings(embeddings: np.ndarray, path: str, fmt: str) -> None:
+    """Save embeddings in the specified format."""
+    if fmt == "npy":
+        np.save(path, embeddings)
 
-        embeddings = embedder.embed(
-            test_dataset,
-            kwargs["position"],
-            kwargs["reduction"],
-        )
+    elif fmt == "csv":
+        np.savetxt(path, embeddings, delimiter=",", fmt="%.6f")
 
-        model.hidden = original_hidden_call
+    elif fmt == "pt":
+        import torch
 
-    # move to CPU
-    embeddings = embeddings.cpu()
-
-    # optional L2 normalization
-    if kwargs["normalize"]:
-        norms = torch.norm(embeddings, p=2, dim=1, keepdim=True)
-        embeddings = embeddings / norms.clamp(min=1e-12)
-
-    # infer format from file extension
-    output_path = pathlib.Path(kwargs["output_file"])
-
-    # validate output directory exists
-    if not output_path.parent.exists():
-        raise click.BadParameter(f"Output directory does not exist: {output_path.parent}")
-
-    try:
-        format = infer_output_format(output_path)
-    except ValueError as e:
-        raise click.BadParameter(str(e))
-
-    # save embeddings
-    save_embeddings(embeddings.numpy(), output_path, format)
-
-    if kwargs["verbose"]:
-        click.echo(f"\nGenerated embeddings: shape={tuple(embeddings.shape)}", err=True)
-        click.echo(f"Position={kwargs['position']}, Reduction={kwargs['reduction']}", err=True)
-        click.echo(f"Normalized={kwargs['normalize']}", err=True)
-        click.echo(f"Saved to: {output_path} (format: {format})", err=True)
-    else:
-        click.echo(f"Saved embeddings to: {output_path}")
+        tensor = torch.from_numpy(embeddings)
+        torch.save(tensor, path)
