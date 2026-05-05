@@ -20,7 +20,7 @@ from origami.cli.train import train
 
 
 @click.group()
-@click.version_option(package_name="origami")
+@click.version_option(package_name="origami-ml")
 def main() -> None:
     """Origami - JSON object modeling with transformers.
 

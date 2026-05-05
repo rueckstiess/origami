@@ -329,6 +329,20 @@ wheels = [
 ]
 
 [[package]]
+name = "build"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "os_name == 'nt'" },
+    { name = "packaging" },
+    { name = "pyproject-hooks" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/e0/df5e171f685f82f37b12e1f208064e24244911079d7b767447d1af7e0d70/build-1.5.0.tar.gz", hash = "sha256:302c22c3ba2a0fd5f3911918651341ebb3896176cbdec15bd421f80b1afc7647", size = 89796 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/fe/6bea5c9162869c5beba5d9c8abbed835ec85bf1ec1fba05a3822325c45f3/build-1.5.0-py3-none-any.whl", hash = "sha256:13f3eecb844759ab66efec90ca17639bbf14dc06cb2fdf37a9010322d9c50a6f", size = 26018 },
+]
+
+[[package]]
 name = "cachetools"
 version = "6.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2307,21 +2321,13 @@ wheels = [
 
 [[package]]
 name = "origami-ml"
-version = "2.0.0a14"
+version = "2.0.0rc1"
 source = { editable = "." }
 dependencies = [
-    { name = "anywidget" },
     { name = "click" },
-    { name = "ipykernel" },
-    { name = "ipympl" },
-    { name = "ipywidgets" },
-    { name = "matplotlib" },
     { name = "numpy" },
-    { name = "pandas" },
-    { name = "plotly" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
-    { name = "skypilot" },
     { name = "torch" },
     { name = "tqdm" },
 ]
@@ -2330,7 +2336,11 @@ dependencies = [
 accelerate = [
     { name = "accelerate" },
 ]
+cloud = [
+    { name = "skypilot" },
+]
 dev = [
+    { name = "build" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2339,6 +2349,15 @@ dev = [
 mongodb = [
     { name = "pymongo" },
 ]
+notebook = [
+    { name = "anywidget" },
+    { name = "ipykernel" },
+    { name = "ipympl" },
+    { name = "ipywidgets" },
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "plotly" },
+]
 numba = [
     { name = "numba" },
 ]
@@ -2346,28 +2365,29 @@ numba = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'accelerate'", specifier = ">=0.25.0" },
-    { name = "anywidget", specifier = ">=0.9.21" },
+    { name = "anywidget", marker = "extra == 'notebook'", specifier = ">=0.9.21" },
+    { name = "build", marker = "extra == 'dev'" },
     { name = "click", specifier = ">=8.0" },
-    { name = "ipykernel", specifier = ">=7.1.0" },
-    { name = "ipympl", specifier = ">=0.10.0" },
-    { name = "ipywidgets", specifier = ">=8.1.8" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=7.1.0" },
+    { name = "ipympl", marker = "extra == 'notebook'", specifier = ">=0.10.0" },
+    { name = "ipywidgets", marker = "extra == 'notebook'", specifier = ">=8.1.8" },
+    { name = "matplotlib", marker = "extra == 'notebook'", specifier = ">=3.10.8" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numba", marker = "extra == 'numba'", specifier = ">=0.59.0" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "plotly", specifier = ">=5.0" },
+    { name = "pandas", marker = "extra == 'notebook'", specifier = ">=2.3.3" },
+    { name = "plotly", marker = "extra == 'notebook'", specifier = ">=5.0" },
     { name = "pymongo", marker = "extra == 'mongodb'", specifier = ">=4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-learn", specifier = ">=1.3" },
-    { name = "skypilot", specifier = ">=0.11.1" },
+    { name = "skypilot", marker = "extra == 'cloud'", specifier = ">=0.11.1" },
     { name = "torch", specifier = ">=2.0" },
     { name = "tqdm" },
 ]
-provides-extras = ["dev", "mongodb", "accelerate", "numba"]
+provides-extras = ["dev", "notebook", "cloud", "mongodb", "accelerate", "numba"]
 
 [[package]]
 name = "orjson"
@@ -3195,6 +3215,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f2/a5/181488fc2b9d093e3972d2a472855aae8a03f000592dbfce716a512b3359/pyparsing-3.2.5.tar.gz", hash = "sha256:2df8d5b7b2802ef88e8d016a2eb9c7aeaa923529cd251ed0fe4608275d4105b6", size = 1099274 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/5e/1aa9a93198c6b64513c9d7752de7422c06402de6600a8767da1524f9570b/pyparsing-3.2.5-py3-none-any.whl", hash = "sha256:e38a4f02064cf41fe6593d328d0512495ad1f3d8a91c4f73fc401b3079a59a5e", size = 113890 },
+]
+
+[[package]]
+name = "pyproject-hooks"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/82/28175b2414effca1cdac8dc99f76d660e7a4fb0ceefa4b4ab8f5f6742925/pyproject_hooks-1.2.0.tar.gz", hash = "sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8", size = 19228 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/24/12818598c362d7f300f18e74db45963dbcb85150324092410c8b49405e42/pyproject_hooks-1.2.0-py3-none-any.whl", hash = "sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913", size = 10216 },
 ]
 
 [[package]]

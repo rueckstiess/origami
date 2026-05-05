@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/origami-ml)](https://pypi.org/project/origami-ml/)
 [![Python](https://img.shields.io/pypi/pyversions/origami-ml)](https://pypi.org/project/origami-ml/)
-[![License](https://img.shields.io/pypi/l/origami-ml)](https://github.com/rueckstiess/origami/blob/v2/LICENSE)
+[![License](https://img.shields.io/pypi/l/origami-ml)](https://github.com/rueckstiess/origami/blob/main/LICENSE)
 
 Origami trains models that learn the relationships between fields in JSON objects. Given a dataset of JSON records, an Origami model can:
 
@@ -17,14 +17,17 @@ Unlike tabular ML models that require flat feature vectors, Origami works direct
 ## Installation
 
 ```bash
-pip install origami-ml
+pip install --pre origami-ml
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add origami-ml
+uv add --prerelease=allow origami-ml
 ```
+
+The v2 release candidate is a breaking rewrite. Until v2.0.0 final is published,
+plain `pip install origami-ml` may still install the latest stable v1 release.
 
 Requires Python 3.11+. PyTorch is installed automatically. GPU acceleration (CUDA, Apple Silicon MPS) is auto-detected — no configuration needed.
 
