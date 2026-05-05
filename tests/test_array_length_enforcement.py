@@ -9,7 +9,6 @@ import torch
 
 from origami.config import ModelConfig
 from origami.constraints.json_grammar import JSONGrammarPDA
-from origami.constraints.schema_pda import SchemaPDA
 from origami.inference import OrigamiGenerator
 from origami.inference.generator import PathState
 from origami.model import OrigamiModel

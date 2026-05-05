@@ -471,7 +471,6 @@ class TestDiscretizedLogisticNLL:
 
     def test_interior_bin(self, head):
         """Single component at target: verify NLL matches manual sigmoid computation."""
-        import math
 
         # 1 component, target=0.5, mean=0.5, scale=0.1, step=0.2
         weights = torch.ones(1, 1, 1)
@@ -495,7 +494,6 @@ class TestDiscretizedLogisticNLL:
 
     def test_lower_boundary_absorbs_mass(self, head):
         """Target at lower boundary (0.0): all mass below is absorbed."""
-        import math
 
         weights = torch.ones(1, 1, 1)
         means = torch.tensor([[[0.0]]])
@@ -517,7 +515,6 @@ class TestDiscretizedLogisticNLL:
 
     def test_upper_boundary_absorbs_mass(self, head):
         """Target at upper boundary (1.0): all mass above is absorbed."""
-        import math
 
         weights = torch.ones(1, 1, 1)
         means = torch.tensor([[[1.0]]])
