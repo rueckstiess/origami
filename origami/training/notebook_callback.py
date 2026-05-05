@@ -387,10 +387,16 @@ class PlotlyNotebookCallback(_NotebookCallbackBase):
 
         # Light gray frame around each subplot
         fig.update_xaxes(
-            showline=True, linewidth=1, linecolor="#ddd", mirror=True,
+            showline=True,
+            linewidth=1,
+            linecolor="#ddd",
+            mirror=True,
         )
         fig.update_yaxes(
-            showline=True, linewidth=1, linecolor="#ddd", mirror=True,
+            showline=True,
+            linewidth=1,
+            linecolor="#ddd",
+            mirror=True,
         )
 
         self._fig = go.FigureWidget(fig)
@@ -428,10 +434,15 @@ class MatplotlibNotebookCallback(_NotebookCallbackBase):
 
         self._plot_output = widgets.Output()
 
-        with plt.rc_context({
-            "font.size": 7, "axes.titlesize": 8, "axes.labelsize": 7,
-            "xtick.labelsize": 6, "ytick.labelsize": 6,
-        }):
+        with plt.rc_context(
+            {
+                "font.size": 7,
+                "axes.titlesize": 8,
+                "axes.labelsize": 7,
+                "xtick.labelsize": 6,
+                "ytick.labelsize": 6,
+            }
+        ):
             self._fig, axes = plt.subplots(
                 nrows, ncols, figsize=(4 * ncols, 2.5 * nrows), squeeze=False, dpi=300
             )
@@ -471,9 +482,14 @@ class MatplotlibNotebookCallback(_NotebookCallbackBase):
 
             if not points:
                 ax.text(
-                    0.5, 0.5, "waiting for data...",
-                    transform=ax.transAxes, ha="center", va="center",
-                    fontsize=7, color="gray",
+                    0.5,
+                    0.5,
+                    "waiting for data...",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="gray",
                 )
                 continue
 

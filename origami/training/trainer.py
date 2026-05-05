@@ -939,8 +939,12 @@ class OrigamiTrainer:
             discretization_step=batch.discretization_step,
         )
         loss = output.loss
-        self.state.current_discrete_loss = output.discrete_loss.item() if output.discrete_loss is not None else 0.0
-        self.state.current_continuous_loss = output.continuous_loss.item() if output.continuous_loss is not None else None
+        self.state.current_discrete_loss = (
+            output.discrete_loss.item() if output.discrete_loss is not None else 0.0
+        )
+        self.state.current_continuous_loss = (
+            output.continuous_loss.item() if output.continuous_loss is not None else None
+        )
         self.state.current_continuous_loss_weight = output.continuous_loss_weight
 
         # Backward pass (accelerate-aware)

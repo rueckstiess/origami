@@ -305,8 +305,7 @@ class SchemaPDA:
                     # If the enum has only non-numeric values (e.g. [None]),
                     # the field was scaled and numerics are continuous via MoG.
                     has_numeric_enum = any(
-                        isinstance(v, (int, float)) and not isinstance(v, bool)
-                        for v in schema_enum
+                        isinstance(v, (int, float)) and not isinstance(v, bool) for v in schema_enum
                     )
                     if not has_numeric_enum:
                         mask[vocab.num_token_id] = True

@@ -169,9 +169,7 @@ class TestGeneratorConstraints:
 
     def test_schema_true_with_schema(self, model, tokenizer, sample_schema):
         """constrain_schema=True with schema should create Schema PDA."""
-        gen = OrigamiGenerator(
-            model, tokenizer, schema=sample_schema, constrain_schema=True
-        )
+        gen = OrigamiGenerator(model, tokenizer, schema=sample_schema, constrain_schema=True)
         assert gen._schema_pda is not None
 
     def test_schema_true_without_schema_raises(self, model, tokenizer):
@@ -181,9 +179,7 @@ class TestGeneratorConstraints:
 
     def test_schema_false_ignores_schema(self, model, tokenizer, sample_schema):
         """constrain_schema=False should not create Schema PDA even if schema given."""
-        gen = OrigamiGenerator(
-            model, tokenizer, schema=sample_schema, constrain_schema=False
-        )
+        gen = OrigamiGenerator(model, tokenizer, schema=sample_schema, constrain_schema=False)
         assert gen._schema_pda is None
 
     def test_schema_false_no_schema(self, model, tokenizer):
@@ -193,9 +189,7 @@ class TestGeneratorConstraints:
 
     def test_schema_pda_uses_strict_unk(self, model, tokenizer, sample_schema):
         """Generator schema PDA should use strict UNK (blocks UNK tokens)."""
-        gen = OrigamiGenerator(
-            model, tokenizer, schema=sample_schema, constrain_schema=True
-        )
+        gen = OrigamiGenerator(model, tokenizer, schema=sample_schema, constrain_schema=True)
         pda = gen._schema_pda
         # Strict means UNK_KEY and UNK_VALUE should be blocked in schema masks
         assert not pda._allow_unk_key
@@ -203,9 +197,7 @@ class TestGeneratorConstraints:
 
     def test_generate_with_grammar_only(self, model, tokenizer):
         """Generation with grammar only produces valid results."""
-        gen = OrigamiGenerator(
-            model, tokenizer, constrain_grammar=True, constrain_schema=False
-        )
+        gen = OrigamiGenerator(model, tokenizer, constrain_grammar=True, constrain_schema=False)
         results = gen.generate(num_samples=2, max_length=64)
         assert len(results) == 2
         for obj in results:
@@ -214,7 +206,8 @@ class TestGeneratorConstraints:
     def test_generate_with_both_constraints(self, model, tokenizer, sample_schema):
         """Generation with grammar + schema creates proper PDAs."""
         gen = OrigamiGenerator(
-            model, tokenizer,
+            model,
+            tokenizer,
             schema=sample_schema,
             constrain_grammar=True,
             constrain_schema=True,
@@ -227,9 +220,7 @@ class TestGeneratorConstraints:
 
     def test_generate_without_constraints(self, model, tokenizer):
         """Generation without any constraints still produces output."""
-        gen = OrigamiGenerator(
-            model, tokenizer, constrain_grammar=False, constrain_schema=False
-        )
+        gen = OrigamiGenerator(model, tokenizer, constrain_grammar=False, constrain_schema=False)
         # Without grammar, output may not be valid JSON, but generate() should not crash
         results = gen.generate(num_samples=2, max_length=32)
         assert len(results) >= 0  # May produce empty list if invalid sequences
@@ -256,7 +247,8 @@ class TestPredictorConstraints:
     def test_predictor_schema_passthrough(self, model, tokenizer, sample_schema):
         """Predictor passes schema constraints to Generator."""
         pred = OrigamiPredictor(
-            model, tokenizer,
+            model,
+            tokenizer,
             schema=sample_schema,
             constrain_grammar=True,
             constrain_schema=True,
@@ -314,7 +306,8 @@ class TestEvaluatorConstraints:
     def test_schema_true_with_schema(self, model, tokenizer, sample_schema):
         """Evaluator creates schema PDA for loss computation."""
         ev = OrigamiEvaluator(
-            model, tokenizer,
+            model,
+            tokenizer,
             schema=sample_schema,
             constrain_grammar=True,
             constrain_schema=True,
@@ -329,7 +322,8 @@ class TestEvaluatorConstraints:
     def test_schema_pda_uses_lenient_unk(self, model, tokenizer, sample_schema):
         """Evaluator loss PDA should use lenient UNK (allows unseen tokens)."""
         ev = OrigamiEvaluator(
-            model, tokenizer,
+            model,
+            tokenizer,
             schema=sample_schema,
             constrain_schema=True,
         )
@@ -340,7 +334,8 @@ class TestEvaluatorConstraints:
     def test_predictor_uses_strict_unk(self, model, tokenizer, sample_data, sample_schema):
         """Evaluator's lazy predictor should use strict UNK via Generator."""
         ev = OrigamiEvaluator(
-            model, tokenizer,
+            model,
+            tokenizer,
             target_key="shape",
             schema=sample_schema,
             constrain_grammar=True,
@@ -371,7 +366,8 @@ class TestEvaluatorConstraints:
     def test_compute_loss_with_schema(self, model, tokenizer, sample_data, sample_schema):
         """Loss computation with schema constraints produces finite loss."""
         ev = OrigamiEvaluator(
-            model, tokenizer,
+            model,
+            tokenizer,
             schema=sample_schema,
             constrain_grammar=True,
             constrain_schema=True,
@@ -383,7 +379,8 @@ class TestEvaluatorConstraints:
     def test_evaluate_with_metrics(self, model_with_grammar_pda, tokenizer, sample_data):
         """Evaluation with prediction metrics works with constraints."""
         ev = OrigamiEvaluator(
-            model_with_grammar_pda, tokenizer,
+            model_with_grammar_pda,
+            tokenizer,
             target_key="shape",
             constrain_grammar=True,
         )
@@ -420,7 +417,9 @@ class TestConvenienceEvaluate:
         from origami.inference.evaluator import evaluate
 
         results = evaluate(
-            model, tokenizer, sample_data,
+            model,
+            tokenizer,
+            sample_data,
             schema=sample_schema,
             constrain_grammar=True,
             constrain_schema=True,
@@ -1011,6 +1010,4 @@ class TestConstraintMatrix:
             result = pipeline.predict(sample_data[0], target_key="shape")
             assert result is not None or result is None
         except GenerationError:
-            assert not infer_grammar, (
-                "GenerationError with grammar enabled is unexpected"
-            )
+            assert not infer_grammar, "GenerationError with grammar enabled is unexpected"

@@ -461,6 +461,7 @@ class TestTruncatedMoG:
         assert (samples >= 0).all(), f"Samples below lower bound: {samples.min()}"
         assert (samples <= 1).all(), f"Samples above upper bound: {samples.max()}"
 
+
 class TestDiscretizedLogisticNLL:
     """Tests for the discretized logistic mixture NLL used for integer positions."""
 
@@ -482,8 +483,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.2]])
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
 
         # Manual: sigmoid((0.6 - 0.5)/0.1) - sigmoid((0.4 - 0.5)/0.1)
@@ -504,8 +510,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.2]])  # half_step = 0.1
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
 
         # Lower boundary: sigmoid((0.1 - 0)/1.0) - sigmoid(-20) ≈ sigmoid(0.1)
@@ -525,8 +536,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.2]])
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
         # Upper boundary: sigmoid(20) - sigmoid((0.9 - 1.0)/1.0) = 1 - sigmoid(-0.1) = sigmoid(0.1)
         expected = -math.log(torch.sigmoid(torch.tensor(0.1)).item())
@@ -544,8 +560,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.1]])
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
         assert loss.isfinite()
 
@@ -560,8 +581,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.1]])
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
         assert loss.isfinite()
 
@@ -576,8 +602,13 @@ class TestDiscretizedLogisticNLL:
         step = torch.tensor([[0.1]])
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
         assert loss.isfinite()
 
@@ -607,17 +638,33 @@ class TestDiscretizedLogisticNLL:
         step = torch.full((batch, seq), 0.1)
 
         loss = head.nll_loss(
-            weights, means, log_vars, targets, mask,
-            is_integer=is_integer, discretization_step=step,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask,
+            is_integer=is_integer,
+            discretization_step=step,
         )
         assert loss.isfinite()
 
         # Verify it's a weighted combination
         gauss_loss = head._nll_loss_standard(
-            weights, means, log_vars, targets, mask & ~is_integer, None,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask & ~is_integer,
+            None,
         )
         logistic_loss = head._nll_loss_discretized_logistic(
-            weights, means, log_vars, targets, mask & is_integer, step, None,
+            weights,
+            means,
+            log_vars,
+            targets,
+            mask & is_integer,
+            step,
+            None,
         )
         expected = (2 * gauss_loss + 2 * logistic_loss) / 4
         assert torch.allclose(loss, expected, atol=1e-5)
@@ -625,8 +672,11 @@ class TestDiscretizedLogisticNLL:
     def test_gradient_flow(self):
         """Gradients flow correctly through the discretized logistic loss."""
         config = ModelConfig(
-            use_continuous_head=True, num_mixture_components=3,
-            d_model=32, n_heads=2, n_layers=2,
+            use_continuous_head=True,
+            num_mixture_components=3,
+            d_model=32,
+            n_heads=2,
+            n_layers=2,
         )
         data = [
             {"items": [1, 2], "val": ScaledNumeric(0.5)},
@@ -642,8 +692,11 @@ class TestDiscretizedLogisticNLL:
         batch = collator(instances)
 
         output = model(
-            batch.input_ids, batch.path_types, batch.path_ids,
-            batch.path_lengths, batch.attention_mask,
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
             labels=batch.labels,
             numeric_values=batch.numeric_values,
             numeric_mask=batch.numeric_mask,
@@ -677,7 +730,9 @@ class TestDiscretizedLogisticNLL:
         }
         schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
         collator = OrigamiDataCollator(
-            tokenizer, schema_pda=schema_pda, model_array_lengths=True,
+            tokenizer,
+            schema_pda=schema_pda,
+            model_array_lengths=True,
         )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
@@ -747,9 +802,8 @@ class TestArrayLengthModeling:
         inst = tokenizer.tokenize(data[0])
 
         from origami.tokenizer.vocabulary import ARRAY_START
-        array_start_indices = [
-            i for i, t in enumerate(inst.tokens) if t == ARRAY_START
-        ]
+
+        array_start_indices = [i for i, t in enumerate(inst.tokens) if t == ARRAY_START]
         assert len(array_start_indices) == 1
         idx = array_start_indices[0]
         assert inst.numeric_values[idx] == 3.0
@@ -762,9 +816,8 @@ class TestArrayLengthModeling:
         inst = tokenizer.tokenize(data[0])
 
         from origami.tokenizer.vocabulary import ARRAY_START
-        array_start_indices = [
-            i for i, t in enumerate(inst.tokens) if t == ARRAY_START
-        ]
+
+        array_start_indices = [i for i, t in enumerate(inst.tokens) if t == ARRAY_START]
         assert len(array_start_indices) == 1
         assert inst.numeric_values[array_start_indices[0]] == 0.0
 
@@ -776,10 +829,9 @@ class TestArrayLengthModeling:
         inst = tokenizer.tokenize(data[0])
 
         from origami.tokenizer.vocabulary import ARRAY_START
+
         array_lengths = [
-            inst.numeric_values[i]
-            for i, t in enumerate(inst.tokens)
-            if t == ARRAY_START
+            inst.numeric_values[i] for i, t in enumerate(inst.tokens) if t == ARRAY_START
         ]
         assert sorted(array_lengths) == [2.0, 2.0, 3.0]
 
@@ -803,7 +855,9 @@ class TestArrayLengthModeling:
         }
         schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
         collator = OrigamiDataCollator(
-            tokenizer, schema_pda=schema_pda, model_array_lengths=True,
+            tokenizer,
+            schema_pda=schema_pda,
+            model_array_lengths=True,
         )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
@@ -838,16 +892,22 @@ class TestArrayLengthModeling:
 
         with torch.no_grad():
             out1 = model.embeddings(
-                batch.input_ids, batch.path_types, batch.path_ids,
-                batch.path_lengths, numeric_values=batch.numeric_values,
+                batch.input_ids,
+                batch.path_types,
+                batch.path_ids,
+                batch.path_lengths,
+                numeric_values=batch.numeric_values,
             )
             modified = batch.numeric_values.clone()
             # Change array length value at ARRAY_START position
             is_arr = batch.input_ids == 4
             modified[is_arr] = 10.0
             out2 = model.embeddings(
-                batch.input_ids, batch.path_types, batch.path_ids,
-                batch.path_lengths, numeric_values=modified,
+                batch.input_ids,
+                batch.path_types,
+                batch.path_ids,
+                batch.path_lengths,
+                numeric_values=modified,
             )
 
         diff = (out1 - out2).abs()
@@ -864,8 +924,11 @@ class TestArrayLengthModeling:
         tokenizer.fit(data)
 
         config = ModelConfig(
-            use_continuous_head=True, num_mixture_components=3,
-            d_model=32, n_heads=2, n_layers=2,
+            use_continuous_head=True,
+            num_mixture_components=3,
+            d_model=32,
+            n_heads=2,
+            n_layers=2,
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
         model.train()
@@ -879,8 +942,11 @@ class TestArrayLengthModeling:
         assert (batch.numeric_mask & is_arr).any()
 
         output = model(
-            batch.input_ids, batch.path_types, batch.path_ids,
-            batch.path_lengths, batch.attention_mask,
+            batch.input_ids,
+            batch.path_types,
+            batch.path_ids,
+            batch.path_lengths,
+            batch.attention_mask,
             labels=batch.labels,
             numeric_values=batch.numeric_values,
             numeric_mask=batch.numeric_mask,
@@ -1001,13 +1067,12 @@ class TestSampleInteger:
 
         # Collect empirical sampling distribution
         from collections import Counter
+
         counts = Counter()
         n_samples = 5000
         for seed in range(n_samples):
             torch.manual_seed(seed)
-            s = head.sample_integer(
-                weights, means, log_vars, torch.tensor([[float(max_items)]])
-            )
+            s = head.sample_integer(weights, means, log_vars, torch.tensor([[float(max_items)]]))
             counts[s.item()] += 1
 
         # Compute theoretical bin probabilities from logistic CDF

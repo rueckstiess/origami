@@ -606,8 +606,7 @@ class OrigamiPipeline:
         # Determine if continuous head is needed based on data config
         # Enable when either numeric scaling or array length modeling is active
         use_continuous_head = (
-            self.config.data.numeric_mode == "scale"
-            or self.config.data.model_array_lengths
+            self.config.data.numeric_mode == "scale" or self.config.data.model_array_lengths
         )
 
         # Create model config with continuous head setting based on data config
@@ -1195,8 +1194,7 @@ class OrigamiPipeline:
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
                 enforce_array_lengths=(
-                    inference_cfg.enforce_array_lengths
-                    and self.config.data.model_array_lengths
+                    inference_cfg.enforce_array_lengths and self.config.data.model_array_lengths
                 ),
             )
         return self._generator
@@ -1218,8 +1216,7 @@ class OrigamiPipeline:
                 constrain_grammar=inference_cfg.constrain_grammar,
                 constrain_schema=inference_cfg.constrain_schema,
                 enforce_array_lengths=(
-                    inference_cfg.enforce_array_lengths
-                    and self.config.data.model_array_lengths
+                    inference_cfg.enforce_array_lengths and self.config.data.model_array_lengths
                 ),
             )
         return self._predictor
@@ -1303,7 +1300,9 @@ class OrigamiPipeline:
         return any_metric_requires_complex_values(metrics)
 
     def _get_embedder(
-        self, pooling: Literal["mean", "max", "last", "target"], device: str | torch.device | None = None
+        self,
+        pooling: Literal["mean", "max", "last", "target"],
+        device: str | torch.device | None = None,
     ) -> OrigamiEmbedder:
         """Get or create an embedder with the specified pooling.
 

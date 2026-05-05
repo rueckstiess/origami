@@ -139,17 +139,32 @@ class ContinuousHead(nn.Module):
         # All integer → all discretized logistic
         if not float_mask.any():
             return self._nll_loss_discretized_logistic(
-                weights, means, log_vars, targets, integer_mask,
-                discretization_step, loss_weights,
+                weights,
+                means,
+                log_vars,
+                targets,
+                integer_mask,
+                discretization_step,
+                loss_weights,
             )
 
         # Mixed: compute both, combine as weighted average by position count
         gauss_loss = self._nll_loss_standard(
-            weights, means, log_vars, targets, float_mask, loss_weights,
+            weights,
+            means,
+            log_vars,
+            targets,
+            float_mask,
+            loss_weights,
         )
         logistic_loss = self._nll_loss_discretized_logistic(
-            weights, means, log_vars, targets, integer_mask,
-            discretization_step, loss_weights,
+            weights,
+            means,
+            log_vars,
+            targets,
+            integer_mask,
+            discretization_step,
+            loss_weights,
         )
 
         if loss_weights is not None:
@@ -311,9 +326,9 @@ class ContinuousHead(nn.Module):
 
         # Normalize and sample from categorical
         mixture_prob = mixture_prob / mixture_prob.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-        sampled = torch.multinomial(
-            mixture_prob.view(-1, n_bins), num_samples=1
-        ).view(batch_size, seq_len)
+        sampled = torch.multinomial(mixture_prob.view(-1, n_bins), num_samples=1).view(
+            batch_size, seq_len
+        )
 
         return sampled
 

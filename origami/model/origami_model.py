@@ -154,13 +154,19 @@ class OrigamiModel(nn.Module):
             else:
                 # No attention mask: simple sequential positions
                 seq_len = input_ids.size(1)
-                position_ids = torch.arange(
-                    seq_len, dtype=torch.long, device=input_ids.device
-                ).unsqueeze(0).expand(input_ids.size(0), -1)
+                position_ids = (
+                    torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
+                    .unsqueeze(0)
+                    .expand(input_ids.size(0), -1)
+                )
 
         # 1. Embeddings (with numeric values for continuous head)
         hidden = self.embeddings(
-            input_ids, path_types, path_ids, path_lengths, numeric_values,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
+            numeric_values,
             position_ids=position_ids,
         )
 

@@ -322,9 +322,7 @@ class TestConfigIntegration:
         data = [{"items": [1, 2]}]
         model, tokenizer = _make_model_and_tokenizer(data)
 
-        predictor = OrigamiPredictor(
-            model, tokenizer, enforce_array_lengths=False
-        )
+        predictor = OrigamiPredictor(model, tokenizer, enforce_array_lengths=False)
         assert predictor._generator._enforce_array_lengths is False
 
     def test_evaluator_passes_enforce_flag(self):
@@ -334,7 +332,5 @@ class TestConfigIntegration:
         data = [{"items": [1, 2]}]
         model, tokenizer = _make_model_and_tokenizer(data)
 
-        evaluator = OrigamiEvaluator(
-            model, tokenizer, enforce_array_lengths=False
-        )
+        evaluator = OrigamiEvaluator(model, tokenizer, enforce_array_lengths=False)
         assert evaluator._enforce_array_lengths is False

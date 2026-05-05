@@ -19,10 +19,12 @@ AVAILABLE_DEVICES = get_available_devices()
 def tokenizer():
     """Create a tokenizer fitted on sample data."""
     tokenizer = JSONTokenizer()
-    tokenizer.fit([
-        {"name": "Alice", "age": 30},
-        {"name": "Bob", "age": 25},
-    ])
+    tokenizer.fit(
+        [
+            {"name": "Alice", "age": 30},
+            {"name": "Bob", "age": 25},
+        ]
+    )
     return tokenizer
 
 
@@ -30,7 +32,10 @@ def tokenizer():
 def seq_config():
     """ModelConfig with sequential PE."""
     return ModelConfig(
-        d_model=64, n_heads=4, n_layers=2, d_ff=128,
+        d_model=64,
+        n_heads=4,
+        n_layers=2,
+        d_ff=128,
         position_encoding="sequential",
     )
 
@@ -95,7 +100,10 @@ class TestSequentialEmbeddings:
         position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
 
         output = emb(
-            input_ids, path_types, path_ids, path_lengths,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
             position_ids=position_ids,
         )
         assert output.shape == (batch_size, seq_len, seq_config.d_model)
@@ -111,7 +119,10 @@ class TestSequentialEmbeddings:
         position_ids = torch.tensor([[0, 1]])
 
         output = emb(
-            input_ids, path_types, path_ids, path_lengths,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
             position_ids=position_ids,
         )
         # Position 0 and position 1 should produce different embeddings
@@ -128,7 +139,10 @@ class TestSequentialEmbeddings:
         position_ids = torch.tensor([[3, 3]])
 
         output = emb(
-            input_ids, path_types, path_ids, path_lengths,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
             position_ids=position_ids,
         )
         assert torch.allclose(output[0, 0], output[0, 1])
@@ -148,7 +162,10 @@ class TestSequentialEmbeddings:
         position_ids = torch.arange(5).unsqueeze(0)
 
         output = emb(
-            input_ids, path_types, path_ids, path_lengths,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
             position_ids=position_ids,
         )
         output.sum().backward()
@@ -162,16 +179,27 @@ class TestSequentialEmbeddings:
         batch_size, seq_len = 2, 10
         input_ids = torch.randint(0, self.VOCAB_SIZE, (batch_size, seq_len), device=device)
         path_types = torch.zeros(
-            batch_size, seq_len, seq_config.max_depth, dtype=torch.long, device=device,
+            batch_size,
+            seq_len,
+            seq_config.max_depth,
+            dtype=torch.long,
+            device=device,
         )
         path_ids = torch.zeros(
-            batch_size, seq_len, seq_config.max_depth, dtype=torch.long, device=device,
+            batch_size,
+            seq_len,
+            seq_config.max_depth,
+            dtype=torch.long,
+            device=device,
         )
         path_lengths = torch.zeros(batch_size, seq_len, dtype=torch.long, device=device)
         position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
 
         output = emb(
-            input_ids, path_types, path_ids, path_lengths,
+            input_ids,
+            path_types,
+            path_ids,
+            path_lengths,
             position_ids=position_ids,
         )
         assert output.device.type == device.type
@@ -237,14 +265,18 @@ class TestSequentialModel:
 
     def test_position_ids_from_attention_mask(self):
         """Verify position IDs are correctly derived from attention_mask."""
-        attention_mask = torch.tensor([
-            [False, False, True, True, True],  # 2 PAD + 3 real
-            [True, True, True, True, True],    # 5 real
-        ])
-        expected = torch.tensor([
-            [0, 0, 0, 1, 2],
-            [0, 1, 2, 3, 4],
-        ])
+        attention_mask = torch.tensor(
+            [
+                [False, False, True, True, True],  # 2 PAD + 3 real
+                [True, True, True, True, True],  # 5 real
+            ]
+        )
+        expected = torch.tensor(
+            [
+                [0, 0, 0, 1, 2],
+                [0, 1, 2, 3, 4],
+            ]
+        )
         position_ids = attention_mask.long().cumsum(dim=-1) - 1
         position_ids = position_ids.clamp(min=0)
         assert torch.equal(position_ids, expected)
@@ -323,7 +355,10 @@ class TestSequentialPEKVCache:
     @pytest.fixture
     def cached_config(self):
         return ModelConfig(
-            d_model=64, n_heads=4, n_layers=2, d_ff=128,
+            d_model=64,
+            n_heads=4,
+            n_layers=2,
+            d_ff=128,
             position_encoding="sequential",
             backbone="cached_transformer",
         )
@@ -383,10 +418,12 @@ class TestSequentialPEGeneration:
     @pytest.fixture
     def small_tokenizer(self):
         tokenizer = JSONTokenizer()
-        tokenizer.fit([
-            {"a": 1, "b": 2},
-            {"a": 3, "b": 4},
-        ])
+        tokenizer.fit(
+            [
+                {"a": 1, "b": 2},
+                {"a": 3, "b": 4},
+            ]
+        )
         return tokenizer
 
     def test_generate_produces_valid_objects(self, small_tokenizer):
@@ -394,7 +431,10 @@ class TestSequentialPEGeneration:
         from origami.inference import OrigamiGenerator
 
         config = ModelConfig(
-            d_model=32, n_heads=2, n_layers=1, d_ff=64,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
             position_encoding="sequential",
         )
         model = OrigamiModel(config, vocab=small_tokenizer.vocab)
@@ -408,7 +448,10 @@ class TestSequentialPEGeneration:
         from origami.inference import OrigamiPredictor
 
         config = ModelConfig(
-            d_model=32, n_heads=2, n_layers=1, d_ff=64,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
             position_encoding="sequential",
         )
         model = OrigamiModel(config, vocab=small_tokenizer.vocab)
@@ -421,7 +464,10 @@ class TestSequentialPEGeneration:
         from origami.inference import OrigamiPredictor
 
         config = ModelConfig(
-            d_model=32, n_heads=2, n_layers=1, d_ff=64,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
             position_encoding="sequential",
         )
         model = OrigamiModel(config, vocab=small_tokenizer.vocab)
@@ -437,7 +483,10 @@ class TestSequentialPEGeneration:
         from origami.inference import OrigamiGenerator
 
         config = ModelConfig(
-            d_model=32, n_heads=2, n_layers=1, d_ff=64,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
             position_encoding="sequential",
             backbone="cached_transformer",
         )
@@ -456,7 +505,9 @@ class TestSequentialPESaveLoad:
 
     def test_model_save_load_roundtrip(self, tmp_path, tokenizer):
         config = ModelConfig(
-            d_model=32, n_heads=2, n_layers=1,
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
             position_encoding="sequential",
         )
         model = OrigamiModel(config, vocab=tokenizer.vocab)
@@ -480,7 +531,9 @@ class TestSequentialPESaveLoad:
 
         config = OrigamiConfig(
             model=ModelConfig(
-                d_model=32, n_heads=2, n_layers=1,
+                d_model=32,
+                n_heads=2,
+                n_layers=1,
                 position_encoding="sequential",
             ),
         )
@@ -519,11 +572,17 @@ class TestKVPEvsSequentialComparison:
 
     def test_different_hidden_states(self, tokenizer):
         config_kvpe = ModelConfig(
-            d_model=64, n_heads=4, n_layers=1, d_ff=128,
+            d_model=64,
+            n_heads=4,
+            n_layers=1,
+            d_ff=128,
             position_encoding="kvpe",
         )
         config_seq = ModelConfig(
-            d_model=64, n_heads=4, n_layers=1, d_ff=128,
+            d_model=64,
+            n_heads=4,
+            n_layers=1,
+            d_ff=128,
             position_encoding="sequential",
         )
 

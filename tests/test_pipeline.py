@@ -2015,7 +2015,10 @@ class TestTransformSchemaForPda:
 
         random.seed(42)
         data = [
-            {"name": f"item_{i}", "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2)}
+            {
+                "name": f"item_{i}",
+                "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2),
+            }
             for i in range(200)
         ]
 
@@ -2054,10 +2057,14 @@ class TestTransformSchemaForPda:
         # Arbitrary numeric ValueTokens should NOT be allowed
         for vid in vocab._value_ids:
             token = vocab.decode(vid)
-            if isinstance(token, ValueToken) and isinstance(token.value, (int, float)) and not isinstance(
-                token.value, bool
+            if (
+                isinstance(token, ValueToken)
+                and isinstance(token.value, (int, float))
+                and not isinstance(token.value, bool)
             ):
-                assert not mask[vid].item(), f"Numeric ValueToken({token.value!r}) should be blocked"
+                assert not mask[vid].item(), (
+                    f"Numeric ValueToken({token.value!r}) should be blocked"
+                )
 
     def test_schema_pda_allows_string_for_scaled_field(self):
         """End-to-end: SchemaPDA allows specific string + NUM for a scaled mixed-type field."""
@@ -2097,7 +2104,11 @@ class TestTransformSchemaForPda:
         # Other string ValueTokens should NOT be allowed
         for vid in vocab._value_ids:
             token = vocab.decode(vid)
-            if isinstance(token, ValueToken) and isinstance(token.value, str) and token.value != "n/a":
+            if (
+                isinstance(token, ValueToken)
+                and isinstance(token.value, str)
+                and token.value != "n/a"
+            ):
                 assert not mask[vid].item(), f"ValueToken({token.value!r}) should be blocked"
 
     def test_schema_pda_allows_null_for_discretized_field(self):
@@ -2112,7 +2123,10 @@ class TestTransformSchemaForPda:
 
         random.seed(42)
         data = [
-            {"name": f"item_{i}", "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2)}
+            {
+                "name": f"item_{i}",
+                "score": None if random.random() < 0.8 else round(random.gauss(50, 15), 2),
+            }
             for i in range(200)
         ]
 
