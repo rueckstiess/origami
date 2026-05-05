@@ -4,20 +4,17 @@ Origami v2 is a breaking rewrite of the original `origami-ml` package. The packa
 stays the same and imports still come from `origami`, but the public API, model internals,
 CLI, configuration system, and saved checkpoint format have changed substantially.
 
-Install the v2 release candidate with prereleases enabled:
+Install v2 with:
 
 ```bash
-pip install --pre origami-ml
+pip install origami-ml
 ```
 
 or, with uv:
 
 ```bash
-uv add --prerelease=allow origami-ml
+uv add origami-ml
 ```
-
-Until `2.0.0` final is published, plain `pip install origami-ml` may still install the
-latest stable v1 release.
 
 ## What Changed
 

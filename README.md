@@ -17,17 +17,17 @@ Unlike tabular ML models that require flat feature vectors, Origami works direct
 ## Installation
 
 ```bash
-pip install --pre origami-ml
+pip install origami-ml
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add --prerelease=allow origami-ml
+uv add origami-ml
 ```
 
-The v2 release candidate is a breaking rewrite. Until v2.0.0 final is published,
-plain `pip install origami-ml` may still install the latest stable v1 release.
+Origami v2 is a breaking rewrite of the original `origami-ml` package. See
+[Migrating from v1 to v2](documentation/migration-v2.md) if you are upgrading from v1.
 
 Requires Python 3.11+. PyTorch is installed automatically. GPU acceleration (CUDA, Apple Silicon MPS) is auto-detected — no configuration needed.
 
