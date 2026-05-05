@@ -128,6 +128,7 @@ See [CLI Reference](documentation/cli.md) for all commands and options.
 - **[Python SDK](documentation/python-sdk.md)** — Complete API reference for `OrigamiPipeline`
 - **[CLI Reference](documentation/cli.md)** — All commands, options, and supported data formats
 - **[Configuration](documentation/configuration.md)** — Every configuration parameter explained
+- **[Migrating from v1 to v2](documentation/migration-v2.md)** — Breaking changes and migration guidance
 
 ## How It Works
 

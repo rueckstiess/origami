@@ -13,6 +13,7 @@ This documentation covers the Python API, command-line interface, and all config
 | [Python SDK](python-sdk.md) | Complete API reference for `OrigamiPipeline` — training, prediction, generation, embedding, evaluation |
 | [CLI Reference](cli.md) | Command-line tools for training, prediction, generation, embedding, and evaluation |
 | [Configuration](configuration.md) | All configuration options — model architecture, training, data preprocessing, inference |
+| [Migrating from v1 to v2](migration-v2.md) | Breaking changes, install notes, removed APIs, and practical migration guidance |
 
 ## Quick Links
 
