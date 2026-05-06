@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv
@@ -23,3 +25,4 @@ experiments/
 # IDE
 .vscode/
 .codex/
+.claude/
