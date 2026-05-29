@@ -11,6 +11,7 @@ from .callbacks import (
 )
 from .collator import OrigamiDataCollator
 from .dataset import OrigamiDataset
+from .length_grouped_sampler import LengthGroupedSampler
 from .metrics import (
     COMPLEX_VALUE_METRICS,
     METRIC_REGISTRY,
@@ -38,6 +39,8 @@ __all__ = [
     "OrigamiDataset",
     # Collation
     "OrigamiDataCollator",
+    # Sampling
+    "LengthGroupedSampler",
     # Trainer
     "OrigamiTrainer",
     "EpochStats",

@@ -176,6 +176,13 @@ class TrainingConfig(PrettyReprMixin):
             Set > 0 to enable parallel data loading and grammar mask computation.
             With grammar constraints enabled, this is critical for performance as
             grammar masks are computed in parallel by workers while GPU trains.
+        group_by_length: If True, batch together sequences of similar length to reduce
+            padding and the resulting wasted O(n^2) attention compute. Uses a
+            sort-and-chunk pool strategy (see LengthGroupedSampler). Sequence order is
+            still reshuffled each epoch. Default False (uniform random batching).
+        length_group_pool_mult: Mega-batch size (as a multiple of batch_size) used when
+            group_by_length=True. Higher values give tighter length grouping (less
+            padding) at the cost of less random batch ordering. Default 50.
         shuffle_keys: Whether to shuffle key order during tokenization.
         eval_strategy: When to evaluate - "no", "steps", or "epoch".
         eval_steps: Evaluate every N steps (when eval_strategy="steps").
@@ -225,6 +232,8 @@ class TrainingConfig(PrettyReprMixin):
 
     # Data loading
     dataloader_num_workers: int = 0  # Number of DataLoader workers (0 = main process only)
+    group_by_length: bool = False  # Batch together similar-length sequences to cut padding
+    length_group_pool_mult: int = 50  # Mega-batch size (in batches) for length grouping
 
     # Data augmentation
     shuffle_keys: bool = True
@@ -258,6 +267,10 @@ class TrainingConfig(PrettyReprMixin):
             raise ValueError(f"learning_rate must be > 0, got {self.learning_rate}")
         if self.num_epochs < 1:
             raise ValueError(f"num_epochs must be >= 1, got {self.num_epochs}")
+        if self.length_group_pool_mult < 1:
+            raise ValueError(
+                f"length_group_pool_mult must be >= 1, got {self.length_group_pool_mult}"
+            )
 
         if self.lr_min < 0:
             raise ValueError(f"lr_min must be >= 0, got {self.lr_min}")

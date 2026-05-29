@@ -43,6 +43,7 @@ from origami.utils import get_device
 from .callbacks import CallbackHandler, TrainerCallback
 from .collator import OrigamiDataCollator
 from .dataset import OrigamiDataset
+from .length_grouped_sampler import LengthGroupedSampler
 
 
 def _worker_init_fn(worker_id: int) -> None:
@@ -317,10 +318,31 @@ class OrigamiTrainer:
         # With persistent_workers=True, recreating the DataLoader each epoch
         # can cause worker processes to accumulate on Linux with fork.
         num_workers = self.config.dataloader_num_workers
+
+        # Optionally group similar-length sequences into the same batch to reduce
+        # padding (and the wasted O(n^2) attention it causes). When enabled, a
+        # length-aware sampler controls sample order, so DataLoader shuffle is off.
+        length_sampler = None
+        if self.config.group_by_length:
+            lengths = [
+                min(
+                    len(tokenizer.tokenize(obj, shuffle=False).tokens),
+                    model.config.max_seq_length,
+                )
+                for obj in train_data
+            ]
+            length_sampler = LengthGroupedSampler(
+                lengths,
+                batch_size=self.config.batch_size,
+                pool_mult=self.config.length_group_pool_mult,
+            )
+
         self._train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,  # Shuffle sample order each epoch (creates new order per iteration)
+            # Sample order: length-grouped sampler if enabled, else uniform shuffle.
+            shuffle=length_sampler is None,
+            sampler=length_sampler,
             collate_fn=self.collator,
             drop_last=False,  # Keep all data, especially important for small datasets
             num_workers=num_workers,

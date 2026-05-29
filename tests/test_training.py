@@ -8,6 +8,7 @@ from origami.model import OrigamiModel
 from origami.tokenizer import JSONTokenizer
 from origami.training import (
     EpochStats,
+    LengthGroupedSampler,
     OrigamiDataCollator,
     OrigamiDataset,
     OrigamiTrainer,
@@ -1819,3 +1820,87 @@ class TestAccelerateIntegration:
         assert trainer._accelerator is None
         assert trainer._use_accelerate is False
         assert trainer.device.type == "cpu"
+
+
+class TestGroupByLengthIntegration:
+    """Integration tests for group_by_length wiring in OrigamiTrainer."""
+
+    @pytest.fixture
+    def variable_length_setup(self):
+        """Model, tokenizer, and data with widely varying sequence lengths."""
+        tokenizer = JSONTokenizer()
+        # Mix of short objects and long-array objects so lengths differ a lot.
+        short = [{"name": "Alice", "age": 30} for _ in range(12)]
+        long = [{"name": "Bob", "age": 25, "scores": list(range(20))} for _ in range(12)]
+        data = short + long
+        tokenizer.fit(data)
+
+        config = ModelConfig(
+            d_model=32,
+            n_heads=2,
+            n_layers=1,
+            d_ff=64,
+            max_depth=tokenizer.max_depth,
+            max_array_position=tokenizer.max_array_index,
+        )
+        model = OrigamiModel(config, vocab=tokenizer.vocab)
+        return model, tokenizer, data
+
+    def test_sampler_used_when_enabled(self, variable_length_setup):
+        """group_by_length=True wires a LengthGroupedSampler into the DataLoader."""
+        model, tokenizer, data = variable_length_setup
+        config = TrainingConfig(
+            num_epochs=1, batch_size=4, group_by_length=True, length_group_pool_mult=2
+        )
+        # Explicit device disables accelerate so the raw sampler is inspectable.
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, device=torch.device("cpu")
+        )
+
+        assert isinstance(trainer._train_loader.sampler, LengthGroupedSampler)
+        # Sampler covers every training sample exactly once.
+        assert len(trainer._train_loader.sampler) == len(data)
+
+    def test_default_path_uses_no_length_sampler(self, variable_length_setup):
+        """group_by_length=False (default) leaves uniform shuffling in place."""
+        model, tokenizer, data = variable_length_setup
+        config = TrainingConfig(num_epochs=1, batch_size=4)
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, device=torch.device("cpu")
+        )
+
+        assert not isinstance(trainer._train_loader.sampler, LengthGroupedSampler)
+
+    def test_lengths_capped_at_max_seq_length(self, variable_length_setup):
+        """Per-sample lengths feeding the sampler are capped at max_seq_length."""
+        model, tokenizer, data = variable_length_setup
+        # Force a tiny window so every sequence exceeds it.
+        model.config.max_seq_length = 5
+        config = TrainingConfig(
+            num_epochs=1, batch_size=4, group_by_length=True, length_group_pool_mult=2
+        )
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, device=torch.device("cpu")
+        )
+
+        lengths = trainer._train_loader.sampler.lengths
+        assert len(lengths) == len(data)
+        assert max(lengths) <= 5
+
+    def test_training_runs_end_to_end_with_grouping(self, variable_length_setup):
+        """A full epoch completes and takes optimizer steps with grouping enabled."""
+        model, tokenizer, data = variable_length_setup
+        config = TrainingConfig(
+            num_epochs=1,
+            batch_size=4,
+            learning_rate=1e-3,
+            group_by_length=True,
+            length_group_pool_mult=2,
+        )
+        trainer = OrigamiTrainer(
+            model, tokenizer, data, config=config, device=torch.device("cpu")
+        )
+
+        state = trainer.train()
+        assert state.completed
+        assert state.global_step > 0
