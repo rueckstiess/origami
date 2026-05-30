@@ -963,15 +963,18 @@ class OrigamiPipeline:
     ) -> dict[str, float]:
         """Evaluate the model on data.
 
-        Computes loss and any additional prediction-based metrics.
+        Computes the requested metrics. Loss is opt-in: request it with the
+        reserved spec ``"loss"`` like any other metric. When no metrics are
+        provided, loss is computed by default.
 
         Args:
             data: List of JSON objects to evaluate on
             target_key: Key to predict for prediction-based metrics.
                 Falls back to config.target_key if not provided.
-                Required if metrics are provided.
-            metrics: Dict mapping prefixes to metric names or functions.
-                Example: {"acc": "accuracy"}. Loss is always computed.
+                Required if prediction metrics are provided.
+            metrics: Dict mapping prefixes to metric names or functions. Use the
+                reserved spec ``"loss"`` to compute model loss, e.g.
+                ``{"loss": "loss", "acc": "accuracy"}``. If None, defaults to loss only.
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
             batch_size: Batch size for evaluation.
@@ -982,21 +985,28 @@ class OrigamiPipeline:
                 Defaults to CPU.
 
         Returns:
-            Dict mapping metric names to their values. Always includes "loss".
+            Dict mapping the requested prefixes to their values.
 
         Example:
             ```python
-            # Just loss
+            # Just loss (default when no metrics provided)
             results = pipeline.evaluate(test_data)
             print(f"Loss: {results['loss']:.4f}")
 
-            # Loss + accuracy
+            # Accuracy only - loss is NOT computed (faster)
             results = pipeline.evaluate(
                 test_data,
                 target_key="label",
                 metrics={"acc": "accuracy"},
             )
             print(f"Accuracy: {results['acc']:.2%}")
+
+            # Opt into both loss and accuracy
+            results = pipeline.evaluate(
+                test_data,
+                target_key="label",
+                metrics={"loss": "loss", "acc": "accuracy"},
+            )
             ```
         """
         self._check_fitted()

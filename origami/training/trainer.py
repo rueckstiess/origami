@@ -622,16 +622,23 @@ class OrigamiTrainer:
         Returns:
             Dict of metrics with prefixes: {"train_loss": ..., "val_loss": ..., etc}
         """
+        from origami.training.metrics import LOSS_METRIC
+
         was_training = self.model.training
         self.model.eval()
 
         metrics: dict[str, float] = {}
 
+        # Loss is opt-in at the evaluator level, but training always computes it
+        # (for best_metric="loss" tracking, checkpointing, and progress display).
+        eval_metrics = dict(self.config.eval_metrics) if self.config.eval_metrics else {}
+        eval_metrics.setdefault(LOSS_METRIC, LOSS_METRIC)
+
         # Evaluate on training data if configured
         if self.config.eval_on_train and self.train_data:
             train_results = self.evaluator.evaluate(
                 self.train_data,
-                metrics=self.config.eval_metrics,
+                metrics=eval_metrics,
                 sample_size=self.config.eval_sample_size,
                 batch_size=self.config.batch_size,
             )
@@ -641,7 +648,7 @@ class OrigamiTrainer:
         if self.eval_data:
             val_results = self.evaluator.evaluate(
                 self.eval_data,
-                metrics=self.config.eval_metrics,
+                metrics=eval_metrics,
                 sample_size=self.config.eval_sample_size,
                 batch_size=self.config.batch_size,
             )

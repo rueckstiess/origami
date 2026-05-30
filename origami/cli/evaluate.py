@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from origami.cli.data_loaders import load_data
-from origami.training.metrics import list_metrics
+from origami.training.metrics import LOSS_METRIC, list_metrics
 
 
 @click.command()
@@ -59,10 +59,10 @@ from origami.training.metrics import list_metrics
 @click.option(
     "--metrics",
     multiple=True,
-    type=click.Choice(list_metrics()),
-    default=["accuracy"],
+    type=click.Choice([LOSS_METRIC, *list_metrics()]),
+    default=[LOSS_METRIC, "accuracy"],
     show_default=True,
-    help="Metrics to compute. Can be specified multiple times.",
+    help="Metrics to compute (use 'loss' for model loss). Can be specified multiple times.",
 )
 @click.option(
     "--sample-size",

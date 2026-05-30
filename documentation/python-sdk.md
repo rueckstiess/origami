@@ -268,27 +268,30 @@ vec = pipeline.embed(obj, pooling="target", target_key="label")
 
 ### `evaluate(data, target_key=None, metrics=None) -> dict[str, float]`
 
-Evaluate model performance. Always computes loss; optionally computes prediction-based metrics.
+Evaluate model performance. Loss is opt-in: request it with the reserved metric
+spec `"loss"`, just like any other metric. When no `metrics` are passed, loss is
+computed by default.
 
 ```python
-# Loss only
+# Loss only (default when no metrics are passed)
 results = pipeline.evaluate(test_data)
 print(f"Loss: {results['loss']:.4f}")
 
-# Loss + prediction metrics
+# Prediction metrics only — loss is NOT computed (faster)
 results = pipeline.evaluate(
     test_data,
     target_key="label",
     metrics={"acc": "accuracy"},
 )
-print(f"Loss: {results['loss']:.4f}, Accuracy: {results['acc']:.2%}")
+print(f"Accuracy: {results['acc']:.2%}")
 
-# Multiple metrics
+# Opt into both loss and prediction metrics
 results = pipeline.evaluate(
     test_data,
     target_key="label",
-    metrics={"acc": "accuracy", "f1": "array_f1"},
+    metrics={"loss": "loss", "acc": "accuracy", "f1": "array_f1"},
 )
+print(f"Loss: {results['loss']:.4f}, Accuracy: {results['acc']:.2%}")
 ```
 
 **Parameters:**
@@ -296,8 +299,8 @@ results = pipeline.evaluate(
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `data` | `list[dict]` | required | Test data |
-| `target_key` | `str \| None` | `None` | Key to predict (required if `metrics` is provided) |
-| `metrics` | `dict \| None` | `None` | Dict mapping names to metric strings. E.g., `{"acc": "accuracy"}` |
+| `target_key` | `str \| None` | `None` | Key to predict (required if prediction metrics are provided; not needed for `"loss"` alone) |
+| `metrics` | `dict \| None` | `None` | Dict mapping names to metric strings. E.g., `{"acc": "accuracy"}`. Use `"loss"` to compute model loss. `None` defaults to loss only. |
 | `sample_size` | `int \| None` | `None` | Evaluate on a random subset (faster) |
 | `batch_size` | `int` | `32` | Batch size for evaluation |
 | `verbose` | `bool` | `False` | Show progress bars |
@@ -306,6 +309,7 @@ results = pipeline.evaluate(
 
 | Name | Type | Description |
 |------|------|-------------|
+| `loss` | Model | Model loss (reserved spec; computed from model outputs, not predictions) |
 | `accuracy` | Classification | Exact match fraction |
 | `array_f1` | Classification | Set-based F1 score for array values |
 | `array_precision` | Classification | Set-based precision for array values |

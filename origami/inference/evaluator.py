@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 from origami.preprocessing.numeric_scaler import ScaledNumeric
 from origami.training.collator import OrigamiDataCollator
 from origami.training.dataset import OrigamiDataset
-from origami.training.metrics import MetricSpec, resolve_metrics
+from origami.training.metrics import LOSS_METRIC, MetricSpec, is_loss_spec, resolve_metrics
 
 from .predictor import OrigamiPredictor
 
@@ -27,22 +27,26 @@ if TYPE_CHECKING:
 class OrigamiEvaluator:
     """Unified evaluation for loss and prediction-based metrics.
 
-    Loss is always computed. Additional prediction-based metrics can be provided
-    as a dict mapping prefixes to metric names. All metrics are computed on the
-    same data sample for consistency.
+    Loss is an opt-in metric, requested with the reserved spec ``"loss"`` just
+    like any prediction metric. When no metrics are provided, loss is computed
+    by default. All metrics are computed on the same data sample for consistency.
 
     Example:
         ```python
         evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
 
-        # Just loss (default, fast)
+        # Just loss (default when no metrics provided)
         results = evaluator.evaluate(data=test_data)
         print(f"Loss: {results['loss']:.4f}")
 
-        # Loss + custom metrics
+        # Prediction metrics only - loss is NOT computed
+        results = evaluator.evaluate(data=test_data, metrics={"acc": "accuracy"})
+        print(f"Accuracy: {results['acc']:.2%}")
+
+        # Opt into both loss and prediction metrics
         results = evaluator.evaluate(
             data=test_data,
-            metrics={"acc": "accuracy"},
+            metrics={"loss": "loss", "acc": "accuracy"},
             sample_size=100,
         )
         print(f"Loss: {results['loss']:.4f}")
@@ -151,13 +155,18 @@ class OrigamiEvaluator:
         allow_complex_values: bool | None = None,
         verbose: bool = False,
     ) -> dict[str, float]:
-        """Compute loss and any additional metrics on the same data sample.
+        """Compute the requested metrics on the same data sample.
+
+        Loss is opt-in: request it with the reserved spec ``"loss"`` (e.g.
+        ``metrics={"loss": "loss", "acc": "accuracy"}``). When ``metrics`` is
+        None, loss is computed by default.
 
         Args:
             data: List of JSON objects to evaluate on
             metrics: Dict mapping prefixes to metric names or functions.
-                Example: {"acc": "accuracy", "f1": "array_f1"}
-                Loss is always computed automatically.
+                Use the reserved spec ``"loss"`` to compute the model loss, e.g.
+                ``{"loss": "loss", "acc": "accuracy", "f1": "array_f1"}``.
+                If None, defaults to computing loss only.
             sample_size: If set, randomly sample this many examples.
                 None means use all data.
             batch_size: Batch size for loss computation and prediction.
@@ -165,20 +174,31 @@ class OrigamiEvaluator:
             verbose: If True, show progress bars during evaluation.
 
         Returns:
-            Dict mapping metric names to their values. Always includes "loss".
+            Dict mapping the requested prefixes to their values.
 
         Raises:
-            ValueError: If metrics provided but target_key not set.
+            ValueError: If prediction metrics are requested but target_key not set.
         """
+        # Default to loss-only when no metrics are specified
+        if metrics is None:
+            metrics = {LOSS_METRIC: LOSS_METRIC}
+
+        # Split into loss prefixes (computed from model outputs) and prediction
+        # metrics (computed from y_true/y_pred). Loss is handled specially.
+        loss_prefixes = [prefix for prefix, spec in metrics.items() if is_loss_spec(spec)]
+        prediction_metrics = {
+            prefix: spec for prefix, spec in metrics.items() if not is_loss_spec(spec)
+        }
+
         # Validate prediction metrics have target_key
-        if metrics and self.target_key is None:
+        if prediction_metrics and self.target_key is None:
             raise ValueError(
-                f"target_key required for prediction metrics: {list(metrics.keys())}. "
+                f"target_key required for prediction metrics: {list(prediction_metrics.keys())}. "
                 "Pass target_key to OrigamiEvaluator constructor."
             )
 
-        # Resolve metrics from string names to functions
-        resolved_metrics = resolve_metrics(metrics) if metrics else None
+        # Resolve prediction metrics from string names to functions
+        resolved_metrics = resolve_metrics(prediction_metrics) if prediction_metrics else None
 
         # Resolve allow_complex_values (parameter overrides instance default)
         effective_allow_complex = (
@@ -190,8 +210,11 @@ class OrigamiEvaluator:
 
         results: dict[str, float] = {}
 
-        # Always compute loss
-        results["loss"] = self._compute_loss(sample, batch_size, verbose=verbose)
+        # Compute loss only if requested
+        if loss_prefixes:
+            loss_value = self._compute_loss(sample, batch_size, verbose=verbose)
+            for prefix in loss_prefixes:
+                results[prefix] = loss_value
 
         # Compute prediction-based metrics if any provided
         if resolved_metrics:
@@ -360,9 +383,10 @@ def evaluate(
         tokenizer: JSONTokenizer with fitted vocabulary
         data: List of JSON objects to evaluate on
         target_key: Key to predict for prediction-based metrics.
-            Required if metrics are provided.
-        metrics: Dict mapping prefixes to metric names or functions.
-            Example: {"acc": "accuracy"}. Loss is always computed.
+            Required if prediction metrics are provided.
+        metrics: Dict mapping prefixes to metric names or functions. Use the
+            reserved spec ``"loss"`` to compute model loss, e.g.
+            ``{"loss": "loss", "acc": "accuracy"}``. If None, defaults to loss only.
         sample_size: If set, randomly sample this many examples.
         batch_size: Batch size for evaluation.
         inverse_transform: Optional function to transform predicted values.
@@ -373,17 +397,17 @@ def evaluate(
         constrain_schema: If True, apply schema constraints. Requires schema.
 
     Returns:
-        Dict mapping metric names to their values. Always includes "loss".
+        Dict mapping the requested prefixes to their values.
 
     Example:
         ```python
         from origami.inference import evaluate
 
-        # Just loss
+        # Just loss (default when no metrics provided)
         results = evaluate(model, tokenizer, test_data)
         print(f"Loss: {results['loss']:.4f}")
 
-        # Loss + accuracy
+        # Accuracy only - loss is NOT computed
         results = evaluate(
             model, tokenizer, test_data,
             target_key="label",

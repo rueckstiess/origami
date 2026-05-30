@@ -197,13 +197,18 @@ Evaluate a model on test data with loss and prediction metrics.
 | `-m, --model` | required | Path to trained model (`.pt` file) |
 | `-d, --data` | required | Test data |
 | `-t, --target-key` | required | Field to evaluate predictions on |
-| `--metrics` | `accuracy` | Metrics to compute (can be repeated) |
+| `--metrics` | `loss accuracy` | Metrics to compute (can be repeated). Use `loss` for model loss. |
 | `--sample-size` | — | Evaluate on a random subset of N examples |
+
+Loss is opt-in: it is only computed when `loss` is among the requested metrics.
+The default (`loss accuracy`) computes both; passing your own `--metrics` replaces
+the default, so add `--metrics loss` if you still want loss.
 
 ### Available Metrics
 
 | Name | Type | Description |
 |------|------|-------------|
+| `loss` | Model | Model loss (computed from model outputs, not predictions) |
 | `accuracy` | Classification | Exact match fraction |
 | `array_f1` | Classification | Set-based F1 for array values |
 | `array_precision` | Classification | Set-based precision for array values |
@@ -217,10 +222,10 @@ Evaluate a model on test data with loss and prediction metrics.
 ### Examples
 
 ```bash
-# Evaluate accuracy (default)
+# Evaluate loss and accuracy (default)
 origami evaluate -m model.pt -d test.jsonl -t label
 
-# Multiple metrics
+# Multiple metrics (loss omitted here — add --metrics loss to include it)
 origami evaluate -m model.pt -d test.jsonl -t label \
   --metrics accuracy --metrics array_f1
 

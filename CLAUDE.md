@@ -230,10 +230,11 @@ probs = pipeline.predict_proba(obj, target_key="b", top_k=5)
 # Generate
 samples = pipeline.generate(num_samples=10, temperature=0.8)
 
-# Evaluate (computes loss and optional prediction metrics)
+# Evaluate. Loss is opt-in via the reserved "loss" metric spec.
 from origami.training import accuracy
-results = pipeline.evaluate(test_data)  # Just loss
-results = pipeline.evaluate(test_data, target_key="b", metrics={"acc": accuracy})
+results = pipeline.evaluate(test_data)  # Default (no metrics): loss only
+results = pipeline.evaluate(test_data, target_key="b", metrics={"acc": accuracy})  # acc only
+results = pipeline.evaluate(test_data, target_key="b", metrics={"loss": "loss", "acc": accuracy})
 
 # Save/Load (preserves all state: model, tokenizer, preprocessor)
 pipeline.save("model.pt")

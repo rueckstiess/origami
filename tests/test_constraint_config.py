@@ -377,14 +377,23 @@ class TestEvaluatorConstraints:
         assert np.isfinite(results["loss"])
 
     def test_evaluate_with_metrics(self, model_with_grammar_pda, tokenizer, sample_data):
-        """Evaluation with prediction metrics works with constraints."""
+        """Evaluation with prediction metrics works with constraints.
+
+        Loss is opt-in: not computed unless explicitly requested.
+        """
         ev = OrigamiEvaluator(
             model_with_grammar_pda,
             tokenizer,
             target_key="shape",
             constrain_grammar=True,
         )
+        # Prediction metric only - loss not computed
         results = ev.evaluate(sample_data, metrics={"acc": "accuracy"})
+        assert "loss" not in results
+        assert "acc" in results
+
+        # Opt into both loss and accuracy
+        results = ev.evaluate(sample_data, metrics={"loss": "loss", "acc": "accuracy"})
         assert "loss" in results
         assert "acc" in results
         assert np.isfinite(results["loss"])
@@ -636,11 +645,23 @@ class TestPipelineEvaluateConstraints:
         assert np.isfinite(results["loss"])
 
     def test_evaluate_with_metrics(self, fitted_pipeline, sample_data):
-        """Pipeline.evaluate() with metrics uses inference constraints."""
+        """Pipeline.evaluate() with metrics uses inference constraints.
+
+        Loss is opt-in: not computed unless explicitly requested.
+        """
         results = fitted_pipeline.evaluate(
             sample_data,
             target_key="shape",
             metrics={"acc": "accuracy"},
+        )
+        assert "loss" not in results
+        assert "acc" in results
+
+        # Opt into both loss and accuracy
+        results = fitted_pipeline.evaluate(
+            sample_data,
+            target_key="shape",
+            metrics={"loss": "loss", "acc": "accuracy"},
         )
         assert "loss" in results
         assert "acc" in results

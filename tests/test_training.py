@@ -1010,7 +1010,10 @@ class TestEvaluator:
         assert results["loss"] > 0  # Loss should be positive
 
     def test_evaluate_prediction_metrics(self, setup):
-        """Test evaluating prediction-based metrics."""
+        """Test evaluating prediction-based metrics.
+
+        Loss is opt-in: not computed unless explicitly requested.
+        """
         from origami.inference import OrigamiEvaluator
         from origami.training import accuracy
 
@@ -1019,9 +1022,23 @@ class TestEvaluator:
 
         results = evaluator.evaluate(data, metrics={"acc": accuracy})
 
-        assert "loss" in results  # Always included
+        assert "loss" not in results  # Loss is opt-in
         assert "acc" in results
         assert 0.0 <= results["acc"] <= 1.0
+
+    def test_evaluate_loss_opt_in(self, setup):
+        """Test that loss can be requested alongside prediction metrics."""
+        from origami.inference import OrigamiEvaluator
+        from origami.training import accuracy
+
+        model, tokenizer, data = setup
+        evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
+
+        results = evaluator.evaluate(data, metrics={"loss": "loss", "acc": accuracy})
+
+        assert "loss" in results
+        assert "acc" in results
+        assert isinstance(results["loss"], float)
 
     def test_evaluate_multiple_metrics(self, setup):
         """Test evaluating multiple metrics together."""
@@ -1031,9 +1048,11 @@ class TestEvaluator:
         model, tokenizer, data = setup
         evaluator = OrigamiEvaluator(model, tokenizer, target_key="label")
 
-        results = evaluator.evaluate(data, metrics={"acc": accuracy, "f1": array_f1})
+        results = evaluator.evaluate(
+            data, metrics={"loss": "loss", "acc": accuracy, "f1": array_f1}
+        )
 
-        assert "loss" in results  # Always included
+        assert "loss" in results
         assert "acc" in results
         assert "f1" in results
         assert len(results) == 3  # loss + acc + f1
