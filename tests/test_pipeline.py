@@ -796,7 +796,7 @@ class TestPipelineEvaluate:
 
         results = pipeline.evaluate(data[:10], target_key="label", metrics={"accuracy": accuracy})
 
-        assert "loss" in results
+        assert "loss" not in results  # Loss is opt-in
         assert "accuracy" in results
         assert 0.0 <= results["accuracy"] <= 1.0
 
@@ -1410,7 +1410,7 @@ class TestPipelineEvaluateRegressionMetrics:
             metrics={"mse": "mse"},
         )
 
-        assert "loss" in results
+        assert "loss" not in results  # Loss is opt-in
         assert "mse" in results
         assert isinstance(results["mse"], float)
         # MSE should be non-negative

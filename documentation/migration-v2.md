@@ -37,7 +37,7 @@ The command-line interface has also been rebuilt around five commands:
 origami train -d train.jsonl -t label -o model.pt
 origami predict -m model.pt -d test.jsonl -t label
 origami generate -m model.pt -n 100
-origami evaluate -m model.pt -d test.jsonl -t label --metrics accuracy
+origami evaluate -m model.pt -d test.jsonl -t label
 origami embed -m model.pt -d data.jsonl -o embeddings.npy
 ```
 

@@ -43,6 +43,7 @@ from origami.utils import get_device
 from .callbacks import CallbackHandler, TrainerCallback
 from .collator import OrigamiDataCollator
 from .dataset import OrigamiDataset
+from .length_grouped_sampler import LengthGroupedSampler
 
 
 def _worker_init_fn(worker_id: int) -> None:
@@ -317,10 +318,31 @@ class OrigamiTrainer:
         # With persistent_workers=True, recreating the DataLoader each epoch
         # can cause worker processes to accumulate on Linux with fork.
         num_workers = self.config.dataloader_num_workers
+
+        # Optionally group similar-length sequences into the same batch to reduce
+        # padding (and the wasted O(n^2) attention it causes). When enabled, a
+        # length-aware sampler controls sample order, so DataLoader shuffle is off.
+        length_sampler = None
+        if self.config.group_by_length:
+            lengths = [
+                min(
+                    len(tokenizer.tokenize(obj, shuffle=False).tokens),
+                    model.config.max_seq_length,
+                )
+                for obj in train_data
+            ]
+            length_sampler = LengthGroupedSampler(
+                lengths,
+                batch_size=self.config.batch_size,
+                pool_mult=self.config.length_group_pool_mult,
+            )
+
         self._train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,  # Shuffle sample order each epoch (creates new order per iteration)
+            # Sample order: length-grouped sampler if enabled, else uniform shuffle.
+            shuffle=length_sampler is None,
+            sampler=length_sampler,
             collate_fn=self.collator,
             drop_last=False,  # Keep all data, especially important for small datasets
             num_workers=num_workers,
@@ -600,16 +622,23 @@ class OrigamiTrainer:
         Returns:
             Dict of metrics with prefixes: {"train_loss": ..., "val_loss": ..., etc}
         """
+        from origami.training.metrics import LOSS_METRIC
+
         was_training = self.model.training
         self.model.eval()
 
         metrics: dict[str, float] = {}
 
+        # Loss is opt-in at the evaluator level, but training always computes it
+        # (for best_metric="loss" tracking, checkpointing, and progress display).
+        eval_metrics = dict(self.config.eval_metrics) if self.config.eval_metrics else {}
+        eval_metrics.setdefault(LOSS_METRIC, LOSS_METRIC)
+
         # Evaluate on training data if configured
         if self.config.eval_on_train and self.train_data:
             train_results = self.evaluator.evaluate(
                 self.train_data,
-                metrics=self.config.eval_metrics,
+                metrics=eval_metrics,
                 sample_size=self.config.eval_sample_size,
                 batch_size=self.config.batch_size,
             )
@@ -619,7 +648,7 @@ class OrigamiTrainer:
         if self.eval_data:
             val_results = self.evaluator.evaluate(
                 self.eval_data,
-                metrics=self.config.eval_metrics,
+                metrics=eval_metrics,
                 sample_size=self.config.eval_sample_size,
                 batch_size=self.config.batch_size,
             )

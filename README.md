@@ -116,8 +116,8 @@ origami predict -m model.pt -d test.jsonl -t label
 # Generate synthetic data
 origami generate -m model.pt -n 100 --temp 0.8
 
-# Evaluate model performance
-origami evaluate -m model.pt -d test.jsonl -t label --metrics accuracy
+# Evaluate model performance (loss + accuracy by default)
+origami evaluate -m model.pt -d test.jsonl -t label
 ```
 
 See [CLI Reference](documentation/cli.md) for all commands and options.

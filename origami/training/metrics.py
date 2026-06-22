@@ -46,6 +46,17 @@ MetricFn = Callable[[list[Any], list[Any]], float]
 # Metrics can be specified as strings or functions
 MetricSpec = str | MetricFn
 
+# Reserved metric spec for the model's training loss. Unlike other metrics, loss
+# is computed from model outputs (not from y_true/y_pred lists), so it is handled
+# specially by the evaluator rather than via the METRIC_REGISTRY. Request it like
+# any other metric, e.g. metrics={"loss": "loss", "acc": "accuracy"}.
+LOSS_METRIC = "loss"
+
+
+def is_loss_spec(spec: MetricSpec) -> bool:
+    """Return True if a metric spec refers to the reserved model loss."""
+    return spec == LOSS_METRIC
+
 
 def _get_metric_name(metric: MetricSpec) -> str:
     """Get the canonical metric name from a string or function."""
