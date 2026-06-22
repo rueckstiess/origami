@@ -1872,9 +1872,7 @@ class TestGroupByLengthIntegration:
             num_epochs=1, batch_size=4, group_by_length=True, length_group_pool_mult=2
         )
         # Explicit device disables accelerate so the raw sampler is inspectable.
-        trainer = OrigamiTrainer(
-            model, tokenizer, data, config=config, device=torch.device("cpu")
-        )
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config, device=torch.device("cpu"))
 
         assert isinstance(trainer._train_loader.sampler, LengthGroupedSampler)
         # Sampler covers every training sample exactly once.
@@ -1884,9 +1882,7 @@ class TestGroupByLengthIntegration:
         """group_by_length=False (default) leaves uniform shuffling in place."""
         model, tokenizer, data = variable_length_setup
         config = TrainingConfig(num_epochs=1, batch_size=4)
-        trainer = OrigamiTrainer(
-            model, tokenizer, data, config=config, device=torch.device("cpu")
-        )
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config, device=torch.device("cpu"))
 
         assert not isinstance(trainer._train_loader.sampler, LengthGroupedSampler)
 
@@ -1898,9 +1894,7 @@ class TestGroupByLengthIntegration:
         config = TrainingConfig(
             num_epochs=1, batch_size=4, group_by_length=True, length_group_pool_mult=2
         )
-        trainer = OrigamiTrainer(
-            model, tokenizer, data, config=config, device=torch.device("cpu")
-        )
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config, device=torch.device("cpu"))
 
         lengths = trainer._train_loader.sampler.lengths
         assert len(lengths) == len(data)
@@ -1916,9 +1910,7 @@ class TestGroupByLengthIntegration:
             group_by_length=True,
             length_group_pool_mult=2,
         )
-        trainer = OrigamiTrainer(
-            model, tokenizer, data, config=config, device=torch.device("cpu")
-        )
+        trainer = OrigamiTrainer(model, tokenizer, data, config=config, device=torch.device("cpu"))
 
         state = trainer.train()
         assert state.completed

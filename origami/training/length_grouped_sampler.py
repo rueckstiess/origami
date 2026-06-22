@@ -84,7 +84,9 @@ class LengthGroupedSampler(Sampler[int]):
         return len(self.lengths)
 
     def __iter__(self) -> Iterator[int]:
-        return iter(_length_grouped_indices(self.lengths, self.batch_size, self.pool_mult, self.generator))
+        return iter(
+            _length_grouped_indices(self.lengths, self.batch_size, self.pool_mult, self.generator)
+        )
 
 
 def _length_grouped_indices(
