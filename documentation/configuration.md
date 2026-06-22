@@ -121,7 +121,7 @@ Training hyperparameters.
 | `eval_metrics` | `dict \| None` | `None` | Metrics to compute during evaluation. Dict mapping result key to metric name. |
 | `eval_sample_size` | `int \| None` | `None` | Subsample for faster evaluation. `None` = full dataset. |
 | `eval_on_train` | `bool` | `False` | Also evaluate on training data (useful for detecting overfitting). |
-| `target_key` | `str \| None` | `None` | Field to predict for prediction-based metrics. Required if `eval_metrics` is set. |
+| `target_key` | `str \| None` | `None` | Field to predict for prediction-based metrics. Required if prediction metrics are configured; not required for `"loss"` alone. |
 | `target_loss_weight` | `float` | `1.0` | Relative weight for target field loss vs. other tokens. Higher values (e.g., 10.0) make the model focus more on predicting the target correctly. |
 | `allow_complex_values` | `bool \| None` | `None` | Allow arrays/objects in eval predictions. `None` = auto-detect from metrics. |
 
@@ -160,6 +160,8 @@ This evaluates accuracy at the end of each epoch, and the `on_best` callback fir
 | `use_accelerate` | `bool` | `True` | Use HuggingFace Accelerate for multi-GPU training when installed. |
 | `mixed_precision` | `str` | `"no"` | Mixed precision: `"no"`, `"fp16"`, `"bf16"`. |
 | `dataloader_num_workers` | `int` | `0` | Parallel data loading workers. Set > 0 for better throughput, especially with grammar constraints. |
+| `group_by_length` | `bool` | `False` | Batch together similar-length sequences to reduce padding waste and attention compute. |
+| `length_group_pool_mult` | `int` | `50` | Mega-batch size, as a multiple of `batch_size`, used when `group_by_length=True`. Higher values give tighter length grouping at the cost of less random batch ordering. |
 
 ## DataConfig
 
