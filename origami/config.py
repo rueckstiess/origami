@@ -130,6 +130,12 @@ class ModelConfig(PrettyReprMixin):
     use_continuous_head: bool = False
     num_mixture_components: int = 5
     continuous_loss_weight: float = -1.0  # -1 = auto-calculate from NUM token proportion
+    # Mixture-component init domain. "standard": default init (means ~0, scale ~1),
+    # matching standardized N(0,1) numerics (numeric_mode="scale"). "unit": spread
+    # means across [0, 1] with localized scales, matching normalized array lengths;
+    # prevents mixture collapse on multi-modal length distributions. Set by the
+    # pipeline based on the data config.
+    continuous_init: Literal["standard", "unit"] = "standard"
 
     # Sequence limits
     max_seq_length: int = 2048

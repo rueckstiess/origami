@@ -97,6 +97,11 @@ class OrigamiModel(nn.Module):
         # Grammar constraints PDA (set by trainer if constrain_grammar=True)
         self._grammar_pda = None
 
+        # Per-path max array lengths for continuous-head length normalization.
+        # Derived from training data and used identically by the collator
+        # (training) and generator (inference). Independent of any schema.
+        self._array_max_lengths: dict[str, int] = {}
+
     def forward(
         self,
         input_ids: Tensor,  # (batch, seq_len)

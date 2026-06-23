@@ -67,3 +67,30 @@ def path_to_string(path: Path) -> str:
             parts.append(f"[{element.index}]")
 
     return "".join(parts)
+
+
+def normalize_path(path: Path) -> str:
+    """Convert a path to a normalized schema-path string.
+
+    Array indices are replaced with ``*`` wildcards so that all elements at the
+    same array position share a single key. This is the canonical keying used by
+    schema constraints and array-length normalization, so any component that
+    needs to match those keys must use this function.
+
+    Examples:
+        >>> normalize_path(())
+        ''
+        >>> normalize_path((KeyElement("name"),))
+        'name'
+        >>> normalize_path((KeyElement("items"), IndexElement(0)))
+        'items.*'
+        >>> normalize_path((KeyElement("items"), IndexElement(2), KeyElement("price")))
+        'items.*.price'
+    """
+    parts: list[str] = []
+    for element in path:
+        if isinstance(element, KeyElement):
+            parts.append(element.key)
+        elif isinstance(element, IndexElement):
+            parts.append("*")
+    return ".".join(parts)

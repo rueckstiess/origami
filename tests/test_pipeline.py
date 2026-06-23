@@ -1273,7 +1273,7 @@ class TestPipelineCheckpointResume:
         pipeline.fit(data, epochs=1, verbose=False)
 
         state = pipeline.state_dict()
-        assert state["version"] == "1.3"
+        assert state["version"] == "1.4"
 
     def test_resume_via_fit(self, tmp_path):
         """Test that resume works via fit() as well as preprocess()/train()."""

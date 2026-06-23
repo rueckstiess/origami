@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-from origami.tokenizer.path import IndexElement, KeyElement, Path
+from origami.tokenizer.path import IndexElement, Path, normalize_path
 from origami.tokenizer.vocabulary import KeyToken, ValueToken, Vocabulary
 
 
@@ -370,22 +370,10 @@ class SchemaPDA:
     def normalize_path(self, path: Path) -> str:
         """Convert tokenizer Path to normalized schema path string.
 
-        Array indices are replaced with ``*`` wildcards so all elements
-        at the same array position share constraints.
-
-        Examples:
-            ``()`` → ``""``
-            ``(KeyElement("name"),)`` → ``"name"``
-            ``(KeyElement("items"), IndexElement(0))`` → ``"items.*"``
-            ``(KeyElement("items"), IndexElement(2), KeyElement("price"))`` → ``"items.*.price"``
+        Thin wrapper around :func:`origami.tokenizer.path.normalize_path` so
+        schema constraints and array-length normalization share identical keys.
         """
-        parts: list[str] = []
-        for element in path:
-            if isinstance(element, KeyElement):
-                parts.append(element.key)
-            elif isinstance(element, IndexElement):
-                parts.append("*")
-        return ".".join(parts)
+        return normalize_path(path)
 
     # --- Training path (mask table gather) ---
 

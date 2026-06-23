@@ -711,37 +711,32 @@ class TestDiscretizedLogisticNLL:
             assert param.grad.isfinite().all()
 
     def test_collator_sets_is_integer_for_array_start(self):
-        """Collator populates is_integer=True and correct step at ARRAY_START."""
-        from origami.constraints.schema_pda import SchemaPDA
+        """Collator populates is_integer=True and correct step at ARRAY_START.
 
+        Normalization comes from the data-derived array_max_lengths map, not the
+        schema, so the divisor is decoupled from schema masking.
+        """
         data = [{"items": [1, 2, 3]}]
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        schema = {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "maxItems": 10,
-                },
-            },
-        }
-        schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
         collator = OrigamiDataCollator(
             tokenizer,
-            schema_pda=schema_pda,
             model_array_lengths=True,
+            array_max_lengths={"items": 10},
         )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
 
+        from origami.preprocessing import array_length_norm
+        from origami.tokenizer.path import KeyElement
+
+        norm = array_length_norm((KeyElement("items"),), {"items": 10})
         array_start_pos = batch.input_ids == 4
         assert batch.is_integer is not None
         assert batch.is_integer[array_start_pos].all()
-        # Step should be 1/10 = 0.1
-        assert batch.discretization_step[array_start_pos].allclose(torch.tensor(0.1))
+        # Step is 1 / (buffered) norm
+        assert batch.discretization_step[array_start_pos].allclose(torch.tensor(1 / norm))
         # Non-ARRAY_START positions should be False/0
         assert not batch.is_integer[~array_start_pos].any()
 
@@ -836,39 +831,34 @@ class TestArrayLengthModeling:
         assert sorted(array_lengths) == [2.0, 2.0, 3.0]
 
     def test_collator_normalizes_array_length(self):
-        """Collator normalizes array lengths to [0, 1] range."""
-        from origami.constraints.schema_pda import SchemaPDA
+        """Collator normalizes array lengths to [0, 1] range.
 
+        The divisor comes from the data-derived array_max_lengths map, not the
+        schema, so normalization is independent of schema masking.
+        """
         data = [{"items": [1, 2, 3]}]
         tokenizer = JSONTokenizer()
         tokenizer.fit(data)
 
-        schema = {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "maxItems": 10,
-                },
-            },
-        }
-        schema_pda = SchemaPDA(schema, tokenizer.vocab, max_depth=32)
         collator = OrigamiDataCollator(
             tokenizer,
-            schema_pda=schema_pda,
             model_array_lengths=True,
+            array_max_lengths={"items": 10},
         )
         instances = [tokenizer.tokenize(obj) for obj in data]
         batch = collator(instances)
+
+        from origami.preprocessing import array_length_norm
+        from origami.tokenizer.path import KeyElement
 
         # Find ARRAY_START position
         array_start_pos = (batch.input_ids == 4).nonzero(as_tuple=False)
         assert len(array_start_pos) == 1
         b, pos = array_start_pos[0].tolist()
 
-        # Should be normalized: 3 / 10 = 0.3
-        assert abs(batch.numeric_values[b, pos].item() - 0.3) < 1e-5
+        # Normalized by the buffered divisor (3 / norm)
+        norm = array_length_norm((KeyElement("items"),), {"items": 10})
+        assert abs(batch.numeric_values[b, pos].item() - 3 / norm) < 1e-5
         assert batch.numeric_mask[b, pos]
 
     def test_embeddings_array_start_uses_learned_token(self):

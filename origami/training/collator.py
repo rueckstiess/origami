@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-# Default max array length for normalization when no schema is available
-DEFAULT_MAX_ARRAY = 20
+from origami.preprocessing.array_length import array_length_norm
 
 if TYPE_CHECKING:
     from origami.constraints.json_grammar import JSONGrammarPDA
@@ -51,6 +50,7 @@ class OrigamiDataCollator:
         schema_pda: "SchemaPDA | None" = None,
         use_numba: bool = True,
         model_array_lengths: bool = False,
+        array_max_lengths: dict[str, int] | None = None,
     ):
         """Initialize collator.
 
@@ -71,6 +71,9 @@ class OrigamiDataCollator:
             model_array_lengths: If True, include array length numeric values
                 for ARRAY_START tokens. If False, ARRAY_START tokens are treated
                 as pure grammar tokens with no numeric modeling.
+            array_max_lengths: Per-path maximum array lengths used to normalize
+                array-length targets (length / norm). Derived from training data
+                and shared with the generator so training and inference agree.
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -80,6 +83,7 @@ class OrigamiDataCollator:
         self.schema_pda = schema_pda
         self.use_numba = use_numba
         self.model_array_lengths = model_array_lengths
+        self.array_max_lengths = array_max_lengths or {}
 
     def __call__(
         self,
@@ -241,14 +245,11 @@ class OrigamiDataCollator:
     def _get_array_normalization(self, path) -> float:
         """Get normalization constant for an array length at the given path.
 
-        Uses max_items from schema if available, otherwise DEFAULT_MAX_ARRAY.
+        Uses the per-path maximum observed length derived from training data.
+        Independent of any schema, so training and inference agree regardless
+        of whether schema masking is enabled.
         """
-        if self.schema_pda is not None:
-            norm_path = self.schema_pda.normalize_path(path)
-            constraints = self.schema_pda.get_constraints(norm_path)
-            if constraints is not None and constraints.max_items is not None:
-                return float(constraints.max_items)
-        return float(DEFAULT_MAX_ARRAY)
+        return array_length_norm(path, self.array_max_lengths)
 
     def collate_objects(
         self,

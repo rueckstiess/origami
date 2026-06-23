@@ -72,8 +72,34 @@ class ContinuousHead(nn.Module):
         # Output size: 3 * n_components (weights, means, log_vars)
         self.proj = nn.Linear(config.d_model, 3 * self.n_components)
 
+        # Optionally spread the mixture components for the normalized [0, 1]
+        # (array-length) domain. The default init (means ~0, scale ~1) suits
+        # standardized N(0,1) numerics but collapses on multi-modal [0, 1]
+        # targets, so "unit" spreads and localizes the components there.
+        if config.continuous_init == "unit":
+            self._init_unit_mixture_biases()
+
         # Pre-compute log(2*pi) as a buffer for efficiency
         self.register_buffer("log_2pi", torch.log(torch.tensor(2 * torch.pi)))
+
+    def _init_unit_mixture_biases(self) -> None:
+        """Spread/localize mixture components across the normalized [0, 1] range.
+
+        Means are spread across [0, 1] and the (logistic) scale is set to about
+        the component spacing so each component starts separated and localized.
+        With the default init (means ~0, scale ~1.0) components overlap across the
+        whole range and collapse onto a single mode, leaking probability into the
+        gaps of multi-modal targets (e.g. bimodal array lengths).
+        """
+        k = self.n_components
+        if k <= 1:
+            return
+        with torch.no_grad():
+            spacing = 1.0 / (k - 1)
+            # proj output layout: [weights | means | log_vars], each of size k.
+            self.proj.bias[k : 2 * k] = torch.linspace(0.0, 1.0, k)
+            # log_var is read as a (logistic/Gaussian) log-scale; set scale ~ spacing.
+            self.proj.bias[2 * k : 3 * k] = 2.0 * torch.log(torch.tensor(spacing))
 
     def forward(self, hidden: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Compute mixture of Gaussians parameters.
@@ -258,24 +284,29 @@ class ContinuousHead(nn.Module):
         weights: Tensor,  # (batch, seq_len, n_components)
         means: Tensor,  # (batch, seq_len, n_components) - normalized [0, 1]
         log_vars: Tensor,  # (batch, seq_len, n_components) - logistic log-scale
-        max_values: Tensor,  # (batch, seq_len) - max integer per position
+        norm: Tensor,  # (batch, seq_len) - normalization divisor (grid scale)
         min_values: Tensor | None = None,  # (batch, seq_len) - min integer, default 0
+        max_values: Tensor | None = None,  # (batch, seq_len) - max integer cap (optional)
     ) -> Tensor:
         """Sample integers from discretized logistic mixture.
 
-        Computes bin probabilities for each integer k in [0, max_value] using
-        the logistic CDF with boundary absorption (same math as training loss),
-        then samples from the categorical distribution.
+        Computes bin probabilities for each integer k in [0, norm] using the
+        logistic CDF with boundary absorption (same math as training loss), then
+        samples from the categorical distribution.
 
-        This ensures sampling matches the discretized logistic NLL used during
-        training, unlike truncated Gaussian sampling which has boundary mass loss.
+        ``norm`` is the grid scale and MUST equal the normalization divisor used
+        during training (``length / norm``); otherwise samples are mis-scaled.
+        ``min_values``/``max_values`` are *separate* constraint caps (e.g. schema
+        minItems/maxItems) that mask which integers are valid — they do not change
+        the grid.
 
         Args:
             weights: Mixture weights (softmax normalized)
             means: Component means in normalized [0, 1] space
             log_vars: Component log-scales (reinterpreted as logistic scale)
-            max_values: Max integer value per position (e.g., max_items)
-            min_values: Min integer value per position. Default 0.
+            norm: Normalization divisor per position (training grid scale)
+            min_values: Optional minimum integer per position.
+            max_values: Optional maximum integer cap per position.
 
         Returns:
             Sampled integers of shape (batch, seq_len)
@@ -283,15 +314,15 @@ class ContinuousHead(nn.Module):
         batch_size, seq_len, n_components = weights.shape
         device = weights.device
 
-        max_n = max_values.max().long().item()
+        max_n = int(norm.max().long().item())
         n_bins = max_n + 1
 
-        # Compute normalized targets for each bin: k / max_values
-        # k_values: (n_bins,), max_expanded: (batch, seq, 1)
+        # Compute normalized targets for each bin: k / norm
+        # k_values: (n_bins,), norm_expanded: (batch, seq, 1)
         k_values = torch.arange(n_bins, device=device, dtype=weights.dtype)
-        max_expanded = max_values.unsqueeze(-1)  # (batch, seq, 1)
-        targets = k_values.view(1, 1, -1) / max_expanded  # (batch, seq, n_bins)
-        step = 1.0 / max_expanded  # (batch, seq, 1)
+        norm_expanded = norm.unsqueeze(-1)  # (batch, seq, 1)
+        targets = k_values.view(1, 1, -1) / norm_expanded  # (batch, seq, n_bins)
+        step = 1.0 / norm_expanded  # (batch, seq, 1)
         half_step = step / 2  # (batch, seq, 1)
 
         # Broadcast for (batch, seq, n_bins, n_components)
@@ -317,9 +348,11 @@ class ContinuousHead(nn.Module):
         w = weights.unsqueeze(2)  # (batch, seq, 1, K)
         mixture_prob = (w * bin_prob).sum(dim=-1)  # (batch, seq, n_bins)
 
-        # Mask invalid bins (k > max_values or k < min_values)
+        # Mask bins outside the grid (k > norm) and outside optional constraint caps
         k_expanded = k_values.long().view(1, 1, -1).expand(batch_size, seq_len, -1)
-        valid_bins = k_expanded <= max_values.unsqueeze(-1).long()
+        valid_bins = k_expanded <= norm.unsqueeze(-1).long()
+        if max_values is not None:
+            valid_bins = valid_bins & (k_expanded <= max_values.unsqueeze(-1).long())
         if min_values is not None:
             valid_bins = valid_bins & (k_expanded >= min_values.unsqueeze(-1).long())
         mixture_prob = mixture_prob.masked_fill(~valid_bins, 0.0)

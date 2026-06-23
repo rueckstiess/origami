@@ -77,8 +77,16 @@ class OrigamiEmbedder:
         self.pooling = pooling
         self.model.eval()
 
-        # Create collator for batch creation (include_labels=False for inference)
-        self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
+        # Create collator for batch creation (include_labels=False for inference).
+        # Pass the model's array-length map so array lengths are conditioned the
+        # same way they were during training.
+        array_max_lengths = getattr(model, "_array_max_lengths", {}) or {}
+        self._collator = OrigamiDataCollator(
+            tokenizer,
+            include_labels=False,
+            model_array_lengths=bool(array_max_lengths),
+            array_max_lengths=array_max_lengths,
+        )
 
     @property
     def device(self) -> torch.device:

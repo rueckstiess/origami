@@ -280,6 +280,7 @@ class OrigamiTrainer:
             # to prevent thread contention and make forking safe.
             use_numba=True,
             model_array_lengths=self._model_array_lengths,
+            array_max_lengths=model._array_max_lengths,
         )
 
         # Store schema for inference use (evaluator predictions)

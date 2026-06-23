@@ -422,6 +422,14 @@ class OrigamiPipeline:
         self._training_device = self._resolve_device()
         self._model.to(self._training_device)
 
+        # Derive per-path array-length normalization from the training data.
+        # Used identically by the collator and generator when modeling array
+        # lengths, independent of any schema. Skipped when not modeling lengths.
+        if self.config.data.model_array_lengths:
+            from origami.preprocessing import derive_array_max_lengths
+
+            self._model._array_max_lengths = derive_array_max_lengths(train_processed)
+
         if verbose:
             print(f"Model parameters: {self._model.get_num_parameters():,}")
 
@@ -609,8 +617,22 @@ class OrigamiPipeline:
             self.config.data.numeric_mode == "scale" or self.config.data.model_array_lengths
         )
 
+        # Choose the mixture init domain. Array lengths live in normalized [0, 1]
+        # and benefit from the "unit" init (spread/localized components). Scale
+        # mode uses standardized ~N(0,1) numerics, for which the default
+        # "standard" init is appropriate; if both are active, scale mode wins.
+        continuous_init = (
+            "unit"
+            if (self.config.data.model_array_lengths and self.config.data.numeric_mode != "scale")
+            else "standard"
+        )
+
         # Create model config with continuous head setting based on data config
-        model_config = replace(self.config.model, use_continuous_head=use_continuous_head)
+        model_config = replace(
+            self.config.model,
+            use_continuous_head=use_continuous_head,
+            continuous_init=continuous_init,
+        )
 
         return OrigamiModel(model_config, self._tokenizer.vocab)
 
@@ -635,7 +657,7 @@ class OrigamiPipeline:
         self._check_fitted()
 
         state = {
-            "version": "1.3",  # Bumped for output_schema support
+            "version": "1.4",  # Bumped for array_max_lengths support
             "config": asdict(self.config),
             "model_state_dict": self._model.state_dict(),
             "model_config": asdict(self._model.config),
@@ -644,6 +666,7 @@ class OrigamiPipeline:
             "preprocessor_state": self._preprocessor_to_dict(),
             "schema": self._schema,
             "output_schema": self._output_schema,
+            "array_max_lengths": dict(self._model._array_max_lengths),
         }
 
         # Include training state if requested.
@@ -698,6 +721,9 @@ class OrigamiPipeline:
         pipeline._model = OrigamiModel(model_config, pipeline._tokenizer.vocab)
         pipeline._model.load_state_dict(state_dict["model_state_dict"])
         pipeline._model.eval()
+
+        # Restore array-length normalization map (absent in pre-1.4 checkpoints)
+        pipeline._model._array_max_lengths = dict(state_dict.get("array_max_lengths", {}))
 
         # Recreate PDAs based on training config (trainer creates these during fit)
         if config.training.constrain_grammar:

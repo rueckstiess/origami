@@ -154,64 +154,50 @@ class TestSchemaArrayLengthMask:
         return ps, ss
 
     def test_target_length_suppresses_array_end(self, setup):
-        """_compute_schema_mask suppresses ARRAY_END when below target length."""
+        """Enforcement suppresses ARRAY_END when below target length.
+
+        Enforcement is now schema-independent and applied to logits via
+        _apply_length_enforcement using the generator's own container/count/
+        target stacks.
+        """
         _, tokenizer, gen = setup
         vocab = tokenizer.vocab
 
-        ps, ss = self._make_array_state(tokenizer, gen)
-        # arr_count should be 0 (no elements yet)
+        logits = torch.zeros(1, vocab.size)
+        # innermost array, count 0 < target 3
+        gen._apply_length_enforcement(logits, [["array"]], [[0]], [[3]])
 
-        # target_length_stacks with target of 3
-        target_stacks = [[3]]
-
-        mask = gen._compute_schema_mask([ps], [ss], target_stacks)
-
-        # ARRAY_END should be suppressed (0 < 3)
-        assert not mask[0, vocab.array_end_id].item()
+        assert logits[0, vocab.array_end_id].item() == float("-inf")
 
     def test_target_length_forces_array_end(self, setup):
-        """_compute_schema_mask forces ARRAY_END when at target length."""
+        """Enforcement forces ARRAY_END when at target length."""
         _, tokenizer, gen = setup
         vocab = tokenizer.vocab
 
-        ps, ss = self._make_array_state(tokenizer, gen)
-        # Simulate 3 elements added
-        ss.increment_array_count()
-        ss.increment_array_count()
-        ss.increment_array_count()
+        logits = torch.zeros(1, vocab.size)
+        gen._apply_length_enforcement(logits, [["array"]], [[3]], [[3]])
 
-        # target_length_stacks with target of 3 (reached)
-        target_stacks = [[3]]
-
-        mask = gen._compute_schema_mask([ps], [ss], target_stacks)
-
-        # Value-like tokens should be suppressed to force ARRAY_END
-        assert not mask[0, vocab.obj_start_id].item()
-        assert not mask[0, vocab.array_start_id].item()
-        assert not mask[0, vocab.num_token_id].item()
-        # ARRAY_END should be allowed
-        assert mask[0, vocab.array_end_id].item()
+        # Value-like tokens suppressed to force ARRAY_END
+        assert logits[0, vocab.obj_start_id].item() == float("-inf")
+        assert logits[0, vocab.array_start_id].item() == float("-inf")
+        assert logits[0, vocab.num_token_id].item() == float("-inf")
+        # ARRAY_END allowed
+        assert logits[0, vocab.array_end_id].item() == 0.0
 
     def test_target_length_zero_forces_empty_array(self, setup):
         """Target length 0 forces immediate ARRAY_END (empty array)."""
         _, tokenizer, gen = setup
         vocab = tokenizer.vocab
 
-        ps, ss = self._make_array_state(tokenizer, gen)
-        # arr_count = 0, target = 0 → should force ARRAY_END immediately
+        logits = torch.zeros(1, vocab.size)
+        gen._apply_length_enforcement(logits, [["array"]], [[0]], [[0]])
 
-        target_stacks = [[0]]
+        assert logits[0, vocab.obj_start_id].item() == float("-inf")
+        assert logits[0, vocab.array_start_id].item() == float("-inf")
+        assert logits[0, vocab.array_end_id].item() == 0.0
 
-        mask = gen._compute_schema_mask([ps], [ss], target_stacks)
-
-        # Value-like tokens should be suppressed
-        assert not mask[0, vocab.obj_start_id].item()
-        assert not mask[0, vocab.array_start_id].item()
-        # ARRAY_END should be allowed
-        assert mask[0, vocab.array_end_id].item()
-
-    def test_no_target_falls_back_to_schema(self, setup):
-        """Without target length, schema min/max items still apply."""
+    def test_schema_max_items_still_applies(self, setup):
+        """_compute_schema_mask still enforces schema maxItems (independent path)."""
         _, tokenizer, gen = setup
         vocab = tokenizer.vocab
 
@@ -220,27 +206,9 @@ class TestSchemaArrayLengthMask:
         for _ in range(10):
             ss.increment_array_count()
 
-        # Empty target stack → falls back to schema
-        target_stacks = [[]]
-
-        mask = gen._compute_schema_mask([ps], [ss], target_stacks)
+        mask = gen._compute_schema_mask([ps], [ss])
 
         # At maxItems=10, value tokens should be suppressed
-        assert not mask[0, vocab.obj_start_id].item()
-        assert not mask[0, vocab.array_start_id].item()
-
-    def test_none_target_stacks_falls_back_to_schema(self, setup):
-        """None target stacks completely falls back to schema."""
-        _, tokenizer, gen = setup
-        vocab = tokenizer.vocab
-
-        ps, ss = self._make_array_state(tokenizer, gen)
-        for _ in range(10):
-            ss.increment_array_count()
-
-        # None → no enforcement at all, pure schema
-        mask = gen._compute_schema_mask([ps], [ss], None)
-
         assert not mask[0, vocab.obj_start_id].item()
         assert not mask[0, vocab.array_start_id].item()
 

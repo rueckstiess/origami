@@ -19,6 +19,10 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from origami.position_encoding import PATH_TYPE_INDEX, PATH_TYPE_KEY
+from origami.preprocessing.array_length import (
+    array_length_cap_for_key,
+    array_length_norm_for_key,
+)
 from origami.tokenizer.vocabulary import (
     KeyToken,
     ValueToken,
@@ -199,8 +203,18 @@ class OrigamiGenerator:
         self._enforce_array_lengths = enforce_array_lengths
         self.model.eval()
 
+        # Per-path array-length normalization, derived from training data and
+        # carried on the model. A non-empty map means the model was trained to
+        # model array lengths, so prefix arrays must be conditioned identically.
+        self._array_max_lengths = getattr(model, "_array_max_lengths", {}) or {}
+
         # Collator for batch creation (include_labels=False for inference)
-        self._collator = OrigamiDataCollator(tokenizer, include_labels=False)
+        self._collator = OrigamiDataCollator(
+            tokenizer,
+            include_labels=False,
+            model_array_lengths=bool(self._array_max_lengths),
+            array_max_lengths=self._array_max_lengths,
+        )
 
         # Grammar PDA for incremental constraint application
         if constrain_grammar:
@@ -357,23 +371,18 @@ class OrigamiGenerator:
         self,
         path_states: list[PathState],
         schema_states: list["SchemaState"],
-        target_length_stacks: list[list[int]] | None = None,
     ) -> Tensor:
         """Compute schema constraint mask for the next token position.
 
         Combines path-dependent constraints (type/enum/key) from the mask table
-        with count-dependent adjustments (required, minItems, maxItems).
-
-        When target_length_stacks is provided, sampled array lengths override
-        the schema's minItems/maxItems bounds for hard enforcement of the
-        continuous head's predicted array lengths.
+        with count-dependent adjustments (required, minItems, maxItems,
+        uniqueItems). Exact array-length enforcement from the continuous head is
+        handled separately by :meth:`_apply_length_enforcement`, independent of
+        the schema.
 
         Args:
             path_states: Path state for each active sequence
             schema_states: Schema state for each active sequence
-            target_length_stacks: Optional per-sequence stacks of sampled array
-                lengths. When available, the innermost stack entry overrides
-                schema min/max items for that array nesting level.
 
         Returns:
             ``(batch, vocab_size)`` boolean mask
@@ -416,23 +425,7 @@ class OrigamiGenerator:
                 constraints = schema_pda.get_constraints(arr_path)
                 arr_count = ss.array_counts[-1] if ss.array_counts else 0
 
-                # Check for sampled target length from continuous head
-                target_len = None
-                if target_length_stacks is not None and target_length_stacks[i]:
-                    target_len = target_length_stacks[i][-1]
-
-                if target_len is not None:
-                    # Enforce exact sampled array length
-                    if arr_count < target_len:
-                        mask[i, vocab.array_end_id] = False
-                    if arr_count >= target_len:
-                        for vid in vocab._value_ids:
-                            mask[i, vid] = False
-                        mask[i, vocab.obj_start_id] = False
-                        mask[i, vocab.array_start_id] = False
-                        mask[i, vocab.num_token_id] = False
-                        mask[i, vocab.unk_value_id] = False
-                elif constraints:
+                if constraints:
                     if constraints.min_items is not None and arr_count < constraints.min_items:
                         # Suppress ARRAY_END until min items reached
                         mask[i, vocab.array_end_id] = False
@@ -445,12 +438,50 @@ class OrigamiGenerator:
                         mask[i, vocab.num_token_id] = False
                         mask[i, vocab.unk_value_id] = False
 
-                # uniqueItems: always applies regardless of target length
-                if constraints and constraints.unique_items and ss.seen_array_values:
-                    for seen_id in ss.seen_array_values[-1]:
-                        mask[i, seen_id] = False
+                    # uniqueItems: forbid already-seen values
+                    if constraints.unique_items and ss.seen_array_values:
+                        for seen_id in ss.seen_array_values[-1]:
+                            mask[i, seen_id] = False
 
         return mask
+
+    def _apply_length_enforcement(
+        self,
+        next_logits: Tensor,
+        container_stacks: list[list[str]],
+        array_count_stacks: list[list[int]],
+        target_length_stacks: list[list[int]],
+    ) -> None:
+        """Force the innermost open array to terminate at its sampled length.
+
+        Operates in-place on ``next_logits``. Independent of any schema: it uses
+        the generator's own container/count/target stacks so that array-length
+        enforcement works whether or not schema constraints are active.
+
+        For each sequence whose innermost container is an array with count ``c``
+        and sampled target ``t``: while ``c < t`` ARRAY_END is suppressed (keep
+        adding elements); once ``c >= t`` all element-starting tokens are
+        suppressed (force ARRAY_END).
+        """
+        vocab = self.tokenizer.vocab
+        for i in range(next_logits.size(0)):
+            if not container_stacks[i] or container_stacks[i][-1] != "array":
+                continue
+            if not target_length_stacks[i]:
+                continue
+            count = array_count_stacks[i][-1]
+            target = target_length_stacks[i][-1]
+            if count < target:
+                next_logits[i, vocab.array_end_id] = float("-inf")
+            else:
+                for vid in vocab._value_ids:
+                    next_logits[i, vid] = float("-inf")
+                next_logits[i, vocab.obj_start_id] = float("-inf")
+                next_logits[i, vocab.array_start_id] = float("-inf")
+                next_logits[i, vocab.num_token_id] = float("-inf")
+                next_logits[i, vocab.unk_value_id] = float("-inf")
+
+        return None
 
     @torch.inference_mode()
     def generate(
@@ -648,13 +679,21 @@ class OrigamiGenerator:
         # Track sampled numeric values for later decoding (list of lists)
         sampled_numeric_values: list[list[float]] = [[] for _ in range(original_batch_size)]
 
-        # Track target array lengths for enforcement (stack per active sequence)
+        # Track array-length enforcement state per active sequence. These three
+        # stacks mirror the schema PDA's container/count tracking but are fully
+        # independent of any schema, so length enforcement works with or without
+        # one. target_length_stacks/array_count_stacks are pushed only for arrays;
+        # container_stacks tracks object/array nesting for correct element counting.
         should_enforce_lengths = (
             self._enforce_array_lengths and self.model.continuous_head is not None
         )
         target_length_stacks: list[list[int]] | None = None
+        array_count_stacks: list[list[int]] | None = None
+        container_stacks: list[list[str]] | None = None
         if should_enforce_lengths:
             target_length_stacks = [[] for _ in range(original_batch_size)]
+            array_count_stacks = [[] for _ in range(original_batch_size)]
+            container_stacks = [[] for _ in range(original_batch_size)]
 
         # Initialize path states for each sequence from their token prefixes
         path_states = []
@@ -765,6 +804,9 @@ class OrigamiGenerator:
                 if use_kv_cache:
                     kv_cache = output.past_key_values
 
+            # Targets sampled for ARRAY_START tokens this step (filled below).
+            step_array_targets: dict[int, int] = {}
+
             # Get logits for last position
             next_logits = output.logits[:, -1, :]  # (batch, vocab_size)
 
@@ -774,10 +816,15 @@ class OrigamiGenerator:
 
             # Apply schema constraints (type/enum/key + count-dependent)
             if self._schema_pda is not None and schema_states is not None:
-                schema_mask = self._compute_schema_mask(
-                    path_states, schema_states, target_length_stacks
-                )
+                schema_mask = self._compute_schema_mask(path_states, schema_states)
                 next_logits = next_logits.masked_fill(~schema_mask, float("-inf"))
+
+            # Enforce sampled array lengths (independent of schema). Forces
+            # ARRAY_END at exactly the sampled length for the innermost array.
+            if should_enforce_lengths:
+                self._apply_length_enforcement(
+                    next_logits, container_stacks, array_count_stacks, target_length_stacks
+                )
 
             # Apply duplicate key prevention
             if self.prevent_duplicate_keys:
@@ -852,35 +899,34 @@ class OrigamiGenerator:
                 and is_array_start.any()
                 and output.continuous_params is not None
             ):
-                from origami.training.collator import DEFAULT_MAX_ARRAY
-
                 weights, means, log_vars = output.continuous_params
                 w = weights[:, -1, :]
                 m = means[:, -1, :]
                 lv = log_vars[:, -1, :]
 
-                # Resolve per-sequence max_items and min_items
+                # Per-sequence grid scale (norm) and valid-length cap, both from
+                # the data-derived map (independent of the schema, so they match
+                # training). norm carries headroom above the observed max so the
+                # max length isn't pinned to the absorbing boundary; the cap is
+                # the raw observed max, intersected with the schema's maxItems.
+                norm = torch.ones(batch_size, device=self.device)
+                max_items = torch.ones(batch_size, device=self.device, dtype=torch.long)
                 min_items = torch.zeros(batch_size, device=self.device, dtype=torch.long)
-                max_items = torch.full(
-                    (batch_size,), DEFAULT_MAX_ARRAY, device=self.device, dtype=torch.long
-                )
-                normalization = torch.full(
-                    (batch_size,), float(DEFAULT_MAX_ARRAY), device=self.device
-                )
 
-                if self._schema_pda is not None:
-                    for i, ps in enumerate(path_states):
-                        if not is_array_start[i]:
-                            continue
-                        schema_path = self._resolve_schema_path(ps)
-                        if schema_path is not None:
-                            constraints = self._schema_pda.get_constraints(schema_path)
-                            if constraints:
-                                if constraints.max_items is not None:
-                                    max_items[i] = constraints.max_items
-                                    normalization[i] = float(constraints.max_items)
-                                if constraints.min_items is not None:
-                                    min_items[i] = constraints.min_items
+                for i, ps in enumerate(path_states):
+                    if not is_array_start[i]:
+                        continue
+                    key = self._resolve_schema_path(ps)
+                    norm[i] = array_length_norm_for_key(key, self._array_max_lengths)
+                    max_items[i] = array_length_cap_for_key(key, self._array_max_lengths)
+                    if self._schema_pda is not None and key is not None:
+                        constraints = self._schema_pda.get_constraints(key)
+                        if constraints:
+                            if constraints.max_items is not None:
+                                # Respect the stricter of data cap and schema cap
+                                max_items[i] = min(max_items[i].item(), constraints.max_items)
+                            if constraints.min_items is not None:
+                                min_items[i] = constraints.min_items
 
                 # Sample using discretized logistic bin probabilities
                 # (matches training loss — no boundary mass loss)
@@ -888,22 +934,27 @@ class OrigamiGenerator:
                     w.unsqueeze(1),
                     m.unsqueeze(1),
                     lv.unsqueeze(1),
-                    max_values=max_items.float().unsqueeze(1),
+                    norm=norm.unsqueeze(1),
                     min_values=min_items.unsqueeze(1) if min_items.any() else None,
+                    max_values=max_items.float().unsqueeze(1),
                 ).squeeze(1)  # (batch,)
 
-                # Normalize for conditioning
-                sampled_norm = sampled_lengths.float() / normalization
+                # Normalize for conditioning (same divisor as training)
+                sampled_norm = sampled_lengths.float() / norm
 
                 # Store normalized value for conditioning
                 new_numeric_values[:, 0] = torch.where(
                     is_array_start, sampled_norm, new_numeric_values[:, 0]
                 )
 
-                # Push sampled lengths onto per-sequence stacks
-                for i in range(batch_size):
-                    if is_array_start[i]:
-                        target_length_stacks[i].append(sampled_lengths[i].item())
+                # Stash the sampled lengths; pushed onto the enforcement stacks
+                # below when the ARRAY_START token is processed (keeps the
+                # target/count/container stacks aligned).
+                step_array_targets = {
+                    i: int(sampled_lengths[i].item())
+                    for i in range(batch_size)
+                    if is_array_start[i]
+                }
 
             # Track sampled values for decoding
             for i in range(batch_size):
@@ -942,14 +993,38 @@ class OrigamiGenerator:
                     if not is_done:
                         self._schema_pda.update_state(token_id, schema_states[idx_s])
 
-            # Pop from target length stacks on ARRAY_END
-            if target_length_stacks is not None:
+            # Maintain array-length enforcement stacks (schema-independent).
+            # Mirrors SchemaPDA element counting: an OBJ_START/ARRAY_START/value
+            # directly inside an array counts as one element of that array.
+            if should_enforce_lengths:
                 for i, (token_id, is_done) in enumerate(
                     zip(next_tokens.tolist(), just_completed.tolist(), strict=True)
                 ):
-                    if not is_done and token_id == vocab.array_end_id:
+                    if is_done:
+                        continue
+                    in_array = bool(container_stacks[i]) and container_stacks[i][-1] == "array"
+                    if token_id == vocab.obj_start_id:
+                        if in_array:
+                            array_count_stacks[i][-1] += 1
+                        container_stacks[i].append("object")
+                    elif token_id == vocab.array_start_id:
+                        if in_array:
+                            array_count_stacks[i][-1] += 1
+                        container_stacks[i].append("array")
+                        array_count_stacks[i].append(0)
+                        target_length_stacks[i].append(step_array_targets.get(i, 0))
+                    elif token_id == vocab.obj_end_id:
+                        if container_stacks[i]:
+                            container_stacks[i].pop()
+                    elif token_id == vocab.array_end_id:
+                        if container_stacks[i]:
+                            container_stacks[i].pop()
+                        if array_count_stacks[i]:
+                            array_count_stacks[i].pop()
                         if target_length_stacks[i]:
                             target_length_stacks[i].pop()
+                    elif vocab.is_value_token(token_id) and in_array:
+                        array_count_stacks[i][-1] += 1
 
             # Extend tensors with new tokens
             current_ids = torch.cat([current_ids, next_tokens.unsqueeze(1)], dim=1)
@@ -972,6 +1047,8 @@ class OrigamiGenerator:
                 new_path_states = []
                 new_schema_states = [] if schema_states is not None else None
                 new_target_stacks = [] if target_length_stacks is not None else None
+                new_count_stacks = [] if array_count_stacks is not None else None
+                new_container_stacks = [] if container_stacks is not None else None
 
                 for i, (is_complete, orig_idx) in enumerate(
                     zip(completed_mask, active_indices, strict=True)
@@ -992,6 +1069,10 @@ class OrigamiGenerator:
                             new_schema_states.append(schema_states[i])
                         if new_target_stacks is not None:
                             new_target_stacks.append(target_length_stacks[i])
+                        if new_count_stacks is not None:
+                            new_count_stacks.append(array_count_stacks[i])
+                        if new_container_stacks is not None:
+                            new_container_stacks.append(container_stacks[i])
 
                 # Compact tensors to only keep active sequences
                 if keep_indices:
@@ -1035,6 +1116,10 @@ class OrigamiGenerator:
                     schema_states = new_schema_states
                 if new_target_stacks is not None:
                     target_length_stacks = new_target_stacks
+                if new_count_stacks is not None:
+                    array_count_stacks = new_count_stacks
+                if new_container_stacks is not None:
+                    container_stacks = new_container_stacks
 
         # Store any remaining sequences that didn't complete (hit max_tokens)
         incomplete_indices = set()
